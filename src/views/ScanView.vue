@@ -97,12 +97,14 @@
 import { ref, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { state } from '../store'
+import { toPlain } from '../utils/ipc'
 
 const EXCLUDE_PRESETS = [
-  'node_modules', 'FlutterSDK', 'fvm_cache', '__MACOSX', 'android-sdk', 'jdk', 'Program Files', '.cache',
+  'node_modules', 'FlutterSDK', 'fvm_cache', '__MACOSX', 'android-sdk',
+  'androidsdk', 'jdk', 'Program Files', 'Pods', '.gradle', '.idea', '.cache',
 ]
 
-const config = ref({ roots: [], excludes: [], myIdentity: { name: '', email: '' } })
+const config = ref({ roots: [], excludes: [...EXCLUDE_PRESETS], myIdentity: { name: '', email: '' } })
 const newRoot = ref('')
 const repos = ref([])
 const selectedRows = ref([])
@@ -132,7 +134,7 @@ onBeforeUnmount(() => {
 })
 
 async function saveConfig() {
-  try { await window.gitReport.configSave(config.value) } catch { /* noop */ }
+  try { await window.gitReport.configSave(toPlain(config.value)) } catch { /* noop */ }
 }
 
 async function browseRoot() {
@@ -157,11 +159,14 @@ function removeRoot(i) {
 }
 
 async function doScan() {
-  if (!config.value.roots.length) return
+  if (!config.value.roots.length) {
+    ElMessage.warning('请先添加至少一个扫描根目录')
+    return
+  }
   scanning.value = true
   progressText.value = '开始扫描…'
   try {
-    const paths = await window.gitReport.scanRepos(config.value.roots, config.value.excludes)
+    const paths = await window.gitReport.scanRepos(toPlain(config.value.roots), toPlain(config.value.excludes))
     repos.value = paths.map((p) => ({ path: p, shortName: shortPath(p), info: null }))
     selectedRows.value = []
     await loadInfo()

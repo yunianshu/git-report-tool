@@ -1,7 +1,22 @@
 /**
  * Preload —— 通过 contextBridge 向渲染进程暴露安全的 IPC API
+ *
+ * 关键：Vue 的 ref/reactive 会把数组/对象包装为 Proxy，
+ * Electron 的 structuredClone 无法克隆 Proxy，导致 ipcRenderer.invoke
+ * 抛出 "An object could not be cloned"。因此在 preload 层将参数统一
+ * 转换为普通可克隆对象（JSON 往返），从源头规避该问题。
  */
 const { contextBridge, ipcRenderer } = require('electron')
+
+/** 将 Vue 响应式代理等转为普通可 JSON 序列化对象 */
+function toPlain(value) {
+  if (value === undefined || value === null) return value
+  try {
+    return JSON.parse(JSON.stringify(value))
+  } catch {
+    return value
+  }
+}
 
 function subscribe(channel, cb) {
   const listener = (_e, payload) => cb(payload)
@@ -12,13 +27,15 @@ function subscribe(channel, cb) {
 contextBridge.exposeInMainWorld('gitReport', {
   // 配置
   configLoad: () => ipcRenderer.invoke('config:load'),
-  configSave: (cfg) => ipcRenderer.invoke('config:save', cfg),
+  configSave: (cfg) => ipcRenderer.invoke('config:save', toPlain(cfg)),
   // 目录
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
-  // git
-  scanRepos: (roots, excludes) => ipcRenderer.invoke('git:scanRepos', { roots, excludes }),
+  // git（参数经 toPlain 去除响应式代理）
+  scanRepos: (roots, excludes) =>
+    ipcRenderer.invoke('git:scanRepos', { roots: toPlain(roots), excludes: toPlain(excludes) }),
   repoInfo: (repo) => ipcRenderer.invoke('git:repoInfo', repo),
-  collectCommits: (repos, opts) => ipcRenderer.invoke('git:collectCommits', { repos, opts }),
+  collectCommits: (repos, opts) =>
+    ipcRenderer.invoke('git:collectCommits', { repos: toPlain(repos), opts: toPlain(opts) }),
   getIdentity: () => ipcRenderer.invoke('git:identity'),
   onScanProgress: (cb) => subscribe('git:scanProgress', cb),
   onCollectProgress: (cb) => subscribe('git:collectProgress', cb),

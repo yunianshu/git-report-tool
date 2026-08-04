@@ -50,9 +50,20 @@
             :active-value="true"
             :inactive-value="false"
           />
-          <span v-if="state.config?.myIdentity?.name" class="progress-text" style="margin-left: 12px">
-            本人：{{ state.config.myIdentity.name }} &lt;{{ state.config.myIdentity.email }}&gt;
-          </span>
+          <div class="identities" style="margin-left: 12px">
+            <el-tag
+              v-for="(id, i) in (state.config.identities || [])"
+              :key="i"
+              closable
+              type="success"
+              @close="removeIdentity(i)"
+            >
+              {{ id.name || '未命名' }} &lt;{{ id.email }}&gt;
+            </el-tag>
+            <el-input v-model="newIdName" placeholder="账号名" style="width: 130px" />
+            <el-input v-model="newIdEmail" placeholder="账号邮箱" style="width: 230px" @keyup.enter="addIdentity" />
+            <el-button @click="addIdentity">添加账号</el-button>
+          </div>
           <el-checkbox-group
             v-if="!onlyMine && authors.length"
             v-model="authorFilter"
@@ -63,6 +74,9 @@
             </el-checkbox>
           </el-checkbox-group>
         </el-form-item>
+        <div v-if="onlyMine" class="progress-text" style="margin-left: 76px">
+          「只看本人」会匹配上面所有账号的提交（{{ (state.config.identities || []).length }} 个账号）
+        </div>
       </el-form>
 
       <el-alert
@@ -135,6 +149,7 @@ import { ElMessage } from 'element-plus'
 import { state } from '../store'
 import { todayStr, addDays, untilToEnd } from '../utils/date'
 import { groupByProject, buildMarkdown } from '../utils/report'
+import { toPlain } from '../utils/ipc'
 import BaseChart from '../components/BaseChart.vue'
 
 const period = ref('weekly')
@@ -143,6 +158,8 @@ const customSince = ref(addDays(todayStr(), -6))
 const customUntil = ref(todayStr())
 const onlyMine = ref(true)
 const authorFilter = ref([])
+const newIdName = ref('')
+const newIdEmail = ref('')
 
 const collecting = ref(false)
 const rawCommits = ref([])
@@ -178,7 +195,7 @@ async function doCollect() {
     collectText.value = `正在收集提交… ${p.done}/${p.total}`
   })
   try {
-    const data = await window.gitReport.collectCommits(state.repos, {
+    const data = await window.gitReport.collectCommits(toPlain(state.repos), {
       since: r.since,
       until: r.until,
       authors: [],
@@ -206,9 +223,29 @@ const authors = computed(() => {
 })
 
 function isMine(c) {
-  const id = state.config?.myIdentity
-  if (!id || (!id.name && !id.email)) return false
-  return (id.name && c.authorName === id.name) || (id.email && c.authorEmail === id.email)
+  const ids = state.config?.identities || []
+  if (!ids.length) return false
+  return ids.some(
+    (id) => (id.email && c.authorEmail === id.email) || (id.name && c.authorName === id.name)
+  )
+}
+
+/** 本人身份（多账号）管理 */
+function addIdentity() {
+  const name = newIdName.value.trim()
+  const email = newIdEmail.value.trim()
+  if (!name && !email) return
+  if (!state.config.identities) state.config.identities = []
+  if (!state.config.identities.some((i) => i.name === name && i.email === email)) {
+    state.config.identities.push({ name, email })
+    window.gitReport.configSave(toPlain(state.config))
+  }
+  newIdName.value = ''
+  newIdEmail.value = ''
+}
+function removeIdentity(i) {
+  state.config.identities.splice(i, 1)
+  window.gitReport.configSave(toPlain(state.config))
 }
 
 const filteredCommits = computed(() =>
@@ -266,7 +303,7 @@ async function exportReport() {
   }
   const md = buildMarkdown({
     title: titleMap[period.value],
-    subtitle: `数据来源：${state.repos.length} 个 Git 仓库 · 作者：${onlyMine.value ? (state.config?.myIdentity?.name || '本人') : '全部作者'}`,
+    subtitle: `数据来源：${state.repos.length} 个 Git 仓库 · 作者：${onlyMine.value ? `本人(${(state.config.identities || []).length}个账号)` : '全部作者'}`,
     commits: filteredCommits.value,
     stats: {
       commitCount: filteredCommits.value.length,

@@ -24,19 +24,28 @@ import { ref, onMounted } from 'vue'
 import ScanView from './views/ScanView.vue'
 import ReportView from './views/ReportView.vue'
 import { state } from './store'
+import { toPlain } from './utils/ipc'
 
 const view = ref('scan')
 
 onMounted(async () => {
   try {
     const cfg = await window.gitReport.configLoad()
-    // 首次启动：读取本机全局 git 身份作为「本人」默认值
-    if (cfg && (!cfg.myIdentity || !cfg.myIdentity.name)) {
-      const identity = await window.gitReport.getIdentity()
-      cfg.myIdentity = { name: identity.name || '', email: identity.email || '' }
-      await window.gitReport.configSave(cfg)
+    if (cfg) {
+      // 迁移旧版单身份配置 → identities 列表
+      if (cfg.myIdentity && (cfg.myIdentity.name || cfg.myIdentity.email) && (!cfg.identities || !cfg.identities.length)) {
+        cfg.identities = [cfg.myIdentity]
+      }
+      // 首次启动：无身份时读取本机全局 git 身份作为默认
+      if (!cfg.identities || !cfg.identities.length) {
+        const identity = await window.gitReport.getIdentity()
+        if (identity.name || identity.email) cfg.identities = [identity]
+      }
+      delete cfg.myIdentity
+      if (!Array.isArray(cfg.identities)) cfg.identities = []
+      await window.gitReport.configSave(toPlain(cfg))
+      state.config = { ...state.config, ...cfg }
     }
-    if (cfg) state.config = { ...state.config, ...cfg }
   } catch (e) {
     console.error('加载配置失败', e)
   }

@@ -11,8 +11,13 @@ function file() {
 
 const DEFAULTS = {
   roots: [],
-  excludes: [],
-  myIdentity: { name: '', email: '' },
+  // 默认勾选常用排除目录，减少扫描范围（与 git-service 默认排除保持一致）
+  excludes: [
+    'node_modules', 'FlutterSDK', 'fvm_cache', '__MACOSX', 'android-sdk',
+    'androidsdk', 'jdk', 'Program Files', 'Pods', '.gradle', '.idea', '.cache',
+  ],
+  // 本人身份（支持多个账号）：{ name, email } 列表，「只看本人」会匹配所有账号
+  identities: [],
 }
 
 function load() {

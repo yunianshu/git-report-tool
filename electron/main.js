@@ -1,7 +1,7 @@
 /**
  * 主进程入口
  */
-const { app, BrowserWindow, ipcMain, dialog, shell } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const gitService = require('./git-service')
@@ -16,6 +16,7 @@ function createWindow() {
     minWidth: 1080,
     minHeight: 700,
     title: 'Git 项目报告工具',
+    autoHideMenuBar: true,
     backgroundColor: '#f5f7fa',
     webPreferences: {
       preload: path.join(__dirname, 'preload.js'),
@@ -79,6 +80,8 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  // 移除默认应用菜单栏（File/Edit/View/Window/Help）
+  Menu.setApplicationMenu(null)
   registerIpc()
   createWindow()
   app.on('activate', () => {
