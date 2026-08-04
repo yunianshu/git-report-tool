@@ -269,7 +269,7 @@ const projectBarOption = computed(() => {
     series: [{
       type: 'bar',
       data: top.map((g) => g.commits.length),
-      itemStyle: { color: '#409eff', borderRadius: [0, 4, 4, 0] },
+      itemStyle: { color: '#0e7a6d', borderRadius: [0, 4, 4, 0] },
       barMaxWidth: 22,
     }],
   }
@@ -287,9 +287,10 @@ const trendOption = computed(() => {
     series: [{
       type: 'line',
       smooth: true,
-      areaStyle: { opacity: 0.12 },
+      areaStyle: { color: 'rgba(14,122,109,0.12)' },
       data: sorted.map((e) => e[1]),
-      itemStyle: { color: '#409eff' },
+      itemStyle: { color: '#0e7a6d' },
+      lineStyle: { width: 2.5 },
     }],
   }
 })

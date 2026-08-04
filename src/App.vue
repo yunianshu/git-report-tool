@@ -1,7 +1,7 @@
 <template>
   <el-container class="app">
     <el-aside width="200px" class="aside">
-      <div class="logo">Git 报告工具</div>
+      <div class="logo">Git<b>·</b>报告</div>
       <el-menu :default-active="view" class="menu" @select="(i) => (view = i)">
         <el-menu-item index="scan">
           <el-icon><FolderOpened /></el-icon><span>仓库扫描</span>

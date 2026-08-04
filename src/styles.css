@@ -1,99 +1,128 @@
-* {
-  box-sizing: border-box;
+/* ==================================================
+   Git 项目报告工具 · 主题 B「数据看板浅色」
+   青绿 #0E7A6D · 白卡片 + 轻投影 · 等宽字体数据
+   ================================================== */
+:root {
+  --el-color-primary: #0e7a6d;
+  --el-color-primary-light-3: #56a299;
+  --el-color-primary-light-5: #86bcb6;
+  --el-color-primary-light-7: #b7d7d3;
+  --el-color-primary-light-8: #cfe4e2;
+  --el-color-primary-light-9: #e7f2f0;
+  --el-color-primary-dark-2: #0b6257;
+  --brand-accent: #0e7a6d;
+  --brand-bg: #f5f7fa;
+  --brand-card-border: #eef0f4;
+  --brand-text: #1a1f2e;
+  --brand-text-sub: #8a909c;
+  --brand-mono: 'IBM Plex Mono', 'JetBrains Mono', 'SF Mono', Consolas, 'Courier New', monospace;
 }
-html,
-body,
-#app {
-  height: 100%;
-  margin: 0;
-}
+
+* { box-sizing: border-box; }
+html, body, #app { height: 100%; margin: 0; }
 body {
   font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
-  background: #f5f7fa;
-  color: #303133;
+  background: var(--brand-bg);
+  color: var(--brand-text);
+  font-size: 14px;
 }
-.app {
-  height: 100%;
-}
+.app { height: 100%; }
+
+/* ---------- 侧边栏：白色 + 细分隔线 ---------- */
 .aside {
-  background: #001529;
-  color: #fff;
+  background: #ffffff;
+  border-right: 1px solid #e6e8ee;
   display: flex;
   flex-direction: column;
 }
 .logo {
   height: 56px;
   line-height: 56px;
-  text-align: center;
+  padding: 0 20px;
   font-weight: 700;
-  font-size: 16px;
-  color: #fff;
-  letter-spacing: 1px;
-  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+  font-size: 15px;
+  color: var(--brand-text);
+  letter-spacing: .02em;
+  border-bottom: 1px solid #f0f2f6;
+  white-space: nowrap;
 }
+.logo b { color: var(--brand-accent); }
 .menu {
   flex: 1;
   border-right: none;
-  background: transparent;
+  padding: 10px 8px;
   --el-menu-bg-color: transparent;
-  --el-menu-text-color: rgba(255, 255, 255, 0.7);
-  --el-menu-active-color: #409eff;
-  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.08);
+}
+.menu .el-menu-item {
+  height: 40px;
+  line-height: 40px;
+  border-radius: 7px;
+  margin-bottom: 2px;
+  font-size: 13px;
 }
 .menu .el-menu-item.is-active {
-  background: rgba(64, 158, 255, 0.15);
+  background: var(--el-color-primary-light-9);
+  color: var(--brand-accent);
+  font-weight: 600;
 }
+.menu .el-menu-item:not(.is-active):hover { background: #f5f7fa; }
 .aside-footer {
-  padding: 12px;
-  font-size: 12px;
-  color: rgba(255, 255, 255, 0.35);
+  padding: 14px;
+  font-size: 11px;
+  color: #b3b8c2;
   text-align: center;
 }
-.main {
-  padding: 16px;
-  overflow: auto;
-  background: #f5f7fa;
-}
+
+/* ---------- 主区 ---------- */
+.main { padding: 18px; overflow: auto; background: var(--brand-bg); }
+
+/* ---------- 卡片：白底 + 细边 + 轻投影 ---------- */
 .card {
   margin-bottom: 14px;
+  background: #ffffff;
+  border: 1px solid var(--brand-card-border) !important;
+  border-radius: 10px;
+  box-shadow: 0 1px 2px rgba(20, 30, 50, .04);
 }
 .card-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
   font-weight: 600;
+  color: var(--brand-text);
 }
-.roots {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  align-items: center;
+
+.roots { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+.excludes { display: flex; flex-wrap: wrap; gap: 4px 16px; }
+.progress-text { font-size: 12px; color: var(--brand-text-sub); margin-right: 12px; }
+.stats { margin-bottom: 14px; }
+.charts { margin-bottom: 14px; }
+.warn { margin-top: 10px; }
+.footer-actions { margin-top: 12px; display: flex; align-items: center; gap: 12px; }
+.footer-actions .el-alert { flex: 1; }
+
+/* ---------- 统计数字：等宽字体 + 更大（数据感） ---------- */
+.el-statistic__number {
+  font-family: var(--brand-mono);
+  font-size: 25px !important;
+  font-weight: 600;
+  color: var(--brand-text);
+  font-variant-numeric: tabular-nums;
 }
-.excludes {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 4px 16px;
+.el-statistic__head { color: var(--brand-text-sub); font-size: 12px; }
+
+/* ---------- 表格 ---------- */
+.el-table {
+  --el-table-header-bg-color: #fafbfc;
+  --el-table-border-color: #eef0f4;
+  --el-table-row-hover-bg-color: #f5f9f8;
 }
-.progress-text {
-  font-size: 12px;
-  color: #909399;
-  margin-right: 12px;
-}
-.stats {
-  margin-bottom: 14px;
-}
-.charts {
-  margin-bottom: 14px;
-}
-.warn {
-  margin-top: 10px;
-}
-.footer-actions {
-  margin-top: 12px;
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.footer-actions .el-alert {
-  flex: 1;
-}
+.el-table th { color: #5d6472; font-weight: 600; }
+.el-table__inner-wrapper::before { display: none; }
+
+/* ---------- 其他细节 ---------- */
+.el-tag { border-radius: 6px; }
+.el-collapse-item__header { font-weight: 500; color: var(--brand-text); }
+::-webkit-scrollbar { width: 9px; height: 9px; }
+::-webkit-scrollbar-thumb { background: #d5dae2; border-radius: 5px; }
+::-webkit-scrollbar-track { background: transparent; }
