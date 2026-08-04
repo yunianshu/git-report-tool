@@ -47,8 +47,13 @@ function registerIpc() {
 
   // git 服务
   ipcMain.handle('git:scanRepos', async (e, { roots, excludes }) => {
-    const onProgress = (p) => { try { e.sender.send('git:scanProgress', p) } catch { /* noop */ } }
-    return gitService.scanRepos(roots, excludes, onProgress)
+    const wc = e.sender
+    const onProgress = (p) => { try { wc.send('git:scanProgress', p) } catch { /* noop */ } }
+    // 每发现一个仓库立即推送，实现流式增量展示
+    const onRepo = (r) => { try { wc.send('git:scanRepoFound', r) } catch { /* noop */ } }
+    const result = await gitService.scanRepos(roots, excludes, onProgress, onRepo)
+    try { wc.send('git:scanDone', { total: result.length }) } catch { /* noop */ }
+    return result
   })
   ipcMain.handle('git:repoInfo', (_e, repo) => gitService.getRepoInfo(repo))
   ipcMain.handle('git:collectCommits', async (e, payload) => {

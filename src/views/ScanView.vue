@@ -57,7 +57,6 @@
         :data="repos"
         height="460"
         size="small"
-        v-loading="loadingInfo"
         @selection-change="onSelectionChange"
       >
         <el-table-column type="selection" width="44" />
@@ -94,7 +93,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
+import { ref, nextTick, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage } from 'element-plus'
 import { state } from '../store'
 import { toPlain } from '../utils/ipc'
@@ -104,15 +103,29 @@ const EXCLUDE_PRESETS = [
   'androidsdk', 'jdk', 'Program Files', 'Pods', '.gradle', '.idea', '.cache',
 ]
 
-const config = ref({ roots: [], excludes: [...EXCLUDE_PRESETS], myIdentity: { name: '', email: '' } })
+const config = ref({ roots: [], excludes: [...EXCLUDE_PRESETS], identities: [] })
 const newRoot = ref('')
 const repos = ref([])
 const selectedRows = ref([])
 const scanning = ref(false)
-const loadingInfo = ref(false)
 const progressText = ref('')
 const tableRef = ref(null)
-let unsubScan = null
+
+// 流式扫描事件订阅
+let unsubProgress = null
+let unsubRepoFound = null
+let unsubScanDone = null
+
+// 仓库信息并发加载池
+const INFO_CONCURRENCY = 6
+let infoQueue = []
+let infoWorkers = []
+
+// 表格自动滚动跟随（数据多时自动向下滚动展示新发现的仓库）
+let followBottom = true
+let scrollAttached = false
+
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
 function shortPath(p) {
   const parts = p.split(/[\\/]/).filter(Boolean)
@@ -125,13 +138,70 @@ onMounted(async () => {
   } catch (e) {
     console.error('加载配置失败', e)
   }
-  unsubScan = window.gitReport.onScanProgress((p) => {
+  unsubProgress = window.gitReport.onScanProgress((p) => {
     progressText.value = `扫描中… 已处理 ${p.scanned} 个目录（${shortPath(p.current)}）`
+  })
+  // 每发现一个仓库立即追加到表格
+  unsubRepoFound = window.gitReport.onScanRepoFound((repoPath) => {
+    if (!scanning.value) return
+    const row = { path: repoPath, shortName: shortPath(repoPath), info: null }
+    repos.value.push(row)
+    infoQueue.push(row)
+    scrollToBottom()
+  })
+  // 扫描完成
+  unsubScanDone = window.gitReport.onScanDone(() => {
+    scanning.value = false
+    progressText.value = ''
   })
 })
 onBeforeUnmount(() => {
-  if (unsubScan) unsubScan()
+  if (unsubProgress) unsubProgress()
+  if (unsubRepoFound) unsubRepoFound()
+  if (unsubScanDone) unsubScanDone()
 })
+
+/** 启动信息加载 worker（保持常驻直到扫描结束且队列清空） */
+function ensureInfoWorkers() {
+  while (infoWorkers.length < INFO_CONCURRENCY) {
+    const worker = (async () => {
+      for (;;) {
+        const row = infoQueue.shift()
+        if (!row) {
+          if (!scanning.value) return // 扫描结束且无待处理项 → 退出
+          await sleep(80)
+          continue
+        }
+        try {
+          row.info = await window.gitReport.repoInfo(row.path)
+        } catch {
+          row.info = { remote: '-', branch: '-', lastCommit: '-' }
+        }
+      }
+    })()
+    infoWorkers.push(worker)
+  }
+}
+
+/** 表格自动滚动：仅当用户停留在底部时跟随 */
+function attachScrollListener() {
+  if (scrollAttached) return
+  scrollAttached = true
+  nextTick(() => {
+    const el = document.querySelector('.el-table__body-wrapper')
+    if (!el) return
+    el.addEventListener('scroll', () => {
+      followBottom = el.scrollHeight - el.scrollTop - el.clientHeight < 60
+    })
+  })
+}
+function scrollToBottom() {
+  if (!followBottom) return
+  nextTick(() => {
+    const el = document.querySelector('.el-table__body-wrapper')
+    if (el) el.scrollTop = el.scrollHeight
+  })
+}
 
 async function saveConfig() {
   try { await window.gitReport.configSave(toPlain(config.value)) } catch { /* noop */ }
@@ -163,38 +233,24 @@ async function doScan() {
     ElMessage.warning('请先添加至少一个扫描根目录')
     return
   }
+  // 重置状态：清空表格与队列，准备流式接收
+  repos.value = []
+  selectedRows.value = []
+  infoQueue = []
+  infoWorkers = []
+  followBottom = true
+  scrollAttached = false
   scanning.value = true
   progressText.value = '开始扫描…'
+  ensureInfoWorkers()
+  attachScrollListener()
   try {
-    const paths = await window.gitReport.scanRepos(toPlain(config.value.roots), toPlain(config.value.excludes))
-    repos.value = paths.map((p) => ({ path: p, shortName: shortPath(p), info: null }))
-    selectedRows.value = []
-    await loadInfo()
+    // 仓库通过 scanRepoFound 事件流式追加，此处等待扫描结束
+    await window.gitReport.scanRepos(toPlain(config.value.roots), toPlain(config.value.excludes))
   } catch (e) {
     console.error('扫描失败', e)
-  } finally {
     scanning.value = false
   }
-}
-
-async function loadInfo() {
-  loadingInfo.value = true
-  const concurrency = 8
-  let i = 0
-  const worker = async () => {
-    while (i < repos.value.length) {
-      const idx = i
-      i += 1
-      const row = repos.value[idx]
-      try {
-        row.info = await window.gitReport.repoInfo(row.path)
-      } catch {
-        row.info = { remote: '-', branch: '-', lastCommit: '-' }
-      }
-    }
-  }
-  await Promise.all(Array.from({ length: concurrency }, worker))
-  loadingInfo.value = false
 }
 
 function onSelectionChange(rows) {

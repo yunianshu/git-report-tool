@@ -38,6 +38,8 @@ contextBridge.exposeInMainWorld('gitReport', {
     ipcRenderer.invoke('git:collectCommits', { repos: toPlain(repos), opts: toPlain(opts) }),
   getIdentity: () => ipcRenderer.invoke('git:identity'),
   onScanProgress: (cb) => subscribe('git:scanProgress', cb),
+  onScanRepoFound: (cb) => subscribe('git:scanRepoFound', cb),
+  onScanDone: (cb) => subscribe('git:scanDone', cb),
   onCollectProgress: (cb) => subscribe('git:collectProgress', cb),
   // 报告
   saveReport: (defaultName, content) => ipcRenderer.invoke('report:save', { defaultName, content }),
