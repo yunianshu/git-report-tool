@@ -167,6 +167,98 @@ body {
 }
 .footer-hint { margin-top: 10px; flex-shrink: 0; }
 
+/* ---------- 报告页：一键生成 ---------- */
+.report-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 14px;
+}
+.report-toolbar-card { flex-shrink: 0; }
+.report-toolbar {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  flex-wrap: wrap;
+}
+.toolbar-left {
+  display: flex;
+  align-items: center;
+  gap: 14px;
+  flex-wrap: wrap;
+}
+.toolbar-right {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.repo-count {
+  font-size: 13px;
+  color: var(--brand-text-sub);
+  font-family: var(--brand-mono);
+}
+.range-sep { color: #8a909c; font-size: 13px; }
+.mine-switch { margin-left: 4px; }
+.author-filter-row {
+  margin-top: 12px;
+  padding-top: 12px;
+  border-top: 1px solid #f2f4f7;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.report-results {
+  flex: 1;
+  min-height: 0;
+  overflow: auto;
+  padding-right: 2px;
+}
+.report-empty {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+}
+.report-empty .table-empty .el-icon { font-size: 40px; color: #c9ced8; }
+
+/* ---------- 设置页 ---------- */
+.settings-page {
+  display: flex;
+  flex-direction: column;
+  height: 100%;
+  gap: 14px;
+}
+.settings-page > .card { flex-shrink: 0; }
+.settings-page > .settings-repo-card {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-repo-card > .el-card__header { flex-shrink: 0; }
+.settings-repo-card > .el-card__body {
+  flex: 1;
+  min-height: 0;
+  display: flex;
+  flex-direction: column;
+}
+.settings-repo-card .table-wrap {
+  flex: 1;
+  min-height: 0;
+}
+.settings-repo-card .table-wrap .el-table { height: 100%; }
+
+/* ---------- 身份管理 ---------- */
+.identity-manager {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.identity-manager .el-input { max-width: 230px; }
+
 /* ---------- 统计数字：等宽字体 + 更大（数据感） ---------- */
 .el-statistic__number {
   font-family: var(--brand-mono);

@@ -3,19 +3,19 @@
     <el-aside width="200px" class="aside">
       <div class="logo">Git<b>·</b>报告</div>
       <el-menu :default-active="view" class="menu" @select="(i) => (view = i)">
-        <el-menu-item index="scan">
-          <el-icon><FolderOpened /></el-icon><span>仓库扫描</span>
-        </el-menu-item>
         <el-menu-item index="report">
-          <el-icon><Document /></el-icon><span>报告生成</span>
+          <el-icon><Document /></el-icon><span>报告</span>
+        </el-menu-item>
+        <el-menu-item index="settings">
+          <el-icon><Setting /></el-icon><span>设置</span>
         </el-menu-item>
       </el-menu>
       <div class="aside-footer">v1.0.0 · Windows / macOS / Linux</div>
     </el-aside>
     <el-main class="main">
       <transition name="fade" mode="out-in">
-        <ScanView v-if="view === 'scan'" key="scan" />
-        <ReportView v-else key="report" />
+        <ReportView v-if="view === 'report'" key="report" />
+        <SettingsView v-else key="settings" />
       </transition>
     </el-main>
   </el-container>
@@ -23,12 +23,12 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
-import ScanView from './views/ScanView.vue'
 import ReportView from './views/ReportView.vue'
+import SettingsView from './views/SettingsView.vue'
 import { state } from './store'
 import { toPlain } from './utils/ipc'
 
-const view = ref('scan')
+const view = ref('report')
 
 onMounted(async () => {
   try {

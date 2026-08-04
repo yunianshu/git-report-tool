@@ -1,18 +1,9 @@
 <template>
-  <div>
-    <!-- 报告参数 -->
-    <el-card shadow="never" class="card">
-      <template #header>
-        <div class="card-header">
-          <span>报告参数</span>
-          <el-button type="primary" :loading="collecting" :disabled="!state.repos.length" @click="doCollect">
-            <el-icon style="margin-right: 4px"><DataAnalysis /></el-icon>收集提交
-          </el-button>
-        </div>
-      </template>
-
-      <el-form label-width="70px">
-        <el-form-item label="周期">
+  <div class="report-page">
+    <!-- 顶部工具条：选周期 → 点生成，一键完成 -->
+    <el-card shadow="never" class="card report-toolbar-card">
+      <div class="report-toolbar">
+        <div class="toolbar-left">
           <el-radio-group v-model="period">
             <el-radio-button value="daily">日报</el-radio-button>
             <el-radio-button value="weekly">周报</el-radio-button>
@@ -25,71 +16,47 @@
             v-model="dailyDate"
             type="date"
             value-format="YYYY-MM-DD"
-            style="margin-left: 16px"
           />
           <template v-else-if="period === 'custom'">
-            <el-date-picker
-              v-model="customSince"
-              type="date"
-              value-format="YYYY-MM-DD"
-              placeholder="开始日期"
-              style="margin-left: 16px"
-            />
-            <span style="margin: 0 8px; color: #909399">至</span>
+            <el-date-picker v-model="customSince" type="date" value-format="YYYY-MM-DD" placeholder="开始日期" />
+            <span class="range-sep">至</span>
             <el-date-picker v-model="customUntil" type="date" value-format="YYYY-MM-DD" placeholder="结束日期" />
           </template>
-          <el-tag v-else type="info" style="margin-left: 16px">{{ rangeLabel }}</el-tag>
-        </el-form-item>
 
-        <el-form-item label="作者">
-          <el-switch
-            v-model="onlyMine"
-            inline-prompt
-            active-text="只看本人"
-            inactive-text="全部作者"
-            :active-value="true"
-            :inactive-value="false"
-          />
-          <div class="identities" style="margin-left: 12px">
-            <el-tag
-              v-for="(id, i) in (state.config.identities || [])"
-              :key="i"
-              closable
-              type="success"
-              @close="removeIdentity(i)"
-            >
-              {{ id.name || '未命名' }} &lt;{{ id.email }}&gt;
-            </el-tag>
-            <el-input v-model="newIdName" placeholder="账号名" style="width: 130px" />
-            <el-input v-model="newIdEmail" placeholder="账号邮箱" style="width: 230px" @keyup.enter="addIdentity" />
-            <el-button @click="addIdentity">添加账号</el-button>
-          </div>
-          <el-checkbox-group
-            v-if="!onlyMine && authors.length"
-            v-model="authorFilter"
-            style="margin-left: 16px"
-          >
-            <el-checkbox v-for="a in authors" :key="a.name" :value="a.name">
-              {{ a.name }}（{{ a.count }}）
-            </el-checkbox>
-          </el-checkbox-group>
-        </el-form-item>
-        <div v-if="onlyMine" class="progress-text" style="margin-left: 76px">
-          「只看本人」会匹配上面所有账号的提交（{{ (state.config.identities || []).length }} 个账号）
+          <el-switch v-model="onlyMine" active-text="只看本人" inactive-text="全部作者" class="mine-switch" />
         </div>
-      </el-form>
+        <div class="toolbar-right">
+          <span class="repo-count">{{ state.discoveredRepos.length }} 个仓库</span>
+          <el-button
+            type="primary"
+            size="large"
+            :loading="busy"
+            :disabled="busy"
+            @click="generate"
+          >
+            <el-icon style="margin-right: 4px"><MagicStick /></el-icon>生成报告
+          </el-button>
+        </div>
+      </div>
+
+      <!-- 全部作者时可选作者 -->
+      <div v-if="!onlyMine && authors.length" class="author-filter-row">
+        <el-checkbox-group v-model="authorFilter">
+          <el-checkbox v-for="a in authors" :key="a.name" :value="a.name">{{ a.name }}（{{ a.count }}）</el-checkbox>
+        </el-checkbox-group>
+      </div>
 
       <el-alert
-        v-if="!state.repos.length"
+        v-if="!state.config.roots.length"
         type="warning"
         :closable="false"
-        title="尚未选择项目，请先在「仓库扫描」页勾选项目。"
+        title="尚未配置扫描根目录，请到「设置」页添加后再生成报告。"
         class="warn"
       />
     </el-card>
 
     <!-- 结果区 -->
-    <template v-if="collecting || rawCommits.length">
+    <div v-if="collecting || rawCommits.length" class="report-results">
       <el-row :gutter="12" class="stats">
         <el-col :span="6">
           <div class="kpi-card">
@@ -163,7 +130,15 @@
           </el-collapse-item>
         </el-collapse>
       </el-card>
-    </template>
+    </div>
+
+    <!-- 空状态引导 -->
+    <div v-else class="report-empty">
+      <div class="table-empty">
+        <el-icon><MagicStick /></el-icon>
+        <p>选择周期后点击「生成报告」，自动扫描仓库并汇总提交</p>
+      </div>
+    </div>
   </div>
 </template>
 
@@ -174,6 +149,7 @@ import { state } from '../store'
 import { todayStr, addDays, untilToEnd } from '../utils/date'
 import { groupByProject, buildMarkdown } from '../utils/report'
 import { toPlain } from '../utils/ipc'
+import { shortPath } from '../utils/path'
 import BaseChart from '../components/BaseChart.vue'
 import CountUp from '../components/CountUp.vue'
 
@@ -184,15 +160,16 @@ const customSince = ref(addDays(todayStr(), -6))
 const customUntil = ref(todayStr())
 const onlyMine = ref(true)
 const authorFilter = ref([])
-const newIdName = ref('')
-const newIdEmail = ref('')
 
+const generating = ref(false)
 const collecting = ref(false)
 const rawCommits = ref([])
 const openProjects = ref([])
 const collectText = ref('')
 let unsubCollect = null
 onBeforeUnmount(() => unsubCollect && unsubCollect())
+
+const busy = computed(() => generating.value || collecting.value)
 
 /** 计算 git 查询起止（until 为排他语义，= 结束日 + 1 天） */
 function range() {
@@ -213,6 +190,32 @@ const rangeLabel = computed(() => {
   return r.since === end ? r.since : `${r.since} ~ ${end}`
 })
 
+/** 一键生成：自动扫描（若无仓库）→ 收集提交 */
+async function generate() {
+  if (!state.discoveredRepos.length) {
+    if (!state.config.roots || !state.config.roots.length) {
+      ElMessage.warning('请先到「设置」添加扫描根目录')
+      return
+    }
+    generating.value = true
+    try {
+      const paths = await window.gitReport.scanRepos(toPlain(state.config.roots), toPlain(state.config.excludes))
+      state.discoveredRepos = paths.map((p) => ({ path: p, shortName: shortPath(p), info: null }))
+    } catch (e) {
+      console.error('自动扫描失败', e)
+      ElMessage.error('扫描仓库失败')
+      generating.value = false
+      return
+    }
+    generating.value = false
+    if (!state.discoveredRepos.length) {
+      ElMessage.warning('未扫描到任何 Git 仓库')
+      return
+    }
+  }
+  await doCollect()
+}
+
 async function doCollect() {
   collecting.value = true
   collectText.value = '正在收集提交…'
@@ -221,7 +224,8 @@ async function doCollect() {
     collectText.value = `正在收集提交… ${p.done}/${p.total}`
   })
   try {
-    const data = await window.gitReport.collectCommits(toPlain(state.repos), {
+    const repos = state.discoveredRepos.map((row) => row.path)
+    const data = await window.gitReport.collectCommits(toPlain(repos), {
       since: r.since,
       until: r.until,
       authors: [],
@@ -260,24 +264,6 @@ function isMine(c) {
   return ids.some(
     (id) => (id.email && c.authorEmail === id.email) || (id.name && c.authorName === id.name)
   )
-}
-
-/** 本人身份（多账号）管理 */
-function addIdentity() {
-  const name = newIdName.value.trim()
-  const email = newIdEmail.value.trim()
-  if (!name && !email) return
-  if (!state.config.identities) state.config.identities = []
-  if (!state.config.identities.some((i) => i.name === name && i.email === email)) {
-    state.config.identities.push({ name, email })
-    window.gitReport.configSave(toPlain(state.config))
-  }
-  newIdName.value = ''
-  newIdEmail.value = ''
-}
-function removeIdentity(i) {
-  state.config.identities.splice(i, 1)
-  window.gitReport.configSave(toPlain(state.config))
 }
 
 const filteredCommits = computed(() =>
@@ -380,7 +366,7 @@ async function exportReport() {
   }
   const md = buildMarkdown({
     title: titleMap[period.value],
-    subtitle: `数据来源：${state.repos.length} 个 Git 仓库 · 作者：${onlyMine.value ? `本人(${(state.config.identities || []).length}个账号)` : '全部作者'}`,
+    subtitle: `数据来源：${state.discoveredRepos.length} 个 Git 仓库 · 作者：${onlyMine.value ? `本人(${(state.config.identities || []).length}个账号)` : '全部作者'}`,
     commits: filteredCommits.value,
     stats: {
       commitCount: filteredCommits.value.length,
@@ -393,8 +379,6 @@ async function exportReport() {
   if (res?.saved) {
     ElMessage.success(`已保存：${res.path}`)
     window.gitReport.openPath(res.path)
-  } else if (res && !res.saved) {
-    // 用户取消，不提示
   }
 }
 </script>
