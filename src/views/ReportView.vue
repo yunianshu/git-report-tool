@@ -213,7 +213,7 @@ import { ref, computed, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../store'
 import { todayStr, addDays, untilToEnd } from '../utils/date'
-import { groupByProject, buildMarkdown } from '../utils/report'
+import { groupByProject, buildMarkdown, stripPrefix } from '../utils/report'
 import { toPlain } from '../utils/ipc'
 import { shortPath } from '../utils/path'
 import BaseChart from '../components/BaseChart.vue'
@@ -489,11 +489,11 @@ async function copyText(text) {
   }
 }
 
-/** 复制单个项目的提交内容 */
+/** 复制单个项目的提交内容（去掉日期与 feat:/fix: 等类型前缀） */
 function copyProject(g) {
   const lines = [`${g.project}（${g.commits.length} 条提交）`]
   g.commits.forEach((c, i) => {
-    lines.push(`${i + 1}. ${c.date}  ${c.subject}`)
+    lines.push(`${i + 1}. ${stripPrefix(c.subject)}`)
   })
   copyText(lines.join('\n'))
 }
