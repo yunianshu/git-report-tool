@@ -6,6 +6,7 @@ const path = require('path')
 const fs = require('fs')
 const gitService = require('./git-service')
 const store = require('./store')
+const reportHistory = require('./report-history')
 
 let mainWindow
 
@@ -77,6 +78,12 @@ function registerIpc() {
       return { saved: false, error: err.message }
     }
   })
+
+  // 报告历史
+  ipcMain.handle('report:saveAuto', (_e, payload) => reportHistory.save(payload))
+  ipcMain.handle('report:listHistory', () => reportHistory.list())
+  ipcMain.handle('report:readHistory', (_e, id) => reportHistory.read(id))
+  ipcMain.handle('report:deleteHistory', (_e, id) => reportHistory.remove(id))
 
   // 系统
   ipcMain.handle('shell:openPath', (_e, p) => {

@@ -43,6 +43,11 @@ contextBridge.exposeInMainWorld('gitReport', {
   onCollectProgress: (cb) => subscribe('git:collectProgress', cb),
   // 报告
   saveReport: (defaultName, content) => ipcRenderer.invoke('report:save', { defaultName, content }),
+  // 报告历史
+  saveReportAuto: (payload) => ipcRenderer.invoke('report:saveAuto', toPlain(payload)),
+  listHistory: () => ipcRenderer.invoke('report:listHistory'),
+  readHistory: (id) => ipcRenderer.invoke('report:readHistory', id),
+  deleteHistory: (id) => ipcRenderer.invoke('report:deleteHistory', id),
   // 系统
   openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
 })

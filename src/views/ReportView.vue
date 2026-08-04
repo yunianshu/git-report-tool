@@ -157,6 +157,28 @@
               </el-col>
             </el-row>
           </el-tab-pane>
+
+          <!-- 历史记录 -->
+          <el-tab-pane label="历史记录" name="history">
+            <el-table :data="historyList" size="small">
+              <el-table-column prop="createdAt" label="生成时间" width="175" />
+              <el-table-column prop="title" label="标题" min-width="220" show-overflow-tooltip />
+              <el-table-column prop="commitCount" label="提交数" width="80" />
+              <el-table-column prop="projectCount" label="项目数" width="80" />
+              <el-table-column label="操作" width="140">
+                <template #default="{ row }">
+                  <el-button size="small" @click="viewHistory(row)">查看</el-button>
+                  <el-button size="small" type="danger" plain @click="delHistory(row)">删除</el-button>
+                </template>
+              </el-table-column>
+              <template #empty>
+                <div class="table-empty">
+                  <el-icon><Document /></el-icon>
+                  <p>暂无历史记录，生成报告后会自动保存</p>
+                </div>
+              </template>
+            </el-table>
+          </el-tab-pane>
         </el-tabs>
       </template>
     </div>
@@ -168,12 +190,17 @@
         <p>选择周期后点击「生成报告」，自动扫描仓库并汇总提交</p>
       </div>
     </div>
+
+    <!-- 历史报告查看 -->
+    <el-dialog v-model="historyDialog.visible" :title="historyDialog.title" width="760" top="6vh">
+      <pre class="history-content">{{ historyDialog.content }}</pre>
+    </el-dialog>
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, computed, onMounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../store'
 import { todayStr, addDays, untilToEnd } from '../utils/date'
 import { groupByProject, buildMarkdown } from '../utils/report'
@@ -189,7 +216,12 @@ const customSince = ref(addDays(todayStr(), -6))
 const customUntil = ref(todayStr())
 const onlyMine = ref(true)
 const authorFilter = ref([])
-const resultTab = ref('detail') // detail | stats
+const resultTab = ref('detail') // detail | stats | history
+
+// 历史记录
+const historyList = ref([])
+const historyDialog = ref({ visible: false, title: '', content: '' })
+onMounted(loadHistory)
 
 // 生成过程状态全部存于共享 store.state.report，切换视图不中断
 const busy = computed(() => state.report.phase === 'scanning' || state.report.phase === 'collecting')
@@ -262,6 +294,7 @@ async function doCollect() {
     state.report.rawCommits = data
     state.report.openProjects = []
     state.report.phase = 'done'
+    if (data.length) autoSave()
     if (!data.length) {
       ElMessage.warning(
         period.value === 'daily'
@@ -384,15 +417,19 @@ const trendOption = computed(() => {
   }
 })
 
-async function exportReport() {
-  const titleMap = {
+function getTitle() {
+  const map = {
     daily: `项目日报 — ${dailyDate.value}`,
     weekly: `项目周报 — ${rangeLabel.value}`,
     monthly: `项目月报 — ${rangeLabel.value}`,
     custom: `项目报告 — ${rangeLabel.value}`,
   }
-  const md = buildMarkdown({
-    title: titleMap[period.value],
+  return map[period.value]
+}
+
+function getMarkdown() {
+  return buildMarkdown({
+    title: getTitle(),
     subtitle: `数据来源：${state.discoveredRepos.length} 个 Git 仓库 · 作者：${onlyMine.value ? `本人(${(state.config.identities || []).length}个账号)` : '全部作者'}`,
     commits: filteredCommits.value,
     stats: {
@@ -401,7 +438,51 @@ async function exportReport() {
       authorCount: authorCount.value,
     },
   })
-  const safeName = titleMap[period.value].replace(/[\\/:*?"<>|]/g, '_')
+}
+
+/** 生成完成后自动保存到历史记录 */
+async function autoSave() {
+  try {
+    await window.gitReport.saveReportAuto({
+      title: getTitle(),
+      content: getMarkdown(),
+      period: period.value,
+      dateRange: rangeLabel.value,
+      commitCount: filteredCommits.value.length,
+      projectCount: filteredGroups.value.length,
+    })
+    loadHistory()
+  } catch (e) {
+    console.error('自动保存历史失败', e)
+  }
+}
+
+async function loadHistory() {
+  try {
+    historyList.value = await window.gitReport.listHistory()
+  } catch { /* noop */ }
+}
+
+async function viewHistory(row) {
+  const data = await window.gitReport.readHistory(row.id)
+  if (data) {
+    historyDialog.value = { visible: true, title: data.title, content: data.content }
+  }
+}
+
+async function delHistory(row) {
+  try {
+    await ElMessageBox.confirm('确定删除这条历史记录吗？', '删除确认', { type: 'warning' })
+  } catch {
+    return
+  }
+  await window.gitReport.deleteHistory(row.id)
+  loadHistory()
+}
+
+async function exportReport() {
+  const md = getMarkdown()
+  const safeName = getTitle().replace(/[\\/:*?"<>|]/g, '_')
   const res = await window.gitReport.saveReport(`${safeName}.md`, md)
   if (res?.saved) {
     ElMessage.success(`已保存：${res.path}`)
@@ -416,5 +497,20 @@ async function exportReport() {
   text-align: center;
   color: #909399;
   font-size: 13px;
+}
+.history-content {
+  margin: 0;
+  white-space: pre-wrap;
+  word-break: break-word;
+  font-family: var(--brand-mono);
+  font-size: 12.5px;
+  line-height: 1.7;
+  color: #3a4150;
+  max-height: 62vh;
+  overflow: auto;
+  background: #fafbfc;
+  border: 1px solid var(--brand-card-border);
+  border-radius: 8px;
+  padding: 16px;
 }
 </style>

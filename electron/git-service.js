@@ -140,8 +140,11 @@ async function getRepoInfo(repo) {
 async function collectCommits(repos, opts, onProgress) {
   const { since, until, authors, includeMerges } = opts || {}
   const fmt = '%H%x09%ad%x09%an%x09%ae%x09%s'
-  const base = ['log', '--all', `--since=${since}`]
-  if (until) base.push(`--until=${until}`)
+  // 关键：git 对裸日期(YYYY-MM-DD)的 --since/--until 解析在部分版本异常
+  // （实测 2.53.0 将 --since=2026-08-04 误判），统一转为带精确时间格式
+  const normDate = (d) => (d && !d.includes(' ') ? `${d} 00:00:00` : d)
+  const base = ['log', '--all', `--since=${normDate(since)}`]
+  if (until) base.push(`--until=${normDate(until)}`)
   if (!includeMerges) base.push('--no-merges')
   base.push(`--pretty=tformat:${fmt}`, '--date=short')
 
