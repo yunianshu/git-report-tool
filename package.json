@@ -3,16 +3,19 @@
   "version": "1.0.0",
   "description": "跨平台 Git 项目日报/周报/月报生成工具（Windows / macOS / Linux）",
   "main": "electron/main.js",
-  "author": "yunainshu",
+  "author": {
+    "name": "yunainshu",
+    "email": "592908207@qq.com"
+  },
   "license": "MIT",
   "scripts": {
     "dev": "concurrently -k -s first \"vite\" \"wait-on tcp:127.0.0.1:5173 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
     "start": "npm run build:renderer && electron .",
     "build:renderer": "vite build",
-    "build": "npm run build:renderer && electron-builder",
-    "build:win": "npm run build:renderer && electron-builder --win",
-    "build:mac": "npm run build:renderer && electron-builder --mac",
-    "build:linux": "npm run build:renderer && electron-builder --linux"
+    "build": "npm run build:renderer && electron-builder --publish=never",
+    "build:win": "npm run build:renderer && electron-builder --win --publish=never",
+    "build:mac": "npm run build:renderer && electron-builder --mac --publish=never",
+    "build:linux": "npm run build:renderer && electron-builder --linux --publish=never"
   },
   "devDependencies": {
     "@element-plus/icons-vue": "^2.3.1",
