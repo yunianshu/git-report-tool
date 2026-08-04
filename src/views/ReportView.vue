@@ -167,28 +167,6 @@
               </el-col>
             </el-row>
           </el-tab-pane>
-
-          <!-- 历史记录 -->
-          <el-tab-pane label="历史记录" name="history">
-            <el-table :data="historyList" size="small">
-              <el-table-column prop="createdAt" label="生成时间" width="175" />
-              <el-table-column prop="title" label="标题" min-width="220" show-overflow-tooltip />
-              <el-table-column prop="commitCount" label="提交数" width="80" />
-              <el-table-column prop="projectCount" label="项目数" width="80" />
-              <el-table-column label="操作" width="140">
-                <template #default="{ row }">
-                  <el-button size="small" @click="viewHistory(row)">查看</el-button>
-                  <el-button size="small" type="danger" plain @click="delHistory(row)">删除</el-button>
-                </template>
-              </el-table-column>
-              <template #empty>
-                <div class="table-empty">
-                  <el-icon><Document /></el-icon>
-                  <p>暂无历史记录，生成报告后会自动保存</p>
-                </div>
-              </template>
-            </el-table>
-          </el-tab-pane>
         </el-tabs>
       </template>
     </div>
@@ -200,6 +178,33 @@
         <p>选择周期后点击「生成报告」，自动扫描仓库并汇总提交</p>
       </div>
     </div>
+
+    <!-- 历史记录（始终显示，重启后可查看） -->
+    <el-card shadow="never" class="card history-card">
+      <template #header>
+        <div class="card-header">
+          <span>历史记录（{{ historyList.length }}）</span>
+        </div>
+      </template>
+      <el-table :data="historyList" size="small">
+        <el-table-column prop="createdAt" label="生成时间" width="175" />
+        <el-table-column prop="title" label="标题" min-width="220" show-overflow-tooltip />
+        <el-table-column prop="commitCount" label="提交数" width="80" />
+        <el-table-column prop="projectCount" label="项目数" width="80" />
+        <el-table-column label="操作" width="140">
+          <template #default="{ row }">
+            <el-button size="small" @click="viewHistory(row)">查看</el-button>
+            <el-button size="small" type="danger" plain @click="delHistory(row)">删除</el-button>
+          </template>
+        </el-table-column>
+        <template #empty>
+          <div class="table-empty">
+            <el-icon><Document /></el-icon>
+            <p>暂无历史记录，生成报告后会自动保存</p>
+          </div>
+        </template>
+      </el-table>
+    </el-card>
 
     <!-- 历史报告查看 -->
     <el-dialog v-model="historyDialog.visible" :title="historyDialog.title" width="760" top="6vh">
@@ -226,7 +231,7 @@ const customSince = ref(addDays(todayStr(), -6))
 const customUntil = ref(todayStr())
 const onlyMine = ref(true)
 const authorFilter = ref([])
-const resultTab = ref('detail') // detail | stats | history
+const resultTab = ref('detail') // detail | stats
 
 // 历史记录
 const historyList = ref([])

@@ -223,6 +223,10 @@ body {
 }
 .report-empty .table-empty .el-icon { font-size: 40px; color: #c9ced8; }
 
+/* ---------- 历史记录卡片（始终显示） ---------- */
+.history-card { flex-shrink: 0; }
+.history-card .el-table { max-height: 300px; }
+
 /* ---------- 生成过程：阶段进度卡 ---------- */
 .phase-card {
   display: flex;
