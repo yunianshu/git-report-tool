@@ -92,16 +92,40 @@
     <template v-if="collecting || rawCommits.length">
       <el-row :gutter="12" class="stats">
         <el-col :span="6">
-          <el-card shadow="never"><el-statistic title="提交数" :value="filteredCommits.length" /></el-card>
+          <div class="kpi-card">
+            <div class="kpi-icon"><el-icon><List /></el-icon></div>
+            <div class="kpi-body">
+              <div class="kpi-label">提交数</div>
+              <div class="kpi-value"><CountUp :target="filteredCommits.length" /></div>
+            </div>
+          </div>
         </el-col>
         <el-col :span="6">
-          <el-card shadow="never"><el-statistic title="活跃项目" :value="filteredGroups.length" /></el-card>
+          <div class="kpi-card">
+            <div class="kpi-icon"><el-icon><FolderOpened /></el-icon></div>
+            <div class="kpi-body">
+              <div class="kpi-label">活跃项目</div>
+              <div class="kpi-value"><CountUp :target="filteredGroups.length" /></div>
+            </div>
+          </div>
         </el-col>
         <el-col :span="6">
-          <el-card shadow="never"><el-statistic title="作者数" :value="authorCount" /></el-card>
+          <div class="kpi-card">
+            <div class="kpi-icon"><el-icon><User /></el-icon></div>
+            <div class="kpi-body">
+              <div class="kpi-label">作者数</div>
+              <div class="kpi-value"><CountUp :target="authorCount" /></div>
+            </div>
+          </div>
         </el-col>
         <el-col :span="6">
-          <el-card shadow="never"><el-statistic title="时间范围" :value="rangeLabel" /></el-card>
+          <div class="kpi-card">
+            <div class="kpi-icon"><el-icon><Calendar /></el-icon></div>
+            <div class="kpi-body">
+              <div class="kpi-label">时间范围</div>
+              <div class="kpi-value kpi-range">{{ rangeLabel }}</div>
+            </div>
+          </div>
         </el-col>
       </el-row>
 
@@ -151,6 +175,7 @@ import { todayStr, addDays, untilToEnd } from '../utils/date'
 import { groupByProject, buildMarkdown } from '../utils/report'
 import { toPlain } from '../utils/ipc'
 import BaseChart from '../components/BaseChart.vue'
+import CountUp from '../components/CountUp.vue'
 
 const period = ref('weekly')
 const dailyDate = ref(todayStr())

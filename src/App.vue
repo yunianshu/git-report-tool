@@ -13,8 +13,10 @@
       <div class="aside-footer">v1.0.0 · Windows / macOS / Linux</div>
     </el-aside>
     <el-main class="main">
-      <ScanView v-if="view === 'scan'" />
-      <ReportView v-else />
+      <transition name="fade" mode="out-in">
+        <ScanView v-if="view === 'scan'" key="scan" />
+        <ReportView v-else key="report" />
+      </transition>
     </el-main>
   </el-container>
 </template>

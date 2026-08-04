@@ -76,6 +76,12 @@
         size="small"
         @selection-change="onSelectionChange"
       >
+        <template #empty>
+          <div class="table-empty">
+            <el-icon><FolderOpened /></el-icon>
+            <p>暂无仓库，添加根目录后点击「开始扫描」</p>
+          </div>
+        </template>
         <el-table-column type="selection" width="44" />
         <el-table-column label="项目" min-width="200" show-overflow-tooltip>
           <template #default="{ row }">{{ row.shortName }}</template>
