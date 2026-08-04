@@ -288,14 +288,37 @@ const projectBarOption = computed(() => {
   const top = filteredGroups.value.slice(0, 12).reverse()
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { left: 30, right: 20, top: 10, bottom: 30 },
+    grid: { left: 30, right: 34, top: 10, bottom: 30 },
     xAxis: { type: 'value', minInterval: 1 },
-    yAxis: { type: 'category', data: top.map((g) => g.project) },
+    yAxis: {
+      type: 'category',
+      data: top.map((g) => g.project),
+      axisLabel: { color: '#5d6472', fontSize: 11 },
+      axisLine: { show: false },
+      axisTick: { show: false },
+    },
     series: [{
       type: 'bar',
       data: top.map((g) => g.commits.length),
-      itemStyle: { color: '#0e7a6d', borderRadius: [0, 4, 4, 0] },
-      barMaxWidth: 22,
+      barMaxWidth: 20,
+      itemStyle: {
+        borderRadius: [0, 5, 5, 0],
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 1, y2: 0,
+          colorStops: [
+            { offset: 0, color: '#0e7a6d' },
+            { offset: 1, color: '#2ea68f' },
+          ],
+        },
+      },
+      label: {
+        show: true,
+        position: 'right',
+        color: '#4a5160',
+        fontSize: 11,
+        fontFamily: "'IBM Plex Mono', monospace",
+        fontWeight: 600,
+      },
     }],
   }
 })
@@ -306,16 +329,37 @@ const trendOption = computed(() => {
   const sorted = [...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
   return {
     tooltip: { trigger: 'axis' },
-    grid: { left: 30, right: 20, top: 10, bottom: 30 },
-    xAxis: { type: 'category', data: sorted.map((e) => e[0].slice(5)) },
-    yAxis: { type: 'value', minInterval: 1 },
+    grid: { left: 34, right: 20, top: 24, bottom: 30 },
+    xAxis: {
+      type: 'category',
+      data: sorted.map((e) => e[0].slice(5)),
+      boundaryGap: false,
+      axisLabel: { color: '#8a909c', fontSize: 10 },
+      axisLine: { lineStyle: { color: '#eef0f4' } },
+    },
+    yAxis: {
+      type: 'value',
+      minInterval: 1,
+      axisLabel: { color: '#8a909c', fontSize: 10 },
+      splitLine: { lineStyle: { color: '#f2f4f7', type: 'dashed' } },
+    },
     series: [{
       type: 'line',
       smooth: true,
-      areaStyle: { color: 'rgba(14,122,109,0.12)' },
+      symbol: 'circle',
+      symbolSize: 6,
       data: sorted.map((e) => e[1]),
-      itemStyle: { color: '#0e7a6d' },
-      lineStyle: { width: 2.5 },
+      lineStyle: { width: 2.5, color: '#0e7a6d' },
+      itemStyle: { color: '#0e7a6d', borderColor: '#fff', borderWidth: 2 },
+      areaStyle: {
+        color: {
+          type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+          colorStops: [
+            { offset: 0, color: 'rgba(14, 122, 109, 0.26)' },
+            { offset: 1, color: 'rgba(14, 122, 109, 0.02)' },
+          ],
+        },
+      },
     }],
   }
 })
