@@ -1,0 +1,68 @@
+# 三平台打包工作流
+# 触发方式：
+#   - 推送 tag（如 v1.0.0）：自动构建 mac / win / linux 三个平台的安装包
+#   - GitHub 页面手动触发（Actions → Build Desktop App → Run workflow）
+#
+# 说明：macOS 的 dmg 只能在 macOS 环境构建，本工作流用 macos-latest runner 完成。
+
+name: Build Desktop App
+
+on:
+  push:
+    tags:
+      - 'v*'
+  workflow_dispatch:
+
+jobs:
+  mac:
+    name: 构建 macOS (dmg)
+    runs-on: macos-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build:mac
+        env:
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false' # 无签名证书时跳过签名
+      - uses: actions/upload-artifact@v4
+        with:
+          name: git-report-mac
+          path: release/*.dmg
+          if-no-files-found: error
+
+  windows:
+    name: 构建 Windows (exe)
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build:win
+      - uses: actions/upload-artifact@v4
+        with:
+          name: git-report-windows
+          path: release/*.exe
+          if-no-files-found: error
+
+  linux:
+    name: 构建 Linux (AppImage)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 20
+          cache: npm
+      - run: npm ci
+      - run: npm run build:linux
+      - uses: actions/upload-artifact@v4
+        with:
+          name: git-report-linux
+          path: release/*.AppImage
+          if-no-files-found: error
