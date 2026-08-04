@@ -128,7 +128,6 @@ body {
   font-size: 12px;
   color: var(--brand-text-sub);
 }
-.excludes { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .progress-text { font-size: 12px; color: var(--brand-text-sub); margin-right: 12px; }
 .stats { margin-bottom: 14px; }
 .charts { margin-bottom: 14px; }
@@ -228,10 +227,36 @@ body {
   box-shadow: 0 2px 6px rgba(14, 122, 109, .25);
 }
 
-/* ---------- 排除目录 checkbox ---------- */
-.excludes .el-checkbox { margin-right: 0; }
-.excludes .el-checkbox__inner { border-radius: 4px; }
-.excludes .el-checkbox__label { font-size: 12.5px; color: #5d6472; }
+/* ---------- 排除目录：分组 + 标签式 ---------- */
+.exclude-manager { width: 100%; }
+.exclude-group { margin-bottom: 12px; }
+.exclude-group:last-of-type { margin-bottom: 0; }
+.exclude-group-label {
+  font-size: 12px;
+  color: var(--brand-text-sub);
+  margin-bottom: 8px;
+  letter-spacing: .03em;
+}
+.exclude-group-items { display: flex; flex-wrap: wrap; gap: 8px; }
+.exclude-check { margin-right: 0 !important; }
+.exclude-check.el-checkbox--border {
+  border-radius: 7px;
+  height: 32px;
+  padding: 0 13px;
+  border-color: #e2e6ed;
+}
+.exclude-check.el-checkbox--border .el-checkbox__inner { border-radius: 4px; }
+.exclude-check.el-checkbox--border .el-checkbox__label { font-size: 12.5px; color: #5d6472; }
+.exclude-check.el-checkbox--border.is-checked {
+  border-color: var(--el-color-primary);
+  background: var(--el-color-primary-light-9);
+}
+.exclude-check.el-checkbox--border.is-checked .el-checkbox__label { color: var(--brand-accent); }
+.exclude-hint {
+  margin-top: 12px;
+  font-size: 12px;
+  color: var(--brand-text-sub);
+}
 
 /* ---------- 表格：选中行高亮 / 空状态 ---------- */
 .el-table__body tr.is-selected > td.el-table__cell {

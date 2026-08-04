@@ -178,7 +178,8 @@ import BaseChart from '../components/BaseChart.vue'
 import CountUp from '../components/CountUp.vue'
 
 const period = ref('weekly')
-const dailyDate = ref(todayStr())
+// 日报默认取「昨天」——最后一个完整工作日（当天通常尚无提交）
+const dailyDate = ref(addDays(todayStr(), -1))
 const customSince = ref(addDays(todayStr(), -6))
 const customUntil = ref(todayStr())
 const onlyMine = ref(true)
@@ -228,7 +229,13 @@ async function doCollect() {
     })
     rawCommits.value = data
     openProjects.value = []
-    if (!data.length) ElMessage.warning('所选时间范围内无提交记录')
+    if (!data.length) {
+      ElMessage.warning(
+        period.value === 'daily'
+          ? `${dailyDate.value} 无提交记录（可改选其它日期）`
+          : '所选时间范围内无提交记录'
+      )
+    }
   } catch (e) {
     console.error('收集失败', e)
     ElMessage.error('收集提交失败')

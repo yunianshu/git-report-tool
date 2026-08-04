@@ -47,10 +47,21 @@
         </el-form-item>
 
         <el-form-item label="排除目录">
-          <div class="excludes">
-            <el-checkbox-group v-model="config.excludes">
-              <el-checkbox v-for="x in EXCLUDE_PRESETS" :key="x" :value="x">{{ x }}</el-checkbox>
-            </el-checkbox-group>
+          <div class="exclude-manager">
+            <div v-for="group in EXCLUDE_GROUPS" :key="group.label" class="exclude-group">
+              <div class="exclude-group-label">{{ group.label }}</div>
+              <div class="exclude-group-items">
+                <el-checkbox
+                  v-for="x in group.items"
+                  :key="x"
+                  v-model="config.excludes"
+                  :value="x"
+                  border
+                  class="exclude-check"
+                >{{ x }}</el-checkbox>
+              </div>
+            </div>
+            <div class="exclude-hint">勾选的目录在扫描时会自动跳过，减少扫描时间</div>
           </div>
         </el-form-item>
       </el-form>
@@ -121,10 +132,12 @@ import { ElMessage } from 'element-plus'
 import { state } from '../store'
 import { toPlain } from '../utils/ipc'
 
-const EXCLUDE_PRESETS = [
-  'node_modules', 'FlutterSDK', 'fvm_cache', '__MACOSX', 'android-sdk',
-  'androidsdk', 'jdk', 'Program Files', 'Pods', '.gradle', '.idea', '.cache',
+const EXCLUDE_GROUPS = [
+  { label: '依赖与构建缓存', items: ['node_modules', '.cache', 'fvm_cache', '.gradle', 'Pods'] },
+  { label: 'SDK / 运行时', items: ['FlutterSDK', 'android-sdk', 'androidsdk', 'jdk'] },
+  { label: 'IDE / 系统', items: ['.idea', '__MACOSX', 'Program Files'] },
 ]
+const EXCLUDE_PRESETS = EXCLUDE_GROUPS.flatMap((g) => g.items)
 
 const config = ref({ roots: [], excludes: [...EXCLUDE_PRESETS], identities: [] })
 const newRoot = ref('')
