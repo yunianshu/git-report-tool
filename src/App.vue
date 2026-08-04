@@ -48,6 +48,9 @@ onMounted(async () => {
       await window.gitReport.configSave(toPlain(cfg))
       state.config = { ...state.config, ...cfg }
     }
+    // 生成过程进度监听（App 常驻，切换视图不中断进度显示）
+    window.gitReport.onScanProgress((p) => { state.report.scanProgress = p })
+    window.gitReport.onCollectProgress((p) => { state.report.collectProgress = p })
   } catch (e) {
     console.error('加载配置失败', e)
   }

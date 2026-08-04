@@ -56,26 +56,26 @@
     </el-card>
 
     <!-- 结果区 -->
-    <div v-if="phase !== 'idle'" class="report-results">
+    <div v-if="state.report.phase !== 'idle'" class="report-results">
       <!-- 生成过程：扫描 / 收集中 -->
-      <div v-if="phase === 'scanning' || phase === 'collecting'" class="phase-card">
+      <div v-if="state.report.phase === 'scanning' || state.report.phase === 'collecting'" class="phase-card">
         <el-icon class="is-loading phase-icon"><Loading /></el-icon>
         <div class="phase-text">
-          <div class="phase-title">{{ phase === 'scanning' ? '正在扫描仓库' : '正在收集提交' }}</div>
+          <div class="phase-title">{{ state.report.phase === 'scanning' ? '正在扫描仓库' : '正在收集提交' }}</div>
           <div class="phase-detail">
-            <template v-if="phase === 'scanning'">已处理 {{ scanProgress.scanned }} 个目录 · 已发现 {{ state.discoveredRepos.length }} 个仓库</template>
-            <template v-else>已完成 {{ collectProgress.done }} / {{ collectProgress.total }} 个仓库</template>
+            <template v-if="state.report.phase === 'scanning'">已处理 {{ state.report.scanProgress.scanned }} 个目录 · 已发现 {{ state.discoveredRepos.length }} 个仓库</template>
+            <template v-else>已完成 {{ state.report.collectProgress.done }} / {{ state.report.collectProgress.total }} 个仓库</template>
           </div>
         </div>
         <el-progress
-          v-if="phase === 'collecting'"
+          v-if="state.report.phase === 'collecting'"
           :percentage="collectPercent"
           :stroke-width="5"
           class="phase-bar"
         />
       </div>
 
-      <template v-if="phase === 'done'">
+      <template v-if="state.report.phase === 'done'">
       <el-row :gutter="12" class="stats">
         <el-col :span="6">
           <div class="kpi-card">
@@ -137,8 +137,7 @@
             </el-button>
           </div>
         </template>
-        <div v-if="collecting" v-loading="collecting" class="collect-hint">{{ collectText }}</div>
-        <el-collapse v-else v-model="openProjects">
+        <el-collapse v-model="state.report.openProjects">
           <el-collapse-item v-for="g in filteredGroups" :key="g.repo" :name="g.repo" :title="`${g.project}（${g.commits.length} 条）`">
             <el-table :data="g.commits" size="small">
               <el-table-column prop="date" label="日期" width="100" />
@@ -148,6 +147,7 @@
             </el-table>
           </el-collapse-item>
         </el-collapse>
+        <div v-if="!filteredCommits.length" class="collect-hint">该时间范围内无提交记录</div>
       </el-card>
       </template>
     </div>
@@ -163,7 +163,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onBeforeUnmount } from 'vue'
+import { ref, computed } from 'vue'
 import { ElMessage } from 'element-plus'
 import { state } from '../store'
 import { todayStr, addDays, untilToEnd } from '../utils/date'
@@ -181,25 +181,11 @@ const customUntil = ref(todayStr())
 const onlyMine = ref(true)
 const authorFilter = ref([])
 
-const generating = ref(false)
-const collecting = ref(false)
-const phase = ref('idle') // idle | scanning | collecting | done
-const scanProgress = ref({ scanned: 0 })
-const collectProgress = ref({ done: 0, total: 0 })
-const rawCommits = ref([])
-const openProjects = ref([])
-const collectText = ref('')
-let unsubCollect = null
-let unsubScanProgress = null
-onBeforeUnmount(() => {
-  if (unsubCollect) unsubCollect()
-  if (unsubScanProgress) unsubScanProgress()
-})
-
-const busy = computed(() => phase.value === 'scanning' || phase.value === 'collecting')
+// 生成过程状态全部存于共享 store.state.report，切换视图不中断
+const busy = computed(() => state.report.phase === 'scanning' || state.report.phase === 'collecting')
 const collectPercent = computed(() => {
-  const t = collectProgress.value.total
-  return t ? Math.round((collectProgress.value.done / t) * 100) : 0
+  const t = state.report.collectProgress.total
+  return t ? Math.round((state.report.collectProgress.done / t) * 100) : 0
 })
 
 /** 计算 git 查询起止（until 为排他语义，= 结束日 + 1 天） */
@@ -224,28 +210,26 @@ const rangeLabel = computed(() => {
 /** 一键生成：扫描（若有需要）→ 收集提交 → 展示，分阶段显示进度 */
 async function generate() {
   if (busy.value) return
-  // 阶段 1：确保有仓库（自动扫描，主进程分块让出事件循环，不阻塞切换设置）
+  // 阶段 1：确保有仓库（自动扫描）
   if (!state.discoveredRepos.length) {
     if (!state.config.roots || !state.config.roots.length) {
       ElMessage.warning('请先到「设置」添加扫描根目录')
       return
     }
-    phase.value = 'scanning'
-    unsubScanProgress = window.gitReport.onScanProgress((p) => { scanProgress.value = p })
+    state.report.phase = 'scanning'
+    state.report.scanProgress = { scanned: 0 }
     try {
       const paths = await window.gitReport.scanRepos(toPlain(state.config.roots), toPlain(state.config.excludes))
       state.discoveredRepos = paths.map((p) => ({ path: p, shortName: shortPath(p), info: null }))
     } catch (e) {
       console.error('自动扫描失败', e)
       ElMessage.error('扫描仓库失败')
-      phase.value = 'idle'
+      state.report.phase = 'idle'
       return
-    } finally {
-      if (unsubScanProgress) { unsubScanProgress(); unsubScanProgress = null }
     }
     if (!state.discoveredRepos.length) {
       ElMessage.warning('未扫描到任何 Git 仓库')
-      phase.value = 'idle'
+      state.report.phase = 'idle'
       return
     }
   }
@@ -254,14 +238,9 @@ async function generate() {
 }
 
 async function doCollect() {
-  phase.value = 'collecting'
-  collectText.value = '正在收集提交…'
-  collectProgress.value = { done: 0, total: 0 }
+  state.report.phase = 'collecting'
+  state.report.collectProgress = { done: 0, total: 0 }
   const r = range()
-  unsubCollect = window.gitReport.onCollectProgress((p) => {
-    collectProgress.value = p
-    collectText.value = `正在收集提交… ${p.done}/${p.total}`
-  })
   try {
     const repos = state.discoveredRepos.map((row) => row.path)
     const data = await window.gitReport.collectCommits(toPlain(repos), {
@@ -270,9 +249,9 @@ async function doCollect() {
       authors: [],
       includeMerges: false,
     })
-    rawCommits.value = data
-    openProjects.value = []
-    phase.value = 'done'
+    state.report.rawCommits = data
+    state.report.openProjects = []
+    state.report.phase = 'done'
     if (!data.length) {
       ElMessage.warning(
         period.value === 'daily'
@@ -283,16 +262,13 @@ async function doCollect() {
   } catch (e) {
     console.error('收集失败', e)
     ElMessage.error('收集提交失败')
-    phase.value = 'idle'
-  } finally {
-    collecting.value = false
-    if (unsubCollect) { unsubCollect(); unsubCollect = null }
+    state.report.phase = 'idle'
   }
 }
 
 const authors = computed(() => {
   const m = new Map()
-  rawCommits.value.forEach((c) => {
+  state.report.rawCommits.forEach((c) => {
     if (!m.has(c.authorName)) m.set(c.authorName, { name: c.authorName, email: c.authorEmail, count: 0 })
     m.get(c.authorName).count += 1
   })
@@ -308,7 +284,7 @@ function isMine(c) {
 }
 
 const filteredCommits = computed(() =>
-  rawCommits.value.filter((c) => {
+  state.report.rawCommits.filter((c) => {
     if (onlyMine.value) return isMine(c)
     if (authorFilter.value.length) return authorFilter.value.includes(c.authorName)
     return true
@@ -426,10 +402,9 @@ async function exportReport() {
 
 <style scoped>
 .collect-hint {
-  min-height: 120px;
-  display: flex;
-  align-items: center;
-  justify-content: center;
+  padding: 26px 0;
+  text-align: center;
   color: #909399;
+  font-size: 13px;
 }
 </style>

@@ -14,4 +14,12 @@ export const state = reactive({
     excludes: [],
     identities: [],
   },
+  /** 报告生成过程（跨视图保留，切换 tab 不中断） */
+  report: {
+    phase: 'idle', // idle | scanning | collecting | done
+    scanProgress: { scanned: 0 },
+    collectProgress: { done: 0, total: 0 },
+    rawCommits: [],
+    openProjects: [],
+  },
 })
