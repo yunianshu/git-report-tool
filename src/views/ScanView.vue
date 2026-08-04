@@ -43,18 +43,18 @@
     <el-card shadow="never" class="card">
       <template #header>
         <div class="card-header">
-          <span>发现的 Git 仓库（{{ repos.length }}）</span>
+          <span>发现的 Git 仓库（{{ state.discoveredRepos.length }}）</span>
           <div>
             <span v-if="scanning" class="progress-text">{{ progressText }}</span>
-            <el-button size="small" :disabled="!repos.length" @click="tableRef?.clearSelection()">清空</el-button>
-            <el-button size="small" :disabled="!repos.length" @click="selectAll">全选</el-button>
+            <el-button size="small" :disabled="!state.discoveredRepos.length" @click="tableRef?.clearSelection()">清空</el-button>
+            <el-button size="small" :disabled="!state.discoveredRepos.length" @click="selectAll">全选</el-button>
           </div>
         </div>
       </template>
 
       <el-table
         ref="tableRef"
-        :data="repos"
+        :data="state.discoveredRepos"
         height="460"
         size="small"
         @selection-change="onSelectionChange"
@@ -79,7 +79,7 @@
 
       <div class="footer-actions">
         <el-alert
-          v-if="!repos.length && !scanning"
+          v-if="!state.discoveredRepos.length && !scanning"
           type="info"
           :closable="false"
           title="添加根目录后点击「开始扫描」发现 Git 仓库，勾选需要的项目即可用于报告生成。"
@@ -105,7 +105,6 @@ const EXCLUDE_PRESETS = [
 
 const config = ref({ roots: [], excludes: [...EXCLUDE_PRESETS], identities: [] })
 const newRoot = ref('')
-const repos = ref([])
 const selectedRows = ref([])
 const scanning = ref(false)
 const progressText = ref('')
@@ -141,11 +140,11 @@ onMounted(async () => {
   unsubProgress = window.gitReport.onScanProgress((p) => {
     progressText.value = `扫描中… 已处理 ${p.scanned} 个目录（${shortPath(p.current)}）`
   })
-  // 每发现一个仓库立即追加到表格
+  // 每发现一个仓库立即追加到表格（存于共享状态，切换视图不丢失）
   unsubRepoFound = window.gitReport.onScanRepoFound((repoPath) => {
     if (!scanning.value) return
     const row = { path: repoPath, shortName: shortPath(repoPath), info: null }
-    repos.value.push(row)
+    state.discoveredRepos.push(row)
     infoQueue.push(row)
     scrollToBottom()
   })
@@ -153,8 +152,27 @@ onMounted(async () => {
   unsubScanDone = window.gitReport.onScanDone(() => {
     scanning.value = false
     progressText.value = ''
+    restoreSelection()
   })
+
+  // 切换视图返回时（不重新扫描）恢复勾选
+  nextTick(() => setTimeout(restoreSelection, 300))
 })
+
+/** 按 state.selectedRepoPaths 恢复表格勾选 */
+let restoring = false
+async function restoreSelection() {
+  if (!tableRef.value || !state.selectedRepoPaths.length) return
+  restoring = true
+  const paths = [...state.selectedRepoPaths] // 先拷贝，避免被 selection-change 覆盖
+  for (const row of state.discoveredRepos) {
+    if (paths.includes(row.path)) {
+      tableRef.value.toggleRowSelection(row, true)
+      await new Promise((r) => setTimeout(r, 30))
+    }
+  }
+  restoring = false
+}
 onBeforeUnmount(() => {
   if (unsubProgress) unsubProgress()
   if (unsubRepoFound) unsubRepoFound()
@@ -234,7 +252,8 @@ async function doScan() {
     return
   }
   // 重置状态：清空表格与队列，准备流式接收
-  repos.value = []
+  state.discoveredRepos.length = 0
+  state.selectedRepoPaths = []
   selectedRows.value = []
   infoQueue = []
   infoWorkers = []
@@ -255,9 +274,10 @@ async function doScan() {
 
 function onSelectionChange(rows) {
   selectedRows.value = rows
+  if (!restoring) state.selectedRepoPaths = rows.map((r) => r.path)
 }
 function selectAll() {
-  repos.value.forEach((row) => tableRef.value?.toggleRowSelection(row, true))
+  state.discoveredRepos.forEach((row) => tableRef.value?.toggleRowSelection(row, true))
 }
 
 function useSelected() {
