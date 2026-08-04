@@ -1,0 +1,99 @@
+* {
+  box-sizing: border-box;
+}
+html,
+body,
+#app {
+  height: 100%;
+  margin: 0;
+}
+body {
+  font-family: 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', 'Helvetica Neue', Arial, sans-serif;
+  background: #f5f7fa;
+  color: #303133;
+}
+.app {
+  height: 100%;
+}
+.aside {
+  background: #001529;
+  color: #fff;
+  display: flex;
+  flex-direction: column;
+}
+.logo {
+  height: 56px;
+  line-height: 56px;
+  text-align: center;
+  font-weight: 700;
+  font-size: 16px;
+  color: #fff;
+  letter-spacing: 1px;
+  border-bottom: 1px solid rgba(255, 255, 255, 0.08);
+}
+.menu {
+  flex: 1;
+  border-right: none;
+  background: transparent;
+  --el-menu-bg-color: transparent;
+  --el-menu-text-color: rgba(255, 255, 255, 0.7);
+  --el-menu-active-color: #409eff;
+  --el-menu-hover-bg-color: rgba(255, 255, 255, 0.08);
+}
+.menu .el-menu-item.is-active {
+  background: rgba(64, 158, 255, 0.15);
+}
+.aside-footer {
+  padding: 12px;
+  font-size: 12px;
+  color: rgba(255, 255, 255, 0.35);
+  text-align: center;
+}
+.main {
+  padding: 16px;
+  overflow: auto;
+  background: #f5f7fa;
+}
+.card {
+  margin-bottom: 14px;
+}
+.card-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  font-weight: 600;
+}
+.roots {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.excludes {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 4px 16px;
+}
+.progress-text {
+  font-size: 12px;
+  color: #909399;
+  margin-right: 12px;
+}
+.stats {
+  margin-bottom: 14px;
+}
+.charts {
+  margin-bottom: 14px;
+}
+.warn {
+  margin-top: 10px;
+}
+.footer-actions {
+  margin-top: 12px;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+}
+.footer-actions .el-alert {
+  flex: 1;
+}

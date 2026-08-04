@@ -106,7 +106,7 @@ async function getRepoInfo(repo) {
  * - 使用 --pretty=tformat（每条提交后强制换行，避免相邻仓库首尾行粘连）
  * - 指定作者时按作者逐个收集
  */
-async function collectCommits(repos, opts) {
+async function collectCommits(repos, opts, onProgress) {
   const { since, until, authors, includeMerges } = opts || {}
   const fmt = '%H%x09%ad%x09%an%x09%ae%x09%s'
   const base = ['log', '--all', `--since=${since}`]
@@ -119,6 +119,9 @@ async function collectCommits(repos, opts) {
 
   for (let i = 0; i < repos.length; i += 1) {
     const repo = repos[i]
+    if (onProgress) {
+      try { onProgress({ done: i + 1, total: repos.length, current: repo }) } catch { /* noop */ }
+    }
     for (const a of targets) {
       const args = [...base]
       if (a) args.push(`--author=${a}`)
