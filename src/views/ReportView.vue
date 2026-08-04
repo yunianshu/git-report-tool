@@ -183,8 +183,8 @@ import BaseChart from '../components/BaseChart.vue'
 import CountUp from '../components/CountUp.vue'
 
 const period = ref('daily')
-// 日报默认取「昨天」——最后一个完整工作日（当天通常尚无提交）
-const dailyDate = ref(addDays(todayStr(), -1))
+// 日报默认今天
+const dailyDate = ref(todayStr())
 const customSince = ref(addDays(todayStr(), -6))
 const customUntil = ref(todayStr())
 const onlyMine = ref(true)
