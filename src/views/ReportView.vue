@@ -76,79 +76,88 @@
       </div>
 
       <template v-if="state.report.phase === 'done'">
-      <el-row :gutter="12" class="stats">
-        <el-col :span="6">
-          <div class="kpi-card">
-            <div class="kpi-icon"><el-icon><List /></el-icon></div>
-            <div class="kpi-body">
-              <div class="kpi-label">提交数</div>
-              <div class="kpi-value"><CountUp :target="filteredCommits.length" /></div>
+        <el-tabs v-model="resultTab" class="result-tabs">
+          <!-- 报告明细：项目 → 提交内容（默认展示） -->
+          <el-tab-pane label="报告明细" name="detail">
+            <div class="detail-toolbar">
+              <span class="detail-summary">{{ filteredCommits.length }} 条提交 · {{ filteredGroups.length }} 个项目</span>
+              <el-button type="success" size="small" :disabled="!filteredCommits.length" @click="exportReport">
+                <el-icon style="margin-right: 4px"><Download /></el-icon>导出 Markdown
+              </el-button>
             </div>
-          </div>
-        </el-col>
-        <el-col :span="6">
-          <div class="kpi-card">
-            <div class="kpi-icon"><el-icon><FolderOpened /></el-icon></div>
-            <div class="kpi-body">
-              <div class="kpi-label">活跃项目</div>
-              <div class="kpi-value"><CountUp :target="filteredGroups.length" /></div>
+            <div v-if="filteredGroups.length" class="report-detail-list">
+              <div v-for="g in filteredGroups" :key="g.repo" class="project-card">
+                <div class="project-header">
+                  <span class="project-name">{{ g.project }}</span>
+                  <span class="project-count">{{ g.commits.length }} 条提交</span>
+                </div>
+                <div class="commit-list">
+                  <div v-for="(c, i) in g.commits" :key="c.hash" class="commit-row">
+                    <span class="commit-no">{{ i + 1 }}</span>
+                    <span class="commit-date">{{ c.date.slice(5) }}</span>
+                    <span class="commit-subject">{{ c.subject }}</span>
+                  </div>
+                </div>
+              </div>
             </div>
-          </div>
-        </el-col>
-        <el-col :span="6">
-          <div class="kpi-card">
-            <div class="kpi-icon"><el-icon><User /></el-icon></div>
-            <div class="kpi-body">
-              <div class="kpi-label">作者数</div>
-              <div class="kpi-value"><CountUp :target="authorCount" /></div>
-            </div>
-          </div>
-        </el-col>
-        <el-col :span="6">
-          <div class="kpi-card">
-            <div class="kpi-icon"><el-icon><Calendar /></el-icon></div>
-            <div class="kpi-body">
-              <div class="kpi-label">时间范围</div>
-              <div class="kpi-value kpi-range">{{ rangeLabel }}</div>
-            </div>
-          </div>
-        </el-col>
-      </el-row>
+            <div v-else class="collect-hint">该时间范围内无提交记录</div>
+          </el-tab-pane>
 
-      <el-row :gutter="12" class="charts">
-        <el-col :span="12">
-          <el-card shadow="never" header="项目提交分布">
-            <BaseChart :option="projectBarOption" height="300px" />
-          </el-card>
-        </el-col>
-        <el-col :span="12">
-          <el-card shadow="never" header="每日提交趋势">
-            <BaseChart :option="trendOption" height="300px" />
-          </el-card>
-        </el-col>
-      </el-row>
+          <!-- 统计分析：KPI + 图表 -->
+          <el-tab-pane label="统计分析" name="stats">
+            <el-row :gutter="12" class="stats">
+              <el-col :span="6">
+                <div class="kpi-card">
+                  <div class="kpi-icon"><el-icon><List /></el-icon></div>
+                  <div class="kpi-body">
+                    <div class="kpi-label">提交数</div>
+                    <div class="kpi-value"><CountUp :target="filteredCommits.length" /></div>
+                  </div>
+                </div>
+              </el-col>
+              <el-col :span="6">
+                <div class="kpi-card">
+                  <div class="kpi-icon"><el-icon><FolderOpened /></el-icon></div>
+                  <div class="kpi-body">
+                    <div class="kpi-label">活跃项目</div>
+                    <div class="kpi-value"><CountUp :target="filteredGroups.length" /></div>
+                  </div>
+                </div>
+              </el-col>
+              <el-col :span="6">
+                <div class="kpi-card">
+                  <div class="kpi-icon"><el-icon><User /></el-icon></div>
+                  <div class="kpi-body">
+                    <div class="kpi-label">作者数</div>
+                    <div class="kpi-value"><CountUp :target="authorCount" /></div>
+                  </div>
+                </div>
+              </el-col>
+              <el-col :span="6">
+                <div class="kpi-card">
+                  <div class="kpi-icon"><el-icon><Calendar /></el-icon></div>
+                  <div class="kpi-body">
+                    <div class="kpi-label">时间范围</div>
+                    <div class="kpi-value kpi-range">{{ rangeLabel }}</div>
+                  </div>
+                </div>
+              </el-col>
+            </el-row>
 
-      <el-card shadow="never" class="card">
-        <template #header>
-          <div class="card-header">
-            <span>提交明细（{{ filteredCommits.length }}）</span>
-            <el-button type="success" :disabled="!filteredCommits.length" @click="exportReport">
-              <el-icon style="margin-right: 4px"><Download /></el-icon>导出 Markdown
-            </el-button>
-          </div>
-        </template>
-        <el-collapse v-model="state.report.openProjects">
-          <el-collapse-item v-for="g in filteredGroups" :key="g.repo" :name="g.repo" :title="`${g.project}（${g.commits.length} 条）`">
-            <el-table :data="g.commits" size="small">
-              <el-table-column prop="date" label="日期" width="100" />
-              <el-table-column prop="hash" label="哈希" width="90" />
-              <el-table-column prop="authorName" label="作者" width="110" />
-              <el-table-column prop="subject" label="内容" min-width="340" show-overflow-tooltip />
-            </el-table>
-          </el-collapse-item>
-        </el-collapse>
-        <div v-if="!filteredCommits.length" class="collect-hint">该时间范围内无提交记录</div>
-      </el-card>
+            <el-row :gutter="12" class="charts">
+              <el-col :span="12">
+                <el-card shadow="never" header="项目提交分布">
+                  <BaseChart :option="projectBarOption" height="300px" />
+                </el-card>
+              </el-col>
+              <el-col :span="12">
+                <el-card shadow="never" header="每日提交趋势">
+                  <BaseChart :option="trendOption" height="300px" />
+                </el-card>
+              </el-col>
+            </el-row>
+          </el-tab-pane>
+        </el-tabs>
       </template>
     </div>
 
@@ -180,6 +189,7 @@ const customSince = ref(addDays(todayStr(), -6))
 const customUntil = ref(todayStr())
 const onlyMine = ref(true)
 const authorFilter = ref([])
+const resultTab = ref('detail') // detail | stats
 
 // 生成过程状态全部存于共享 store.state.report，切换视图不中断
 const busy = computed(() => state.report.phase === 'scanning' || state.report.phase === 'collecting')
