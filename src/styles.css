@@ -92,7 +92,42 @@ body {
   color: var(--brand-text);
 }
 
-.roots { display: flex; flex-wrap: wrap; gap: 8px; align-items: center; }
+/* ---------- 扫描根目录 ---------- */
+.root-manager { width: 100%; }
+.root-ops { display: flex; gap: 8px; align-items: center; }
+.root-ops .el-input { flex: 1; max-width: 520px; }
+.root-ops .el-button { white-space: nowrap; }
+.root-list {
+  margin-top: 14px;
+  display: flex;
+  flex-wrap: wrap;
+  gap: 8px;
+  align-items: center;
+}
+.root-list-title {
+  width: 100%;
+  font-size: 12px;
+  color: var(--brand-text-sub);
+  margin-bottom: 2px;
+}
+.root-tag {
+  display: inline-flex;
+  align-items: center;
+  gap: 5px;
+  max-width: 100%;
+}
+.root-tag .el-icon { font-size: 13px; }
+.root-tag span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 430px;
+}
+.root-empty {
+  margin-top: 8px;
+  font-size: 12px;
+  color: var(--brand-text-sub);
+}
 .excludes { display: flex; flex-wrap: wrap; gap: 4px 16px; }
 .progress-text { font-size: 12px; color: var(--brand-text-sub); margin-right: 12px; }
 .stats { margin-bottom: 14px; }

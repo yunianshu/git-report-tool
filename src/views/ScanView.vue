@@ -13,19 +13,36 @@
 
       <el-form label-width="86px">
         <el-form-item label="扫描根目录">
-          <div class="roots">
-            <el-tag v-for="(r, i) in config.roots" :key="r" closable type="info" @close="removeRoot(i)">
-              {{ r }}
-            </el-tag>
-            <el-input
-              v-model="newRoot"
-              placeholder="输入目录路径，如 D:\AiProject，回车添加"
-              style="width: 360px"
-              clearable
-              @keyup.enter="addRoot"
-            />
-            <el-button @click="browseRoot"><el-icon><Folder /></el-icon>浏览</el-button>
-            <el-button @click="addRoot">添加</el-button>
+          <div class="root-manager">
+            <!-- 操作行：输入 + 浏览 + 添加 -->
+            <div class="root-ops">
+              <el-input
+                v-model="newRoot"
+                placeholder="输入目录路径，如 D:\AiProject，回车添加"
+                clearable
+                @keyup.enter="addRoot"
+              />
+              <el-button @click="browseRoot">
+                <el-icon><Folder /></el-icon>浏览
+              </el-button>
+              <el-button type="primary" plain @click="addRoot">添加</el-button>
+            </div>
+            <!-- 已添加列表 -->
+            <div v-if="config.roots.length" class="root-list">
+              <div class="root-list-title">已添加 {{ config.roots.length }} 个根目录</div>
+              <el-tag
+                v-for="(r, i) in config.roots"
+                :key="r"
+                closable
+                type="info"
+                class="root-tag"
+                @close="removeRoot(i)"
+              >
+                <el-icon><FolderOpened /></el-icon>
+                <span :title="r">{{ r }}</span>
+              </el-tag>
+            </div>
+            <div v-else class="root-empty">尚未添加根目录，请输入路径或点击「浏览」选择文件夹</div>
           </div>
         </el-form-item>
 
