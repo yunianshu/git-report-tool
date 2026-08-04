@@ -1,9 +1,11 @@
-# 三平台打包工作流
+# 三平台打包工作流（发布到 GitHub Releases）
 # 触发方式：
-#   - 推送 tag（如 v1.0.0）：自动构建 mac / win / linux 三个平台的安装包
+#   - 推送 tag（如 v1.0.0）：自动构建并发布正式 Release（dmg/exe/AppImage 可安装文件）
 #   - GitHub 页面手动触发（Actions → Build Desktop App → Run workflow）
 #
-# 说明：macOS 的 dmg 只能在 macOS 环境构建，本工作流用 macos-latest runner 完成。
+# 说明：
+#   - macOS 的 dmg 只能在 macOS 环境构建，本工作流用 macos-latest runner
+#   - 用 GITHUB_TOKEN 发布到 Release（需 permissions.contents: write）
 
 name: Build Desktop App
 
@@ -12,6 +14,9 @@ on:
     tags:
       - 'v*'
   workflow_dispatch:
+
+permissions:
+  contents: write
 
 jobs:
   mac:
@@ -24,9 +29,11 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run build:mac
+      - run: npm run build:renderer
+      - run: npx electron-builder --mac --publish=always
         env:
-          CSC_IDENTITY_AUTO_DISCOVERY: 'false' # 无签名证书时跳过签名
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4
         with:
           name: git-report-mac
@@ -43,7 +50,10 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run build:win
+      - run: npm run build:renderer
+      - run: npx electron-builder --win --publish=always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
           name: git-report-windows
@@ -60,7 +70,10 @@ jobs:
           node-version: 20
           cache: npm
       - run: npm ci
-      - run: npm run build:linux
+      - run: npm run build:renderer
+      - run: npx electron-builder --linux --publish=always
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
           name: git-report-linux

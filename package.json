@@ -7,6 +7,10 @@
     "name": "yunainshu",
     "email": "592908207@qq.com"
   },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/yunianshu/git-report-tool.git"
+  },
   "license": "MIT",
   "scripts": {
     "dev": "concurrently -k -s first \"vite\" \"wait-on tcp:127.0.0.1:5173 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
