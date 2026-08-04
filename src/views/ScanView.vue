@@ -1,7 +1,7 @@
 <template>
-  <div>
+  <div class="scan-page">
     <!-- 扫描配置 -->
-    <el-card shadow="never" class="card">
+    <el-card shadow="never" class="card scan-config-card">
       <template #header>
         <div class="card-header">
           <span>扫描配置</span>
@@ -68,25 +68,29 @@
     </el-card>
 
     <!-- 仓库列表 -->
-    <el-card shadow="never" class="card">
+    <el-card shadow="never" class="card scan-repo-card">
       <template #header>
         <div class="card-header">
           <span>发现的 Git 仓库（{{ state.discoveredRepos.length }}）</span>
-          <div>
+          <div class="header-actions">
             <span v-if="scanning" class="progress-text">{{ progressText }}</span>
             <el-button size="small" :disabled="!state.discoveredRepos.length" @click="tableRef?.clearSelection()">清空</el-button>
             <el-button size="small" :disabled="!state.discoveredRepos.length" @click="selectAll">全选</el-button>
+            <el-button type="primary" :disabled="!selectedRows.length" @click="useSelected">
+              <el-icon style="margin-right: 4px"><Check /></el-icon>使用勾选的 {{ selectedRows.length }} 个项目
+            </el-button>
           </div>
         </div>
       </template>
 
-      <el-table
-        ref="tableRef"
-        :data="state.discoveredRepos"
-        height="460"
-        size="small"
-        @selection-change="onSelectionChange"
-      >
+      <div class="table-wrap">
+        <el-table
+          ref="tableRef"
+          :data="state.discoveredRepos"
+          height="100%"
+          size="small"
+          @selection-change="onSelectionChange"
+        >
         <template #empty>
           <div class="table-empty">
             <el-icon><FolderOpened /></el-icon>
@@ -109,18 +113,15 @@
         <el-table-column label="最近提交" min-width="190" show-overflow-tooltip>
           <template #default="{ row }">{{ row.info?.lastCommit || '-' }}</template>
         </el-table-column>
-      </el-table>
+        </el-table>
+      </div>
 
-      <div class="footer-actions">
+      <div v-if="!state.discoveredRepos.length && !scanning" class="footer-hint">
         <el-alert
-          v-if="!state.discoveredRepos.length && !scanning"
           type="info"
           :closable="false"
           title="添加根目录后点击「开始扫描」发现 Git 仓库，勾选需要的项目即可用于报告生成。"
         />
-        <el-button type="primary" :disabled="!selectedRows.length" @click="useSelected">
-          使用勾选的 {{ selectedRows.length }} 个项目生成报告
-        </el-button>
       </div>
     </el-card>
   </div>
