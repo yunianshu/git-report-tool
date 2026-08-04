@@ -55,16 +55,15 @@
       />
     </el-card>
 
-    <!-- 结果区 -->
-    <div v-if="state.report.phase !== 'idle'" class="report-results">
-      <!-- 生成过程：扫描 / 收集中 -->
-      <div v-if="state.report.phase === 'scanning' || state.report.phase === 'collecting'" class="phase-card">
+    <!-- 生成过程：扫描 / 收集中 -->
+    <div v-if="state.report.phase === 'scanning' || state.report.phase === 'collecting'" class="report-results">
+      <div class="phase-card">
         <el-icon class="is-loading phase-icon"><Loading /></el-icon>
         <div class="phase-text">
           <div class="phase-title">{{ state.report.phase === 'scanning' ? '正在扫描仓库' : '正在收集提交' }}</div>
           <div class="phase-detail">
-            <template v-if="state.report.phase === 'scanning'">已处理 {{ state.report.scanProgress.scanned }} 个目录 · 已发现 {{ state.discoveredRepos.length }} 个仓库</template>
-            <template v-else>已完成 {{ state.report.collectProgress.done }} / {{ state.report.collectProgress.total }} 个仓库</template>
+      <template v-if="state.report.phase === 'scanning'">已处理 {{ state.report.scanProgress.scanned }} 个目录 · 已发现 {{ state.discoveredRepos.length }} 个仓库</template>
+      <template v-else>已完成 {{ state.report.collectProgress.done }} / {{ state.report.collectProgress.total }} 个仓库</template>
           </div>
         </div>
         <el-progress
@@ -74,11 +73,11 @@
           class="phase-bar"
         />
       </div>
+    </div>
 
-      <template v-if="state.report.phase === 'done'">
-        <el-tabs v-model="resultTab" class="result-tabs">
-          <!-- 报告明细：项目 → 提交内容（默认展示） -->
-          <el-tab-pane label="报告明细" name="detail">
+    <!-- 结果 tabs：始终显示，明细/统计仅生成后可见 -->
+    <el-tabs v-model="resultTab" class="result-tabs report-tabs">
+      <el-tab-pane v-if="state.report.phase === 'done'" label="报告明细" name="detail">
             <div class="detail-toolbar">
               <span class="detail-summary">{{ filteredCommits.length }} 条提交 · {{ filteredGroups.length }} 个项目</span>
               <div class="detail-actions">
@@ -114,7 +113,7 @@
           </el-tab-pane>
 
           <!-- 统计分析：KPI + 图表 -->
-          <el-tab-pane label="统计分析" name="stats">
+          <el-tab-pane v-if="state.report.phase === 'done'" label="统计分析" name="stats">
             <el-row :gutter="12" class="stats">
               <el-col :span="6">
                 <div class="kpi-card">
@@ -167,44 +166,34 @@
               </el-col>
             </el-row>
           </el-tab-pane>
-        </el-tabs>
-      </template>
-    </div>
 
-    <!-- 空状态引导 -->
-    <div v-else class="report-empty">
-      <div class="table-empty">
-        <el-icon><MagicStick /></el-icon>
-        <p>选择周期后点击「生成报告」，自动扫描仓库并汇总提交</p>
-      </div>
-    </div>
-
-    <!-- 历史记录（始终显示，重启后可查看） -->
-    <el-card shadow="never" class="card history-card">
-      <template #header>
-        <div class="card-header">
-          <span>历史记录（{{ historyList.length }}）</span>
-        </div>
-      </template>
-      <el-table :data="historyList" size="small">
-        <el-table-column prop="createdAt" label="生成时间" width="175" />
-        <el-table-column prop="title" label="标题" min-width="220" show-overflow-tooltip />
-        <el-table-column prop="commitCount" label="提交数" width="80" />
-        <el-table-column prop="projectCount" label="项目数" width="80" />
-        <el-table-column label="操作" width="140">
-          <template #default="{ row }">
-            <el-button size="small" @click="viewHistory(row)">查看</el-button>
-            <el-button size="small" type="danger" plain @click="delHistory(row)">删除</el-button>
+      <!-- 历史记录 tab（始终显示） -->
+      <el-tab-pane label="历史记录" name="history">
+        <el-table :data="historyList" size="small">
+          <el-table-column prop="createdAt" label="生成时间" width="175" />
+          <el-table-column prop="title" label="标题" min-width="220" show-overflow-tooltip />
+          <el-table-column prop="commitCount" label="提交数" width="80" />
+          <el-table-column prop="projectCount" label="项目数" width="80" />
+          <el-table-column label="操作" width="140">
+            <template #default="{ row }">
+              <el-button size="small" @click="viewHistory(row)">查看</el-button>
+              <el-button size="small" type="danger" plain @click="delHistory(row)">删除</el-button>
+            </template>
+          </el-table-column>
+          <template #empty>
+            <div class="table-empty">
+              <el-icon><Document /></el-icon>
+              <p>暂无历史记录，生成报告后会自动保存</p>
+            </div>
           </template>
-        </el-table-column>
-        <template #empty>
-          <div class="table-empty">
-            <el-icon><Document /></el-icon>
-            <p>暂无历史记录，生成报告后会自动保存</p>
-          </div>
-        </template>
-      </el-table>
-    </el-card>
+        </el-table>
+      </el-tab-pane>
+    </el-tabs>
+
+    <!-- 空状态引导（未生成时） -->
+    <div v-if="state.report.phase === 'idle'" class="report-hint">
+      <el-alert type="info" :closable="false" show-icon title="选择周期后点击「生成报告」，自动扫描仓库并汇总提交" />
+    </div>
 
     <!-- 历史报告查看 -->
     <el-dialog v-model="historyDialog.visible" :title="historyDialog.title" width="760" top="6vh">
@@ -214,7 +203,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../store'
 import { todayStr, addDays, untilToEnd } from '../utils/date'
@@ -231,7 +220,16 @@ const customSince = ref(addDays(todayStr(), -6))
 const customUntil = ref(todayStr())
 const onlyMine = ref(true)
 const authorFilter = ref([])
-const resultTab = ref('detail') // detail | stats
+const resultTab = ref('detail') // detail | stats | history
+// 未生成报告时只显示历史 tab；生成完成后默认报告明细
+watch(
+  () => state.report.phase,
+  (p) => {
+    if (p === 'done') resultTab.value = 'detail'
+    else resultTab.value = 'history'
+  },
+  { immediate: true }
+)
 
 // 历史记录
 const historyList = ref([])
