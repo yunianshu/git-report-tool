@@ -56,7 +56,26 @@
     </el-card>
 
     <!-- 结果区 -->
-    <div v-if="collecting || rawCommits.length" class="report-results">
+    <div v-if="phase !== 'idle'" class="report-results">
+      <!-- 生成过程：扫描 / 收集中 -->
+      <div v-if="phase === 'scanning' || phase === 'collecting'" class="phase-card">
+        <el-icon class="is-loading phase-icon"><Loading /></el-icon>
+        <div class="phase-text">
+          <div class="phase-title">{{ phase === 'scanning' ? '正在扫描仓库' : '正在收集提交' }}</div>
+          <div class="phase-detail">
+            <template v-if="phase === 'scanning'">已处理 {{ scanProgress.scanned }} 个目录 · 已发现 {{ state.discoveredRepos.length }} 个仓库</template>
+            <template v-else>已完成 {{ collectProgress.done }} / {{ collectProgress.total }} 个仓库</template>
+          </div>
+        </div>
+        <el-progress
+          v-if="phase === 'collecting'"
+          :percentage="collectPercent"
+          :stroke-width="5"
+          class="phase-bar"
+        />
+      </div>
+
+      <template v-if="phase === 'done'">
       <el-row :gutter="12" class="stats">
         <el-col :span="6">
           <div class="kpi-card">
@@ -130,6 +149,7 @@
           </el-collapse-item>
         </el-collapse>
       </el-card>
+      </template>
     </div>
 
     <!-- 空状态引导 -->
@@ -153,7 +173,7 @@ import { shortPath } from '../utils/path'
 import BaseChart from '../components/BaseChart.vue'
 import CountUp from '../components/CountUp.vue'
 
-const period = ref('weekly')
+const period = ref('daily')
 // 日报默认取「昨天」——最后一个完整工作日（当天通常尚无提交）
 const dailyDate = ref(addDays(todayStr(), -1))
 const customSince = ref(addDays(todayStr(), -6))
@@ -163,13 +183,24 @@ const authorFilter = ref([])
 
 const generating = ref(false)
 const collecting = ref(false)
+const phase = ref('idle') // idle | scanning | collecting | done
+const scanProgress = ref({ scanned: 0 })
+const collectProgress = ref({ done: 0, total: 0 })
 const rawCommits = ref([])
 const openProjects = ref([])
 const collectText = ref('')
 let unsubCollect = null
-onBeforeUnmount(() => unsubCollect && unsubCollect())
+let unsubScanProgress = null
+onBeforeUnmount(() => {
+  if (unsubCollect) unsubCollect()
+  if (unsubScanProgress) unsubScanProgress()
+})
 
-const busy = computed(() => generating.value || collecting.value)
+const busy = computed(() => phase.value === 'scanning' || phase.value === 'collecting')
+const collectPercent = computed(() => {
+  const t = collectProgress.value.total
+  return t ? Math.round((collectProgress.value.done / t) * 100) : 0
+})
 
 /** 计算 git 查询起止（until 为排他语义，= 结束日 + 1 天） */
 function range() {
@@ -190,37 +221,45 @@ const rangeLabel = computed(() => {
   return r.since === end ? r.since : `${r.since} ~ ${end}`
 })
 
-/** 一键生成：自动扫描（若无仓库）→ 收集提交 */
+/** 一键生成：扫描（若有需要）→ 收集提交 → 展示，分阶段显示进度 */
 async function generate() {
+  if (busy.value) return
+  // 阶段 1：确保有仓库（自动扫描，主进程分块让出事件循环，不阻塞切换设置）
   if (!state.discoveredRepos.length) {
     if (!state.config.roots || !state.config.roots.length) {
       ElMessage.warning('请先到「设置」添加扫描根目录')
       return
     }
-    generating.value = true
+    phase.value = 'scanning'
+    unsubScanProgress = window.gitReport.onScanProgress((p) => { scanProgress.value = p })
     try {
       const paths = await window.gitReport.scanRepos(toPlain(state.config.roots), toPlain(state.config.excludes))
       state.discoveredRepos = paths.map((p) => ({ path: p, shortName: shortPath(p), info: null }))
     } catch (e) {
       console.error('自动扫描失败', e)
       ElMessage.error('扫描仓库失败')
-      generating.value = false
+      phase.value = 'idle'
       return
+    } finally {
+      if (unsubScanProgress) { unsubScanProgress(); unsubScanProgress = null }
     }
-    generating.value = false
     if (!state.discoveredRepos.length) {
       ElMessage.warning('未扫描到任何 Git 仓库')
+      phase.value = 'idle'
       return
     }
   }
+  // 阶段 2：收集提交
   await doCollect()
 }
 
 async function doCollect() {
-  collecting.value = true
+  phase.value = 'collecting'
   collectText.value = '正在收集提交…'
+  collectProgress.value = { done: 0, total: 0 }
   const r = range()
   unsubCollect = window.gitReport.onCollectProgress((p) => {
+    collectProgress.value = p
     collectText.value = `正在收集提交… ${p.done}/${p.total}`
   })
   try {
@@ -233,6 +272,7 @@ async function doCollect() {
     })
     rawCommits.value = data
     openProjects.value = []
+    phase.value = 'done'
     if (!data.length) {
       ElMessage.warning(
         period.value === 'daily'
@@ -243,6 +283,7 @@ async function doCollect() {
   } catch (e) {
     console.error('收集失败', e)
     ElMessage.error('收集提交失败')
+    phase.value = 'idle'
   } finally {
     collecting.value = false
     if (unsubCollect) { unsubCollect(); unsubCollect = null }

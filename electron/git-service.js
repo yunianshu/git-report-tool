@@ -66,7 +66,13 @@ async function scanRepos(roots, excludes, onProgress, onRepo) {
     if (root && fs.existsSync(root)) stack.push({ dir: root, depth: 0, repoBase: -1 })
   }
 
+  let processed = 0
   while (stack.length > 0) {
+    // 每处理一批目录就让出事件循环，避免长时间阻塞主进程
+    // （否则渲染进程的 IPC 请求如 configLoad 会排队，导致界面卡住无法切换）
+    if (++processed % 200 === 0) {
+      await new Promise((resolve) => setImmediate(resolve))
+    }
     const { dir, depth, repoBase } = stack.pop()
     if (depth > 16) continue
     // 已处于某个仓库内部且下钻超过上限 → 停止（避免遍历仓库完整内部树）
