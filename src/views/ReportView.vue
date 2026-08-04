@@ -81,15 +81,25 @@
           <el-tab-pane label="报告明细" name="detail">
             <div class="detail-toolbar">
               <span class="detail-summary">{{ filteredCommits.length }} 条提交 · {{ filteredGroups.length }} 个项目</span>
-              <el-button type="success" size="small" :disabled="!filteredCommits.length" @click="exportReport">
-                <el-icon style="margin-right: 4px"><Download /></el-icon>导出 Markdown
-              </el-button>
+              <div class="detail-actions">
+                <el-button size="small" :disabled="!filteredCommits.length" @click="copyReport">
+                  <el-icon style="margin-right: 4px"><CopyDocument /></el-icon>复制报告
+                </el-button>
+                <el-button type="success" size="small" :disabled="!filteredCommits.length" @click="exportReport">
+                  <el-icon style="margin-right: 4px"><Download /></el-icon>导出 Markdown
+                </el-button>
+              </div>
             </div>
             <div v-if="filteredGroups.length" class="report-detail-list">
               <div v-for="g in filteredGroups" :key="g.repo" class="project-card">
                 <div class="project-header">
                   <span class="project-name">{{ g.project }}</span>
-                  <span class="project-count">{{ g.commits.length }} 条提交</span>
+                  <div class="project-right">
+                    <span class="project-count">{{ g.commits.length }} 条提交</span>
+                    <el-button size="small" text type="primary" @click="copyProject(g)">
+                      <el-icon style="margin-right: 3px"><CopyDocument /></el-icon>复制
+                    </el-button>
+                  </div>
                 </div>
                 <div class="commit-list">
                   <div v-for="(c, i) in g.commits" :key="c.hash" class="commit-row">
@@ -468,6 +478,29 @@ async function viewHistory(row) {
   if (data) {
     historyDialog.value = { visible: true, title: data.title, content: data.content }
   }
+}
+
+async function copyText(text) {
+  try {
+    await window.gitReport.copyText(text)
+    ElMessage.success('已复制到剪贴板')
+  } catch (e) {
+    console.error('复制失败', e)
+  }
+}
+
+/** 复制单个项目的提交内容 */
+function copyProject(g) {
+  const lines = [`${g.project}（${g.commits.length} 条提交）`]
+  g.commits.forEach((c, i) => {
+    lines.push(`${i + 1}. ${c.date}  ${c.subject}`)
+  })
+  copyText(lines.join('\n'))
+}
+
+/** 复制整个报告（Markdown 全文） */
+function copyReport() {
+  copyText(getMarkdown())
 }
 
 async function delHistory(row) {

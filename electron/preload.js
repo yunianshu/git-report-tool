@@ -50,4 +50,6 @@ contextBridge.exposeInMainWorld('gitReport', {
   deleteHistory: (id) => ipcRenderer.invoke('report:deleteHistory', id),
   // 系统
   openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
+  copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
+  readClipboard: () => ipcRenderer.invoke('clipboard:read'),
 })

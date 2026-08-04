@@ -1,7 +1,7 @@
 /**
  * 主进程入口
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const gitService = require('./git-service')
@@ -84,6 +84,13 @@ function registerIpc() {
   ipcMain.handle('report:listHistory', () => reportHistory.list())
   ipcMain.handle('report:readHistory', (_e, id) => reportHistory.read(id))
   ipcMain.handle('report:deleteHistory', (_e, id) => reportHistory.remove(id))
+
+  // 剪贴板
+  ipcMain.handle('clipboard:write', (_e, text) => {
+    if (text) clipboard.writeText(String(text))
+    return true
+  })
+  ipcMain.handle('clipboard:read', () => clipboard.readText())
 
   // 系统
   ipcMain.handle('shell:openPath', (_e, p) => {
