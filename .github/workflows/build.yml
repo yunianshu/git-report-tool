@@ -1,6 +1,6 @@
 # 三平台打包工作流（发布到 GitHub Releases）
 # 触发方式：
-#   - 推送 tag（如 v1.0.0）：自动构建并发布正式 Release（dmg/exe/AppImage 可安装文件）
+#   - 推送 tag（如 v1.0.2）：自动构建并发布正式 Release（dmg/exe/AppImage 可安装文件）
 #   - GitHub 页面手动触发（Actions → Build Desktop App → Run workflow）
 #
 # 说明：

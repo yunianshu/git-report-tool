@@ -1,6 +1,6 @@
 {
   "name": "git-report-desktop",
-  "version": "1.0.0",
+  "version": "1.0.2",
   "description": "跨平台 Git 项目日报/周报/月报生成工具（Windows / macOS / Linux）",
   "main": "electron/main.js",
   "author": {
@@ -69,6 +69,12 @@
         "deb"
       ],
       "category": "Development"
+    },
+    "publish": {
+      "provider": "github",
+      "owner": "yunianshu",
+      "repo": "git-report-tool",
+      "releaseType": "release"
     }
   }
 }

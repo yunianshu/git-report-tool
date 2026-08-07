@@ -10,7 +10,7 @@
           <el-icon><Setting /></el-icon><span>设置</span>
         </el-menu-item>
       </el-menu>
-      <div class="aside-footer">v1.0.0 · Windows / macOS / Linux</div>
+      <div class="aside-footer">v1.0.2 · Windows / macOS / Linux</div>
     </el-aside>
     <el-main class="main">
       <transition name="fade" mode="out-in">
