@@ -9,7 +9,21 @@ const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 /** 输出 token 上限（防止长报告溢出上下文或静默截断） */
 const DEFAULT_MAX_TOKENS = 4096
 
-/** 校验接口地址：仅允许 https，或 http 限本机（Ollama 本地服务） */
+/** 是否为内网/本机主机（http 仅允许这些地址，防止向公网明文发送 Key） */
+function isPrivateHost(hostname) {
+  const h = (hostname || '').toLowerCase()
+  if (['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(h)) return true
+  const parts = h.split('.').map(Number)
+  if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
+    if (parts[0] === 10) return true // 10.0.0.0/8
+    if (parts[0] === 127) return true // 127.0.0.0/8
+    if (parts[0] === 172 && parts[1] >= 16 && parts[1] <= 31) return true // 172.16.0.0/12
+    if (parts[0] === 192 && parts[1] === 168) return true // 192.168.0.0/16
+  }
+  return false
+}
+
+/** 校验接口地址：仅允许 https，或 http 限本机/内网（自建网关场景）。返回去尾部斜杠的完整 base（含路径前缀） */
 function assertSafeBaseUrl(baseUrl) {
   let u
   try {
@@ -17,12 +31,12 @@ function assertSafeBaseUrl(baseUrl) {
   } catch {
     throw new Error('接口地址格式不正确，请检查「设置 → AI 模型 → 接口地址」')
   }
-  const local = ['localhost', '127.0.0.1', '::1'].includes(u.hostname)
-  const ok = u.protocol === 'https:' || (u.protocol === 'http:' && local)
+  const ok = u.protocol === 'https:' || (u.protocol === 'http:' && isPrivateHost(u.hostname))
   if (!ok) {
-    throw new Error('接口地址仅支持 https，http 仅允许本机（localhost / 127.0.0.1）')
+    throw new Error('接口地址仅支持 https，或 http 仅限本机/内网（localhost、10.x、172.16-31.x、192.168.x）')
   }
-  return `${u.protocol}//${u.host}`
+  // 保留路径前缀（如 /v1、/anthropic），仅去尾部斜杠，供后续拼 /chat/completions
+  return u.href.replace(/\/+$/, '')
 }
 
 /**
