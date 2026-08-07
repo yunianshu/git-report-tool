@@ -7,6 +7,7 @@ const fs = require('fs')
 const gitService = require('./git-service')
 const store = require('./store')
 const reportHistory = require('./report-history')
+const aiService = require('./ai-service')
 
 let mainWindow
 
@@ -84,6 +85,53 @@ function registerIpc() {
   ipcMain.handle('report:listHistory', () => reportHistory.list())
   ipcMain.handle('report:readHistory', (_e, id) => reportHistory.read(id))
   ipcMain.handle('report:deleteHistory', (_e, id) => reportHistory.remove(id))
+
+  // AI 对话（流式）：每个 sender 一个 AbortController 支持停止
+  // 安全：明文 API Key 由主进程从 store 解析（getApiKey），渲染层不持有、也不接收
+  const aiControllers = new WeakMap()
+  ipcMain.handle('ai:chat', async (e, payload) => {
+    const { messages, opts } = payload || {}
+    const wc = e.sender
+    const cfg = store.load()
+    const controller = new AbortController()
+    aiControllers.set(wc, controller)
+    try {
+      const full = await aiService.chat({
+        baseUrl: (opts && opts.baseUrl) || cfg.ai.baseUrl,
+        apiKey: store.getApiKey(), // 忽略渲染层传入的 Key
+        model: (opts && opts.model) || cfg.ai.model,
+        temperature: opts && opts.temperature !== undefined ? opts.temperature : cfg.ai.temperature,
+        messages,
+        signal: controller.signal,
+        onDelta: (text) => {
+          try { wc.send('ai:chatDelta', text) } catch { /* noop */ }
+        },
+      })
+      return { ok: true, text: full }
+    } catch (err) {
+      if (err && err.name === 'AbortError') return { ok: false, aborted: true, error: '' }
+      return { ok: false, error: (err && err.message) || String(err) }
+    } finally {
+      aiControllers.delete(wc)
+    }
+  })
+  ipcMain.handle('ai:stop', (e) => {
+    const c = aiControllers.get(e.sender)
+    if (c) { try { c.abort() } catch { /* noop */ } }
+    return true
+  })
+  ipcMain.handle('ai:test', async (_e, opts) => {
+    const o = opts || {}
+    try {
+      return await aiService.test({
+        baseUrl: o.baseUrl,
+        apiKey: o.apiKey || store.getApiKey(), // 允许测试未保存的新 Key
+        model: o.model,
+      })
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
 
   // 剪贴板
   ipcMain.handle('clipboard:write', (_e, text) => {

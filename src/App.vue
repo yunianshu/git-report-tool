@@ -3,6 +3,9 @@
     <el-aside width="200px" class="aside">
       <div class="logo">Git<b>·</b>报告</div>
       <el-menu :default-active="view" class="menu" @select="(i) => (view = i)">
+        <el-menu-item index="chat">
+          <el-icon><ChatDotRound /></el-icon><span>AI 助手</span>
+        </el-menu-item>
         <el-menu-item index="report">
           <el-icon><Document /></el-icon><span>报告</span>
         </el-menu-item>
@@ -14,7 +17,8 @@
     </el-aside>
     <el-main class="main">
       <transition name="fade" mode="out-in">
-        <ReportView v-if="view === 'report'" key="report" />
+        <ChatView v-if="view === 'chat'" key="chat" />
+        <ReportView v-else-if="view === 'report'" key="report" />
         <SettingsView v-else key="settings" />
       </transition>
     </el-main>
@@ -23,12 +27,13 @@
 
 <script setup>
 import { ref, onMounted } from 'vue'
+import ChatView from './views/ChatView.vue'
 import ReportView from './views/ReportView.vue'
 import SettingsView from './views/SettingsView.vue'
 import { state } from './store'
 import { toPlain } from './utils/ipc'
 
-const view = ref('report')
+const view = ref('chat')
 
 onMounted(async () => {
   try {

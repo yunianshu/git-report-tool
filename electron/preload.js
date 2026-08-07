@@ -48,6 +48,12 @@ contextBridge.exposeInMainWorld('gitReport', {
   listHistory: () => ipcRenderer.invoke('report:listHistory'),
   readHistory: (id) => ipcRenderer.invoke('report:readHistory', id),
   deleteHistory: (id) => ipcRenderer.invoke('report:deleteHistory', id),
+  // AI 对话（流式）
+  aiChat: (messages, opts) =>
+    ipcRenderer.invoke('ai:chat', { messages: toPlain(messages), opts: toPlain(opts) }),
+  aiStop: () => ipcRenderer.invoke('ai:stop'),
+  aiTest: (opts) => ipcRenderer.invoke('ai:test', toPlain(opts)),
+  onAiDelta: (cb) => subscribe('ai:chatDelta', cb),
   // 系统
   openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),

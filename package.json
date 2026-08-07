@@ -76,5 +76,9 @@
       "repo": "git-report-tool",
       "releaseType": "release"
     }
+  },
+  "dependencies": {
+    "dompurify": "^3.4.13",
+    "marked": "^18.0.9"
   }
 }

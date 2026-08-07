@@ -13,6 +13,12 @@ export const state = reactive({
     roots: [],
     excludes: [],
     identities: [],
+    ai: {
+      baseUrl: 'https://api.openai.com/v1',
+      apiKey: '',
+      model: '',
+      temperature: 0.7,
+    },
   },
   /** 报告生成过程（跨视图保留，切换 tab 不中断） */
   report: {
@@ -21,5 +27,10 @@ export const state = reactive({
     collectProgress: { done: 0, total: 0 },
     rawCommits: [],
     openProjects: [],
+  },
+  /** AI 聊天状态（跨视图保留，切换 tab 不丢失对话） */
+  chat: {
+    messages: [], // [{ role: 'user'|'assistant', content }]
+    streaming: false,
   },
 })

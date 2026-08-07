@@ -81,6 +81,64 @@
       </div>
     </el-card>
 
+    <!-- AI 模型 -->
+    <el-card shadow="never" class="card">
+      <template #header>
+        <div class="card-header"><span>AI 模型</span></div>
+      </template>
+      <div class="ai-manager">
+        <div class="ai-form">
+          <div class="ai-row">
+            <span class="ai-label">服务商</span>
+            <el-select v-model="provider" style="width: 240px" @change="applyPreset">
+              <el-option v-for="(p, key) in AI_PRESETS" :key="key" :value="key" :label="p.label" />
+            </el-select>
+            <span class="ai-hint">选择预设自动填充接口地址与模型，可再手动修改</span>
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">接口地址</span>
+            <el-input v-model="state.config.ai.baseUrl" placeholder="https://api.openai.com/v1" style="width: 400px" />
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">API Key</span>
+            <el-input
+              v-model="apiKeyInput"
+              type="password"
+              show-password
+              :placeholder="state.config.ai.keyConfigured ? `${state.config.ai.keyMasked}（留空保持不变，输入新 Key 替换）` : 'sk-...（未配置）'"
+              style="width: 440px"
+            />
+            <el-button v-if="state.config.ai.keyConfigured" size="small" text type="danger" @click="clearKey">
+              <el-icon><Delete /></el-icon>清除密钥
+            </el-button>
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">模型名称</span>
+            <el-input v-model="state.config.ai.model" placeholder="gpt-4o-mini / deepseek-chat" style="width: 240px" />
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">温度</span>
+            <el-slider v-model="state.config.ai.temperature" :min="0" :max="1" :step="0.1" style="width: 240px" />
+            <span class="ai-hint">{{ state.config.ai.temperature }}（越高越有创造性）</span>
+          </div>
+        </div>
+        <div class="ai-actions">
+          <el-button type="primary" plain @click="saveConfig">
+            <el-icon style="margin-right: 4px"><Check /></el-icon>保存配置
+          </el-button>
+          <el-button :loading="testing" :disabled="!canTest" @click="testAi">
+            <el-icon style="margin-right: 4px"><Connection /></el-icon>测试连接
+          </el-button>
+          <span v-if="testResult" :class="['ai-result', testResult.ok ? 'ok' : 'err']">
+            {{ testResult.ok ? `连接成功：${testResult.reply}` : `连接失败：${testResult.error}` }}
+          </span>
+        </div>
+        <div class="ai-hint ai-note">
+          API Key 使用系统安全存储加密后保存在本地，仅本机用于调用模型接口；支持 OpenAI / DeepSeek / Kimi / 通义千问 / Ollama 等兼容接口。配置后到「报告 → AI 助手」即可通过聊天生成报告。
+        </div>
+      </div>
+    </el-card>
+
     <!-- 已发现仓库 -->
     <el-card shadow="never" class="card settings-repo-card">
       <template #header>
@@ -124,8 +182,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, onBeforeUnmount } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../store'
 import { toPlain } from '../utils/ipc'
 import { shortPath } from '../utils/path'
@@ -142,6 +200,85 @@ const scanning = ref(false)
 const progressText = ref('')
 const newIdName = ref('')
 const newIdEmail = ref('')
+
+// ---------- AI 模型配置 ----------
+const AI_PRESETS = {
+  openai: { label: 'OpenAI', baseUrl: 'https://api.openai.com/v1', model: 'gpt-4o-mini' },
+  deepseek: { label: 'DeepSeek', baseUrl: 'https://api.deepseek.com/v1', model: 'deepseek-chat' },
+  kimi: { label: 'Kimi（Moonshot）', baseUrl: 'https://api.moonshot.cn/v1', model: 'moonshot-v1-8k' },
+  qwen: { label: '通义千问', baseUrl: 'https://dashscope.aliyuncs.com/compatible-mode/v1', model: 'qwen-plus' },
+  ollama: { label: 'Ollama（本地）', baseUrl: 'http://localhost:11434/v1', model: 'qwen2.5' },
+  custom: { label: '自定义', baseUrl: '', model: '' },
+}
+const provider = ref('custom')
+const testing = ref(false)
+const testResult = ref(null)
+/** API Key 输入框（不直接绑定 state.config.ai.apiKey —— 明文 Key 只存主进程） */
+const apiKeyInput = ref('')
+
+function maskKey(key) {
+  if (!key) return ''
+  if (key.length <= 8) return '••••••'
+  return `••••••${key.slice(-4)}`
+}
+
+function applyPreset(key) {
+  const p = AI_PRESETS[key]
+  if (p && key !== 'custom') {
+    state.config.ai.baseUrl = p.baseUrl
+    state.config.ai.model = p.model
+  }
+}
+
+/** 保存全部配置；AI 密钥：输入了新 Key 则替换，留空则主进程保留既有 */
+function saveConfig() {
+  if (apiKeyInput.value) {
+    state.config.ai.apiKey = apiKeyInput.value
+    state.config.ai.keyConfigured = true
+    state.config.ai.keyMasked = maskKey(apiKeyInput.value)
+    apiKeyInput.value = ''
+  } else {
+    delete state.config.ai.apiKey
+  }
+  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
+}
+
+async function clearKey() {
+  try {
+    await ElMessageBox.confirm('确定清除已保存的 API Key 吗？', '清除密钥', { type: 'warning' })
+  } catch {
+    return
+  }
+  state.config.ai.clearKey = true
+  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
+  delete state.config.ai.clearKey
+  state.config.ai.keyConfigured = false
+  state.config.ai.keyMasked = ''
+  apiKeyInput.value = ''
+  testResult.value = null
+}
+
+const canTest = computed(() => !!(state.config.ai.model && (state.config.ai.keyConfigured || apiKeyInput.value)))
+
+async function testAi() {
+  testing.value = true
+  testResult.value = null
+  try {
+    const r = await window.gitReport.aiTest(toPlain({
+      baseUrl: state.config.ai.baseUrl,
+      apiKey: apiKeyInput.value || '', // 空则主进程使用已存 Key
+      model: state.config.ai.model,
+    }))
+    testResult.value = r
+    if (r?.ok) ElMessage.success('连接成功')
+    else ElMessage.error(`连接失败：${r?.error || '未知错误'}`)
+  } catch (e) {
+    testResult.value = { ok: false, error: (e && e.message) || String(e) }
+    ElMessage.error(`连接失败：${testResult.value.error}`)
+  } finally {
+    testing.value = false
+  }
+}
 
 // 流式扫描事件
 let unsubProgress = null
@@ -200,10 +337,6 @@ function ensureInfoWorkers() {
     })()
     infoWorkers.push(worker)
   }
-}
-
-function saveConfig() {
-  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
 }
 
 async function browseRoot() {

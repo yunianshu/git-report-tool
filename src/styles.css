@@ -351,6 +351,37 @@ body {
 }
 .identity-manager .el-input { max-width: 230px; }
 
+/* ---------- AI 模型配置 ---------- */
+.ai-manager { width: 100%; }
+.ai-form { display: flex; flex-direction: column; gap: 12px; }
+.ai-row { display: flex; align-items: center; gap: 14px; flex-wrap: wrap; }
+.ai-label {
+  width: 72px;
+  flex-shrink: 0;
+  font-size: 13px;
+  color: #4a5160;
+  text-align: right;
+}
+.ai-hint { font-size: 12px; color: var(--brand-text-sub); }
+.ai-actions {
+  margin-top: 14px;
+  padding-top: 14px;
+  border-top: 1px solid #f2f4f7;
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  flex-wrap: wrap;
+}
+.ai-result {
+  font-size: 12.5px;
+  font-family: var(--brand-mono);
+  max-width: 560px;
+  word-break: break-all;
+}
+.ai-result.ok { color: var(--brand-accent); }
+.ai-result.err { color: #d54949; }
+.ai-note { margin-top: 12px; line-height: 1.7; }
+
 /* ---------- 统计数字：等宽字体 + 更大（数据感） ---------- */
 .el-statistic__number {
   font-family: var(--brand-mono);
