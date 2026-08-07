@@ -43,7 +43,7 @@
       "electron/**/*"
     ],
     "directories": {
-      "output": "release"
+      "output": "release/${version}"
     },
     "win": {
       "target": [
