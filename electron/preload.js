@@ -53,6 +53,7 @@ contextBridge.exposeInMainWorld('gitReport', {
     ipcRenderer.invoke('ai:chat', { messages: toPlain(messages), opts: toPlain(opts) }),
   aiStop: () => ipcRenderer.invoke('ai:stop'),
   aiTest: (opts) => ipcRenderer.invoke('ai:test', toPlain(opts)),
+  aiModels: (opts) => ipcRenderer.invoke('ai:models', toPlain(opts)),
   onAiDelta: (cb) => subscribe('ai:chatDelta', cb),
   // 系统
   openPath: (p) => ipcRenderer.invoke('shell:openPath', p),

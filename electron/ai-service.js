@@ -122,4 +122,32 @@ async function test({ baseUrl, apiKey, model }) {
   return { ok: true, reply: (text || '').trim() || '(空回复)' }
 }
 
-module.exports = { chat, test, DEFAULT_BASE_URL, DEFAULT_MAX_TOKENS }
+/** 获取可用模型列表（OpenAI 兼容 /models） */
+async function listModels({ baseUrl, apiKey }) {
+  if (!apiKey) throw new Error('未配置 API Key，请先填写后再获取模型列表')
+  const url = `${assertSafeBaseUrl(baseUrl)}/models`
+  const resp = await net.fetch(url, {
+    method: 'GET',
+    headers: { Authorization: `Bearer ${apiKey}` },
+  })
+  if (!resp.ok) {
+    let detail = ''
+    try {
+      detail = (await resp.text()).slice(0, 300)
+    } catch { /* noop */ }
+    const err = new Error(`获取模型列表失败（HTTP ${resp.status}）${detail ? `：${detail}` : ''}`)
+    err.status = resp.status
+    throw err
+  }
+  let json
+  try {
+    json = await resp.json()
+  } catch {
+    throw new Error('获取模型列表失败：响应不是有效 JSON')
+  }
+  const models = (json.data || []).map((m) => m && m.id).filter(Boolean)
+  if (!models.length) throw new Error('该接口未返回可用模型（data 为空）')
+  return models
+}
+
+module.exports = { chat, test, listModels, DEFAULT_BASE_URL, DEFAULT_MAX_TOKENS }

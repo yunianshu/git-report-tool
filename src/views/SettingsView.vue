@@ -114,7 +114,21 @@
           </div>
           <div class="ai-row">
             <span class="ai-label">模型名称</span>
-            <el-input v-model="state.config.ai.model" placeholder="gpt-4o-mini / deepseek-chat" style="width: 240px" />
+            <el-select
+              v-model="state.config.ai.model"
+              filterable
+              allow-create
+              default-first-option
+              :loading="loadingModels"
+              placeholder="选择或输入模型名"
+              style="width: 260px"
+            >
+              <el-option v-for="m in modelOptions" :key="m" :label="m" :value="m" />
+            </el-select>
+            <el-button size="small" :loading="loadingModels" :disabled="!canFetchModels" @click="fetchModels()">
+              <el-icon style="margin-right: 3px"><Refresh /></el-icon>获取模型
+            </el-button>
+            <span v-if="modelOptions.length" class="ai-hint">共 {{ modelOptions.length }} 个模型</span>
           </div>
           <div class="ai-row">
             <span class="ai-label">温度</span>
@@ -215,6 +229,9 @@ const testing = ref(false)
 const testResult = ref(null)
 /** API Key 输入框（不直接绑定 state.config.ai.apiKey —— 明文 Key 只存主进程） */
 const apiKeyInput = ref('')
+/** 可用模型列表（从接口 /models 拉取） */
+const modelOptions = ref([])
+const loadingModels = ref(false)
 
 function maskKey(key) {
   if (!key) return ''
@@ -228,7 +245,37 @@ function applyPreset(key) {
     state.config.ai.baseUrl = p.baseUrl
     state.config.ai.model = p.model
   }
+  // 切换预设后拉取该接口的可用模型列表（填充下拉）
+  fetchModels(false)
 }
+
+/** 拉取可用模型列表；showSuccess=false 时静默（启动自动加载场景） */
+async function fetchModels(showSuccess = true) {
+  if (!state.config.ai.baseUrl || loadingModels.value) return
+  loadingModels.value = true
+  try {
+    const r = await window.gitReport.aiModels(toPlain({
+      baseUrl: state.config.ai.baseUrl,
+      apiKey: apiKeyInput.value || '',
+    }))
+    if (r?.ok && r.models?.length) {
+      modelOptions.value = r.models
+      // 当前模型不在列表中时自动选中第一个可用模型
+      if (!r.models.includes(state.config.ai.model)) {
+        state.config.ai.model = r.models[0]
+      }
+      if (showSuccess) ElMessage.success(`获取到 ${r.models.length} 个模型`)
+    } else if (showSuccess) {
+      ElMessage.error(`获取模型失败：${r?.error || '列表为空'}`)
+    }
+  } catch (e) {
+    if (showSuccess) ElMessage.error(`获取模型失败：${(e && e.message) || e}`)
+  } finally {
+    loadingModels.value = false
+  }
+}
+
+const canFetchModels = computed(() => !!(state.config.ai.baseUrl && (state.config.ai.keyConfigured || apiKeyInput.value)))
 
 /** 保存全部配置；AI 密钥：输入了新 Key 则替换，留空则主进程保留既有 */
 function saveConfig() {
@@ -311,6 +358,10 @@ onMounted(() => {
     scanning.value = false
     progressText.value = ''
   })
+  // 已配置 AI 接口时静默拉取模型列表，填充下拉
+  if (state.config.ai?.keyConfigured && state.config.ai?.baseUrl) {
+    fetchModels(false)
+  }
 })
 onBeforeUnmount(() => {
   if (unsubProgress) unsubProgress()

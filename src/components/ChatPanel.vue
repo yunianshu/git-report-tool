@@ -370,6 +370,8 @@ async function saveToFile(content) {
 .chat-empty p { margin-top: 10px; font-size: 13px; line-height: 1.7; }
 
 .msg { display: flex; gap: 10px; }
+/* 用户消息：头像在右，气泡贴右（微信式）；AI 消息头像在左 */
+.msg.user { flex-direction: row-reverse; }
 .msg-avatar {
   width: 30px;
   height: 30px;

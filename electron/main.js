@@ -132,6 +132,18 @@ function registerIpc() {
       return { ok: false, error: (err && err.message) || String(err) }
     }
   })
+  ipcMain.handle('ai:models', async (_e, opts) => {
+    const o = opts || {}
+    try {
+      const models = await aiService.listModels({
+        baseUrl: o.baseUrl,
+        apiKey: o.apiKey || store.getApiKey(),
+      })
+      return { ok: true, models }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
 
   // 剪贴板
   ipcMain.handle('clipboard:write', (_e, text) => {
