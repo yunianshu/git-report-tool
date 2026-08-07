@@ -7,6 +7,7 @@
           <el-radio-group v-model="period">
             <el-radio-button value="daily">日报</el-radio-button>
             <el-radio-button value="weekly">周报</el-radio-button>
+            <el-radio-button value="biweekly">双周报</el-radio-button>
             <el-radio-button value="monthly">月报</el-radio-button>
             <el-radio-button value="custom">自定义</el-radio-button>
           </el-radio-group>
@@ -248,6 +249,7 @@ function range() {
   const T = todayStr()
   if (period.value === 'daily') return { since: dailyDate.value, until: addDays(dailyDate.value, 1) }
   if (period.value === 'weekly') return { since: addDays(T, -6), until: addDays(T, 1) }
+  if (period.value === 'biweekly') return { since: addDays(T, -13), until: addDays(T, 1) }
   if (period.value === 'monthly') return { since: addDays(T, -29), until: addDays(T, 1) }
   return {
     since: customSince.value,
@@ -434,6 +436,7 @@ function getTitle() {
   const map = {
     daily: `项目日报 — ${dailyDate.value}`,
     weekly: `项目周报 — ${rangeLabel.value}`,
+    biweekly: `项目双周报 — ${rangeLabel.value}`,
     monthly: `项目月报 — ${rangeLabel.value}`,
     custom: `项目报告 — ${rangeLabel.value}`,
   }
