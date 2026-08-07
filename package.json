@@ -52,6 +52,7 @@
       ],
       "signAndEditExecutable": false
     },
+    "afterPack": "scripts/after-pack-icon.js",
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
