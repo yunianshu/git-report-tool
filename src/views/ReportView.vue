@@ -495,12 +495,9 @@ async function copyText(text) {
   }
 }
 
-/** 复制单个项目的提交内容（去掉日期与 feat:/fix: 等类型前缀） */
+/** 复制单个项目的提交内容（去掉日期、项目名称与 feat:/fix: 等类型前缀） */
 function copyProject(g) {
-  const lines = [`${g.project}（${g.commits.length} 条提交）`]
-  g.commits.forEach((c, i) => {
-    lines.push(`${i + 1}. ${stripPrefix(c.subject)}`)
-  })
+  const lines = g.commits.map((c, i) => `${i + 1}. ${stripPrefix(c.subject)}`)
   copyText(lines.join('\n'))
 }
 
