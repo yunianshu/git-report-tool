@@ -132,10 +132,11 @@ async function getRepoInfo(repo) {
 }
 
 /**
- * 收集提交。与已验证的 bash 逻辑一致：
- * - git log --all --since=... [--until=...] --no-merges
- * - 使用 --pretty=tformat（每条提交后强制换行，避免相邻仓库首尾行粘连）
- * - 指定作者时按作者逐个收集
+ * 收集提交（并发池加速）。输出与串行版本一致：
+ * - 结果严格按传入仓库顺序排列
+ * - 进度 { done, total, current } 中 done 为已完成仓库数
+ * - 指定作者时使用 git 原生多 --author（OR 语义）单次查询，
+ *   避免逐作者重复遍历历史（N 位作者从 N 次全量遍历降为 1 次）
  */
 async function collectCommits(repos, opts, onProgress) {
   const { since, until, authors, includeMerges } = opts || {}
@@ -148,36 +149,55 @@ async function collectCommits(repos, opts, onProgress) {
   if (!includeMerges) base.push('--no-merges')
   base.push(`--pretty=tformat:${fmt}`, '--date=short')
 
-  const out = []
-  const targets = authors && authors.length ? authors : [null]
-
-  for (let i = 0; i < repos.length; i += 1) {
-    const repo = repos[i]
-    if (onProgress) {
-      try { onProgress({ done: i + 1, total: repos.length, current: repo }) } catch { /* noop */ }
+  /** 单仓库查询并解析提交列表（失败返回空，不影响其它仓库） */
+  const queryRepo = async (repo) => {
+    const args = [...base]
+    for (const a of authors || []) args.push(`--author=${a}`)
+    const res = await execGit(repo, args)
+    if (!res.ok) return []
+    const list = []
+    for (const line of res.stdout.split('\n')) {
+      if (!line.trim()) continue
+      const parts = line.split('\t')
+      if (parts.length < 5) continue
+      const [hash, date, authorName, authorEmail, ...rest] = parts
+      if (!hash || !date) continue
+      list.push({
+        repo,
+        hash: hash.slice(0, 10),
+        date,
+        authorName,
+        authorEmail,
+        subject: rest.join('\t'),
+      })
     }
-    for (const a of targets) {
-      const args = [...base]
-      if (a) args.push(`--author=${a}`)
+    return list
+  }
+
+  const total = repos.length
+  const results = new Array(total)
+  let next = 0
+  let done = 0
+  // 并发数取 8：git 子进程为短时 CPU/IO 任务，8 路已能打满磁盘与调度余量
+  const CONCURRENCY = Math.min(8, Math.max(1, total))
+  const workers = Array.from({ length: CONCURRENCY }, async () => {
+    for (;;) {
+      const i = next
+      next += 1
+      if (i >= total) return
       // eslint-disable-next-line no-await-in-loop
-      const res = await execGit(repo, args)
-      if (!res.ok) continue
-      for (const line of res.stdout.split('\n')) {
-        if (!line.trim()) continue
-        const parts = line.split('\t')
-        if (parts.length < 5) continue
-        const [hash, date, authorName, authorEmail, ...rest] = parts
-        if (!hash || !date) continue
-        out.push({
-          repo,
-          hash: hash.slice(0, 10),
-          date,
-          authorName,
-          authorEmail,
-          subject: rest.join('\t'),
-        })
+      results[i] = await queryRepo(repos[i])
+      done += 1
+      if (onProgress) {
+        try { onProgress({ done, total, current: repos[i] }) } catch { /* noop */ }
       }
     }
+  })
+  await Promise.all(workers)
+
+  const out = []
+  for (const list of results) {
+    if (list && list.length) out.push(...list)
   }
   return out
 }
