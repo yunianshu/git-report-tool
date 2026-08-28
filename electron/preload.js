@@ -30,9 +30,10 @@ contextBridge.exposeInMainWorld('gitReport', {
   configSave: (cfg) => ipcRenderer.invoke('config:save', toPlain(cfg)),
   // 目录
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
-  // git（参数经 toPlain 去除响应式代理）
-  scanRepos: (roots, excludes) =>
-    ipcRenderer.invoke('git:scanRepos', { roots: toPlain(roots), excludes: toPlain(excludes) }),
+  // git（参数经 toPlain 去除响应式代理）；force=true 强制重新扫盘（手动「重新扫描」用）
+  scanRepos: (roots, excludes, force) =>
+    ipcRenderer.invoke('git:scanRepos', { roots: toPlain(roots), excludes: toPlain(excludes), force: !!force }),
+  warmup: () => ipcRenderer.invoke('git:warmup'),
   repoInfo: (repo) => ipcRenderer.invoke('git:repoInfo', repo),
   collectCommits: (repos, opts) =>
     ipcRenderer.invoke('git:collectCommits', { repos: toPlain(repos), opts: toPlain(opts) }),

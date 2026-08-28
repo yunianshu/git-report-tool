@@ -32,6 +32,7 @@ import ReportView from './views/ReportView.vue'
 import SettingsView from './views/SettingsView.vue'
 import { state } from './store'
 import { toPlain } from './utils/ipc'
+import { shortPath } from './utils/path'
 
 const view = ref('chat')
 
@@ -56,6 +57,12 @@ onMounted(async () => {
     // 生成过程进度监听（App 常驻，切换视图不中断进度显示）
     window.gitReport.onScanProgress((p) => { state.report.scanProgress = p })
     window.gitReport.onCollectProgress((p) => { state.report.collectProgress = p })
+    // 接收启动预热结果：仓库列表直接就绪，点「生成报告」时无需再等扫描
+    window.gitReport.warmup().then((repos) => {
+      if (Array.isArray(repos) && repos.length && !state.discoveredRepos.length) {
+        state.discoveredRepos = repos.map((p) => ({ path: p, shortName: shortPath(p), info: null }))
+      }
+    }).catch(() => { /* 预热失败静默，生成报告时走正常路径 */ })
   } catch (e) {
     console.error('加载配置失败', e)
   }

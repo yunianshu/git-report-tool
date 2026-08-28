@@ -2,6 +2,7 @@
  * Git 服务 —— 仓库扫描 / 提交收集 / 仓库信息（跨平台，纯 Node 实现，不依赖系统 find）
  */
 const { execFile } = require('child_process')
+const os = require('os')
 const fs = require('fs')
 const path = require('path')
 
@@ -59,7 +60,7 @@ async function scanRepos(roots, excludes, onProgress, onRepo) {
   const visited = new Set()
   const repos = []
   let scanned = 0
-  let progressCount = 0
+  let lastProgressAt = 0
 
   const stack = []
   for (const root of roots || []) {
@@ -89,14 +90,27 @@ async function scanRepos(roots, excludes, onProgress, onRepo) {
     }
 
     scanned += 1
+    // 进度按时间节流（≥50ms 一次）：扫描快时大幅减少 IPC/回调次数，UI 观感不变
     if (onProgress) {
-      progressCount += 1
-      if (progressCount % 40 === 0) {
+      const now = Date.now()
+      if (now - lastProgressAt >= 50) {
+        lastProgressAt = now
         try { onProgress({ scanned, current: dir }) } catch { /* noop */ }
       }
     }
 
-    const isRepo = entries.some((e) => e.name === '.git')
+    // 单次遍历同时完成 .git 检测与子目录收集（原先 some + for 两遍遍历）
+    let isRepo = false
+    const childNames = []
+    for (const entry of entries) {
+      if (entry.name === '.git') {
+        isRepo = true
+        continue
+      }
+      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
+      if (contains.some((p) => p && entry.name.includes(p))) continue
+      childNames.push(entry.name)
+    }
     if (isRepo) {
       repos.push(dir)
       if (onRepo) {
@@ -104,17 +118,53 @@ async function scanRepos(roots, excludes, onProgress, onRepo) {
       }
     }
     const childBase = isRepo ? depth : repoBase
-    for (const entry of entries) {
-      if (entry.name === '.git') continue
-      if (!entry.isDirectory() || entry.isSymbolicLink()) continue
-      if (contains.some((p) => p && entry.name.includes(p))) continue
+    for (const name of childNames) {
       // 仓库内部跳过重型目录，减少无效遍历
-      if (isRepo && REPO_HEAVY_DIRS.some((p) => entry.name.includes(p))) continue
-      stack.push({ dir: path.join(dir, entry.name), depth: depth + 1, repoBase: childBase })
+      if (isRepo && REPO_HEAVY_DIRS.some((p) => name.includes(p))) continue
+      stack.push({ dir: path.join(dir, name), depth: depth + 1, repoBase: childBase })
     }
   }
 
   return repos
+}
+
+/**
+ * 扫描结果缓存 + 进行中去重 —— 预热/生成/设置页共用同一次扫盘：
+ * - 相同 roots+excludes 的并发调用共享同一 Promise（不重复扫盘）
+ * - 已完成的结果进程内缓存，重复调用瞬时返回（force=true 绕过，用于手动重新扫描）
+ * - 进度/发现事件由调用方广播（main 层统一 send 到渲染端），多调用方共享进度流
+ */
+const scanCache = new Map()
+const scanInflight = new Map()
+
+function scanKey(roots, excludes) {
+  return `${(roots || []).join('\u0000')}\u0001${(excludes || []).slice().sort().join('\u0000')}`
+}
+
+async function scanReposCached(roots, excludes, opts = {}) {
+  const { force = false, onProgress, onRepo } = opts
+  const key = scanKey(roots, excludes)
+  if (!force) {
+    const cached = scanCache.get(key)
+    if (cached) return cached
+    const inflight = scanInflight.get(key)
+    if (inflight) return inflight
+  }
+  const task = scanRepos(roots, excludes, onProgress, onRepo).then((repos) => {
+    scanCache.set(key, repos)
+    scanInflight.delete(key)
+    return repos
+  }, (err) => {
+    scanInflight.delete(key)
+    throw err
+  })
+  scanInflight.set(key, task)
+  return task
+}
+
+/** 扫描根目录/排除规则变化后使缓存失效（下次扫描/预热重新扫盘） */
+function invalidateScanCache() {
+  scanCache.clear()
 }
 
 /** 获取仓库展示信息：远程地址、当前分支、最近一次提交 */
@@ -144,6 +194,14 @@ const BARE_DATE_RE = /^\d{4}-\d{2}-\d{2}$/
 /** 本地时区当天（YYYY-MM-DD） */
 function todayLocal() {
   const d = new Date()
+  const p = (n) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
+}
+
+/** 本地时区明天（YYYY-MM-DD）：预热「日报=今天」范围的排他上界 */
+function tomorrowLocal() {
+  const d = new Date()
+  d.setDate(d.getDate() + 1)
   const p = (n) => String(n).padStart(2, '0')
   return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}`
 }
@@ -209,11 +267,13 @@ async function queryRepo(repo, args) {
   return res.ok ? parseCommitLines(repo, res.stdout) : []
 }
 
+/** 收集并发度：按 CPU 核数自适应（git 子进程为短时 IO/CPU 混合，适度超订更快），上限 16 */
+const COLLECT_CONCURRENCY = Math.max(8, Math.min((os.cpus() || []).length * 2, 16))
+
 /** 固定并发池：按序消费任务队列，返回与任务等长的结果数组 */
-async function runPool(tasks, job, concurrency = 8) {
+async function runPool(tasks, job, concurrency = COLLECT_CONCURRENCY) {
   const results = new Array(tasks.length)
   let next = 0
-  // 并发数取 8：git 子进程为短时 CPU/IO 任务，8 路已能打满磁盘与调度余量
   const workers = Math.max(1, Math.min(concurrency, tasks.length))
   await Promise.all(Array.from({ length: workers }, async () => {
     for (;;) {
@@ -268,16 +328,14 @@ async function collectCommits(repos, opts, onProgress) {
   const reposSig = repoList.join('\u0000')
   const key = [reposSig, o.since, o.until, o.includeMerges ? 1 : 0, o.authorsSig].join('\u0001')
 
-  // 1) 精确命中：直接复用（LRU 触碰保活跃度）
+  // 1) 精确命中：直接复用（LRU 触碰保活跃度）；过期条目保留在缓存中，
+  //    供步骤 3 作为增量 base 复用其历史段（只重查可能变化的今天段）
   const hit = collectCache.get(key)
-  if (hit) {
-    if (cacheUsable(hit)) {
-      collectCache.delete(key)
-      collectCache.set(key, hit)
-      if (onProgress) tryCall(onProgress, { done: repoList.length, total: repoList.length, current: '' })
-      return hit.commits
-    }
-    collectCache.delete(key) // 过期条目移除，整体重查
+  if (hit && cacheUsable(hit)) {
+    collectCache.delete(key)
+    collectCache.set(key, hit)
+    if (onProgress) tryCall(onProgress, { done: repoList.length, total: repoList.length, current: '' })
+    return hit.commits
   }
 
   // 2) 并发去重：相同参数的进行中收集直接共享结果
@@ -287,14 +345,28 @@ async function collectCommits(repos, opts, onProgress) {
     // 3) 增量：寻找被当前范围完全覆盖的最小缓存基
     let base = null
     if (BARE_DATE_RE.test(o.since) && BARE_DATE_RE.test(o.until)) {
+      const today = todayLocal()
       for (const [k, v] of collectCache) {
         if (v.reposSig !== reposSig) continue
         if (v.includeMerges !== o.includeMerges || v.authorsSig !== o.authorsSig) continue
-        if (!cacheUsable(v) || !BARE_DATE_RE.test(v.since) || !BARE_DATE_RE.test(v.until)) continue
-        if (o.since <= v.since && o.until >= v.until) {
-          const span = Date.parse(v.until) - Date.parse(v.since)
+        if (!BARE_DATE_RE.test(v.since) || !BARE_DATE_RE.test(v.until)) continue
+        // 历史日期视为不可变：纯历史条目永久可信；触及今天/未来的过期条目
+        // 截断到「今天 00:00（排他）」后仍可作 base —— 历史段复用，仅补查今天段
+        let vUntil = v.until
+        if (!cacheUsable(v)) {
+          if (v.until <= today) continue
+          vUntil = today
+        }
+        if (o.since <= v.since && o.until >= vUntil) {
+          const span = Date.parse(vUntil) - Date.parse(v.since)
           const baseSpan = base ? Date.parse(base.until) - Date.parse(base.since) : Infinity
-          if (span < baseSpan) base = { ...v, cacheKey: k }
+          if (span < baseSpan) {
+            base = {
+              since: v.since,
+              until: vUntil,
+              commits: vUntil < v.until ? v.commits.filter((c) => c.date < vUntil) : v.commits,
+            }
+          }
         }
       }
     }
@@ -376,4 +448,4 @@ async function getIdentity() {
   }
 }
 
-module.exports = { scanRepos, getRepoInfo, collectCommits, getIdentity, execGit }
+module.exports = { scanRepos, scanReposCached, invalidateScanCache, getRepoInfo, collectCommits, getIdentity, todayLocal, tomorrowLocal, execGit }

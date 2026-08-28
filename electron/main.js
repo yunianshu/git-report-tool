@@ -11,6 +11,12 @@ const aiService = require('./ai-service')
 
 let mainWindow
 
+/** 向主窗口广播事件（预热等主进程主动任务无 sender，统一走此通道） */
+function broadcast(channel, payload) {
+  const wc = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null
+  if (wc) { try { wc.send(channel, payload) } catch { /* noop */ } }
+}
+
 function createWindow() {
   mainWindow = new BrowserWindow({
     width: 1320,
@@ -36,10 +42,49 @@ function createWindow() {
   }
 }
 
+/**
+ * 启动预热 —— 把「扫描 + 收集默认范围（今天）」提前到后台执行：
+ * 用户点「生成报告」时，仓库列表与今日提交缓存均已就绪，报告近乎即时生成。
+ * 幂等：预热进行中/已完成的重复触发直接复用（scanReposCached/collectCommits 内部去重）。
+ */
+let warmupTask = null
+async function warmupPipeline() {
+  const task = (async () => {
+    const cfg = store.load()
+    if (!cfg.roots || !cfg.roots.length) return []
+    const repos = await gitService.scanReposCached(cfg.roots, cfg.excludes, {
+      onProgress: (p) => broadcast('git:scanProgress', p),
+      onRepo: (r) => broadcast('git:scanRepoFound', r),
+    })
+    if (!repos.length) return repos
+    // 预收集「日报=今天」范围（与报告页默认参数一致，可精确命中缓存）
+    await gitService.collectCommits(repos, {
+      since: gitService.todayLocal(),
+      until: gitService.tomorrowLocal(),
+      authors: [],
+      includeMerges: false,
+    }, (p) => broadcast('git:collectProgress', p))
+    return repos
+  })()
+  warmupTask = task.catch(() => { warmupTask = null }) // 失败允许下次触发重试
+  return warmupTask
+}
+
 function registerIpc() {
   // 配置
   ipcMain.handle('config:load', () => store.load())
-  ipcMain.handle('config:save', (_e, cfg) => store.save(cfg))
+  ipcMain.handle('config:save', (_e, cfg) => {
+    // 根目录/排除规则变化 → 失效扫描缓存并重新预热（新配置的仓库列表与提交即时就绪）
+    const before = store.load()
+    const r = store.save(cfg)
+    const after = store.load()
+    const sig = (c) => JSON.stringify([c.roots || [], (c.excludes || []).slice().sort()])
+    if (sig(before) !== sig(after)) {
+      gitService.invalidateScanCache()
+      warmupPipeline()
+    }
+    return r
+  })
 
   // 目录选择
   ipcMain.handle('dialog:pickDirectory', async () => {
@@ -48,14 +93,16 @@ function registerIpc() {
   })
 
   // git 服务
-  ipcMain.handle('git:scanRepos', async (e, { roots, excludes }) => {
-    const wc = e.sender
-    const onProgress = (p) => { try { wc.send('git:scanProgress', p) } catch { /* noop */ } }
-    // 每发现一个仓库立即推送，实现流式增量展示
-    const onRepo = (r) => { try { wc.send('git:scanRepoFound', r) } catch { /* noop */ } }
-    const result = await gitService.scanRepos(roots, excludes, onProgress, onRepo)
-    try { wc.send('git:scanDone', { total: result.length }) } catch { /* noop */ }
-    return result
+  // 扫描统一走 scanReposCached：同参数并发共享一次扫盘，预热完成后瞬时返回；
+  // 进度/发现事件经 broadcast 推送，无论预热还是用户触发，渲染端都能收到进度流
+  ipcMain.handle('git:scanRepos', (_e, { roots, excludes, force }) => {
+    const onProgress = (p) => broadcast('git:scanProgress', p)
+    const onRepo = (r) => broadcast('git:scanRepoFound', r)
+    return gitService.scanReposCached(roots, excludes, { force: !!force, onProgress, onRepo })
+      .then((result) => {
+        broadcast('git:scanDone', { total: result.length })
+        return result
+      })
   })
   ipcMain.handle('git:repoInfo', (_e, repo) => gitService.getRepoInfo(repo))
   ipcMain.handle('git:collectCommits', async (e, payload) => {
@@ -63,6 +110,12 @@ function registerIpc() {
     return gitService.collectCommits(payload.repos, payload.opts, onProgress)
   })
   ipcMain.handle('git:identity', () => gitService.getIdentity())
+
+  // 启动预热：渲染端在配置就绪后调用（幂等，主进程启动时也会自动触发），返回预热到的仓库列表
+  ipcMain.handle('git:warmup', () => {
+    if (!warmupTask) warmupPipeline()
+    return warmupTask
+  })
 
   // 报告导出
   ipcMain.handle('report:save', async (_e, { defaultName, content }) => {
@@ -163,6 +216,8 @@ app.whenReady().then(() => {
   Menu.setApplicationMenu(null)
   registerIpc()
   createWindow()
+  // 启动即后台预热（扫描 + 预收集今天），用户点生成时近乎秒出
+  warmupPipeline()
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

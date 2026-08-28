@@ -440,7 +440,8 @@ async function doScan() {
   progressText.value = '开始扫描…'
   ensureInfoWorkers()
   try {
-    await window.gitReport.scanRepos(toPlain(state.config.roots), toPlain(state.config.excludes))
+    // force=true：绕过主进程扫描缓存强制重扫（事件流式展示 + 更新缓存）
+    await window.gitReport.scanRepos(toPlain(state.config.roots), toPlain(state.config.excludes), true)
   } catch (e) {
     console.error('扫描失败', e)
     scanning.value = false
