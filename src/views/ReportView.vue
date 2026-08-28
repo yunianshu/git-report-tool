@@ -356,12 +356,22 @@ const projectBarOption = computed(() => {
   const top = filteredGroups.value.slice(0, 12).reverse()
   return {
     tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
-    grid: { left: 30, right: 34, top: 10, bottom: 30 },
-    xAxis: { type: 'value', minInterval: 1 },
+    // containLabel：grid 自动为 y 轴项目名让出空间，长名不再被裁剪
+    grid: { left: 16, right: 40, top: 10, bottom: 10, containLabel: true },
+    xAxis: {
+      type: 'value',
+      minInterval: 1,
+      // 留 25% 余量：柱子不顶满格，数值 label 不贴边（日报单项目时尤其明显）
+      max: ({ max }) => Math.max(Math.ceil((max || 5) * 1.25), 5),
+    },
     yAxis: {
       type: 'category',
       data: top.map((g) => g.project),
-      axisLabel: { color: '#5d6472', fontSize: 11 },
+      axisLabel: {
+        color: '#5d6472',
+        fontSize: 11,
+        formatter: (v) => (v.length > 22 ? `${v.slice(0, 21)}…` : v),
+      },
       axisLine: { show: false },
       axisTick: { show: false },
     },
@@ -395,13 +405,59 @@ const trendOption = computed(() => {
   const m = new Map()
   filteredCommits.value.forEach((c) => m.set(c.date, (m.get(c.date) || 0) + 1))
   const sorted = [...m.entries()].sort((a, b) => (a[0] < b[0] ? -1 : 1))
+  const dates = sorted.map((e) => e[0].slice(5))
+  const counts = sorted.map((e) => e[1])
+  // 单日/两天数据下折线退化为孤点（无线段、面积不可见、点被边缘裁剪）→ 改用柱状呈现
+  if (sorted.length < 3) {
+    return {
+      tooltip: { trigger: 'axis', axisPointer: { type: 'shadow' } },
+      grid: { left: 34, right: 20, top: 24, bottom: 10, containLabel: true },
+      xAxis: {
+        type: 'category',
+        data: dates,
+        axisLabel: { color: '#8a909c', fontSize: 10 },
+        axisLine: { lineStyle: { color: '#eef0f4' } },
+        axisTick: { show: false },
+      },
+      yAxis: {
+        type: 'value',
+        minInterval: 1,
+        max: ({ max }) => Math.max(Math.ceil((max || 5) * 1.3), 4),
+        axisLabel: { color: '#8a909c', fontSize: 10 },
+        splitLine: { lineStyle: { color: '#f2f4f7', type: 'dashed' } },
+      },
+      series: [{
+        type: 'bar',
+        data: counts,
+        barMaxWidth: 36,
+        itemStyle: {
+          borderRadius: [5, 5, 0, 0],
+          color: {
+            type: 'linear', x: 0, y: 0, x2: 0, y2: 1,
+            colorStops: [
+              { offset: 0, color: '#2ea68f' },
+              { offset: 1, color: '#0e7a6d' },
+            ],
+          },
+        },
+        label: {
+          show: true,
+          position: 'top',
+          color: '#4a5160',
+          fontSize: 11,
+          fontFamily: "'IBM Plex Mono', monospace",
+          fontWeight: 600,
+        },
+      }],
+    }
+  }
   return {
     tooltip: { trigger: 'axis' },
-    grid: { left: 34, right: 20, top: 24, bottom: 30 },
+    grid: { left: 34, right: 20, top: 24, bottom: 10, containLabel: true },
     xAxis: {
       type: 'category',
-      data: sorted.map((e) => e[0].slice(5)),
-      boundaryGap: false,
+      data: dates,
+      // 默认 boundaryGap（true）：首尾点不贴边，symbol/面积不被裁剪
       axisLabel: { color: '#8a909c', fontSize: 10 },
       axisLine: { lineStyle: { color: '#eef0f4' } },
     },
@@ -416,7 +472,7 @@ const trendOption = computed(() => {
       smooth: true,
       symbol: 'circle',
       symbolSize: 6,
-      data: sorted.map((e) => e[1]),
+      data: counts,
       lineStyle: { width: 2.5, color: '#0e7a6d' },
       itemStyle: { color: '#0e7a6d', borderColor: '#fff', borderWidth: 2 },
       areaStyle: {
