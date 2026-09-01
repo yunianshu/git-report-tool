@@ -13,6 +13,7 @@ const props = defineProps({
 
 const el = ref(null)
 let chart = null
+let ro = null
 
 function render() {
   if (!el.value) return
@@ -25,12 +26,22 @@ function resize() {
 }
 
 onMounted(() => {
-  nextTick(render)
+  // 容器尺寸变化即同步 canvas：统计分析 tab 激活时（display:none → 可见）容器
+  // 宽度变化，仅监听 window resize 无法感知，导致图表被压缩成初始 100px 宽。
+  if (typeof ResizeObserver !== 'undefined' && el.value) {
+    ro = new ResizeObserver(resize)
+    ro.observe(el.value)
+  }
   window.addEventListener('resize', resize)
+  nextTick(render)
 })
 
 onBeforeUnmount(() => {
   window.removeEventListener('resize', resize)
+  if (ro) {
+    ro.disconnect()
+    ro = null
+  }
   if (chart) {
     chart.dispose()
     chart = null
