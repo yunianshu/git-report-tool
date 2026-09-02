@@ -8,6 +8,9 @@ const gitService = require('./git-service')
 const store = require('./store')
 const reportHistory = require('./report-history')
 const aiService = require('./ai-service')
+const deployService = require('./deploy/deploy-service')
+const deployProjects = require('./deploy/deploy-projects')
+const deployHistory = require('./deploy/history')
 
 let mainWindow
 
@@ -23,7 +26,7 @@ function createWindow() {
     height: 860,
     minWidth: 1080,
     minHeight: 700,
-    title: 'Git 项目报告工具',
+    title: 'Git 报告 · 一键部署',
     autoHideMenuBar: true,
     backgroundColor: '#f5f7fa',
     webPreferences: {
@@ -209,6 +212,49 @@ function registerIpc() {
   ipcMain.handle('shell:openPath', (_e, p) => {
     if (p && fs.existsSync(p)) shell.showItemInFolder(p)
   })
+
+  // ─── 一键部署模块（OneDeploy） ───
+  deployService.setEmitter((ch, payload) => broadcast(ch, payload))
+  ipcMain.handle('deploy:projects:list', () => deployProjects.list())
+  ipcMain.handle('deploy:projects:save', (_e, p) => deployProjects.save(p))
+  ipcMain.handle('deploy:projects:remove', (_e, id) => deployProjects.remove(id))
+  ipcMain.handle('deploy:detectVersion', (_e, project) => deployService.resolveVersion(project || {}))
+  ipcMain.handle('deploy:testConnection', async (_e, id) => {
+    try {
+      const info = await deployService.testConnection(id)
+      return { ok: true, ...info }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:run', async (_e, id) => {
+    try {
+      const record = await deployService.run(id)
+      return { ok: record.status === 'success', record }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:cancel', () => deployService.cancel())
+  ipcMain.handle('deploy:releases', async (_e, id) => {
+    try {
+      const info = await deployService.listReleases(id)
+      return { ok: true, ...info }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:rollback', async (_e, { projectId, version }) => {
+    try {
+      const record = await deployService.rollback(projectId, version)
+      return { ok: record.status === 'success', record }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:history:list', (_e, projectId) => deployHistory.list(projectId))
+  ipcMain.handle('deploy:history:readLog', (_e, logFile) => deployHistory.readLog(logFile))
+  ipcMain.handle('deploy:history:clear', (_e, projectId) => deployHistory.clear(projectId))
 }
 
 app.whenReady().then(() => {
@@ -218,6 +264,25 @@ app.whenReady().then(() => {
   createWindow()
   // 启动即后台预热（扫描 + 预收集今天），用户点生成时近乎秒出
   warmupPipeline()
+  // 冒烟测试钩子（仅供自动化验证）：设置 SMOKE_EXIT_MS 后自动退出，
+  // 并将渲染层 error/warning 控制台消息转发到 stdout 以便断言
+  if (process.env.SMOKE_EXIT_MS) {
+    const wc = mainWindow.webContents
+    wc.on('console-message', (_e, level, message) => {
+      if (level >= 2) console.log(`[SMOKE][renderer:${level >= 3 ? 'error' : 'warn'}]`, message)
+    })
+    wc.on('did-fail-load', (_e, code, desc) => console.log('[SMOKE][did-fail-load]', code, desc))
+    // 3 秒后模拟点击「OneDeploy」菜单，验证部署页可正常挂载
+    setTimeout(() => {
+      wc.executeJavaScript(`(() => {
+        const items = [...document.querySelectorAll('.el-menu-item')]
+        const target = items.find((e) => e.textContent.includes('OneDeploy'))
+        if (target) target.click()
+        return items.map((e) => e.textContent.trim())
+      })()`).then((menu) => console.log('[SMOKE][menu]', JSON.stringify(menu))).catch((e) => console.log('[SMOKE][click-err]', e.message))
+    }, 3000)
+    setTimeout(() => app.quit(), Number(process.env.SMOKE_EXIT_MS) || 8000)
+  }
   app.on('activate', () => {
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
   })

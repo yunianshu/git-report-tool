@@ -120,4 +120,27 @@ function getApiKey() {
   }
 }
 
-module.exports = { load, save, getApiKey }
+/** 通用文本加密（safeStorage），供部署模块加密 SSH 凭据使用；失败回退明文并标记 plain */
+function encryptText(text) {
+  try {
+    if (safeStorage.isEncryptionAvailable()) {
+      return { enc: safeStorage.encryptString(String(text)).toString('base64'), plain: '' }
+    }
+  } catch { /* 走明文兜底 */ }
+  return { enc: '', plain: String(text) }
+}
+
+/** 通用文本解密；与 encryptText 配对 */
+function decryptText(secret) {
+  if (!secret) return ''
+  if (secret.enc) {
+    try {
+      if (safeStorage.isEncryptionAvailable()) {
+        return safeStorage.decryptString(Buffer.from(secret.enc, 'base64'))
+      }
+    } catch { /* 解密失败返回空 */ }
+  }
+  return secret.plain || ''
+}
+
+module.exports = { load, save, getApiKey, encryptText, decryptText }

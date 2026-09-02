@@ -33,4 +33,15 @@ export const state = reactive({
     messages: [], // [{ role: 'user'|'assistant', content }]
     streaming: false,
   },
+  /** 一键部署（OneDeploy）运行状态（跨视图保留，切换 tab 不中断进度/日志） */
+  deploy: {
+    projects: [],
+    currentProjectId: '',
+    running: false,
+    stages: {}, // { check: { status, durationMs }, ... } status: waiting|running|success|failed|skipped|rollback
+    logs: [], // [{ level, text, ts }]
+    packageCount: 0,
+    uploadPercent: 0,
+    currentVersion: '', // 服务器当前运行版本（查询 releases / 发布事件更新）
+  },
 })
