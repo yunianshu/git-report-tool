@@ -323,6 +323,15 @@ do_deploy() {
     ln -s "$SHARED/.env" "$NEW_RELEASE/.env"
     ok "已链接共享配置 shared/.env"
   fi
+  # compose 文件在子目录时（如 deploy/docker-compose.yml），
+  # docker compose 的变量替换读取该子目录下的 .env，需一并软链
+  local compose_dir
+  compose_dir="$(dirname "$COMPOSE_FILE")"
+  if [ "$compose_dir" != "." ] && [ -f "$SHARED/.env" ] && [ ! -e "$NEW_RELEASE/$compose_dir/.env" ]; then
+    mkdir -p "$NEW_RELEASE/$compose_dir"
+    ln -s "$SHARED/.env" "$NEW_RELEASE/$compose_dir/.env"
+    ok "已链接共享配置到 $compose_dir/.env"
+  fi
 
   # Docker 构建（方案 §12）
   stage build
