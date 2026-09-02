@@ -29,9 +29,10 @@ function compileRule(raw) {
   let line = raw.trim()
   if (!line || line.startsWith('#')) return null
   if (line.startsWith('!')) return null // v1 不支持反向规则，忽略
+  // gitignore 语义：前导 / 表示锚定项目根，必须先判断再去掉
+  const anchored = line.startsWith('/')
   line = line.replace(/^\/+/, '').replace(/\/+$/, '')
   if (!line) return null
-  const hasSlash = line.includes('/')
   const regexStr = line
     .split('/')
     .map((seg) => seg
@@ -39,8 +40,8 @@ function compileRule(raw) {
       .replace(/\*/g, '[^/]*')
       .replace(/\?/g, '[^/]'))
     .join('/')
-  if (hasSlash) {
-    // 带路径：只从根匹配
+  if (anchored || line.includes('/')) {
+    // 锚定根或带路径：只从根匹配（注意不能误伤路径中段的同名目录）
     return { re: new RegExp(`^${regexStr}(/.*)?$`, 'i') }
   }
   // 纯名称/通配：匹配任意层级的段

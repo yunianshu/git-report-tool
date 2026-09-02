@@ -119,6 +119,11 @@ test('自定义：根路径 a/b 只匹配根下', () => {
   assert.ok(matcher.ignored('a/b/c.js'))
   assert.ok(!matcher.ignored('other/a/b'))
 })
+test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () => {
+  const m = createMatcher(['/source'])
+  assert.ok(m.ignored('source/iD880.pdf'), '应忽略顶层 source')
+  assert.ok(!m.ignored('backend/src/main/java/com/x/source/Foo.java'), '不应忽略深层 source 包')
+})
 
 // ═══════════ ZIP 打包（异步） ═══════════
 ;(async () => {
