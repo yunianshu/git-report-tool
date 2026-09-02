@@ -125,7 +125,10 @@ function buildPackage(opts) {
     })
     archive.pipe(output)
 
+    const selfZipName = fileName // 输出 zip 就写在项目目录里，绝不能把自己打进去
     collectFiles(projectDir, matcher, (abs, rel) => {
+      // .deployignore 是本工具的忽略规则文件；.dockerignore 必须保留（服务器端 docker build 依赖它过滤构建上下文）
+      if (rel === selfZipName || rel === '.deployignore') return
       archive.file(abs, { name: rel })
     })
     archive.finalize()

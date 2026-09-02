@@ -144,8 +144,11 @@ test('自定义：根路径 a/b 只匹配根下', () => {
   })
 
   test('ZIP 内容排除默认规则与 .deployignore（平铺根目录）', async () => {
-    // Windows 10+ 自带 bsdtar 可读取 zip
-    const list = execFileSync('tar', ['-tf', zipResult.zipPath]).toString().split(/\r?\n/).filter(Boolean)
+    // Windows 的 tar 对含盘符路径会误判为远程主机，改用「进入目录 + 纯文件名」方式列出
+    const { execFileSync } = require('child_process')
+    const list = execFileSync('tar', ['-tf', path.basename(zipResult.zipPath)], {
+      cwd: path.dirname(zipResult.zipPath),
+    }).toString().split(/\r?\n/).filter(Boolean)
     assert.ok(list.includes('package.json'), `应含 package.json，实际: ${list}`)
     assert.ok(list.includes('src/app.js'), `应含 src/app.js，实际: ${list}`)
     assert.ok(!list.some((f) => f.includes('node_modules')), `不应含 node_modules: ${list}`)
@@ -153,6 +156,7 @@ test('自定义：根路径 a/b 只匹配根下', () => {
     assert.ok(!list.some((f) => f.endsWith('.log')), `不应含 *.log: ${list}`)
     assert.ok(!list.some((f) => f.includes('secret.txt')), `不应含 .deployignore 排除的 secret.txt: ${list}`)
     assert.ok(!list.some((f) => f.includes('.deployignore')), '忽略规则文件本身不打包')
+    assert.ok(!list.some((f) => f.endsWith('.zip')), `不应把生成的 zip 自身打进去: ${list}`)
   })
 
   // ═══════════ 部署项目配置（electron 打桩：明文兜底） ═══════════
