@@ -125,9 +125,10 @@ function pipeScriptOutput(chunk, tracker, resultBox) {
   }
 }
 
-/** 读取随应用分发的 deploy.sh 内容 */
+/** 读取随应用分发的 deploy.sh 内容（强制 LF：git autocrlf 可能把工作区文件
+ *  检出为 CRLF，Linux bash 遇 \r 会直接语法错误，上传前必须规范化） */
 function readDeployScript() {
-  return fs.readFileSync(DEPLOY_SCRIPT_PATH, 'utf8')
+  return fs.readFileSync(DEPLOY_SCRIPT_PATH, 'utf8').replace(/\r\n/g, '\n')
 }
 
 /** 拼装 deploy.sh 参数（服务器目录结构方案 §8：home 下 releases/uploads/backups/shared/deployer） */
