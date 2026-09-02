@@ -370,8 +370,9 @@ function uploadTextFile(conn, text, remotePath) {
     conn.sftp((err, sftp) => {
       if (err) return reject(err)
       const stream = sftp.createWriteStream(remotePath)
-      stream.on('error', reject)
-      stream.on('close', () => resolve(remotePath))
+      const done = (fn) => (v) => { sftp.end(); fn(v) } // 及时释放通道
+      stream.on('error', done(reject))
+      stream.on('close', done(() => resolve(remotePath)))
       stream.end(text, 'utf8')
     })
   })

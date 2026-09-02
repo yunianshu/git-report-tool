@@ -110,25 +110,32 @@ function upload(conn, localPath, remotePath, onProgress) {
       if (err) return reject(err)
       sftp.fastPut(localPath, remotePath, {
         step: (transferred, chunk, total) => { if (onProgress) onProgress(transferred, total) },
-      }, (e2) => (e2 ? reject(e2) : resolve({ remotePath })))
+      }, (e2) => {
+        sftp.end() // 及时释放通道：sshd MaxSessions 较低的机器开多了会被拒
+        e2 ? reject(e2) : resolve({ remotePath })
+      })
     })
   })
 }
 
-/** 在服务器上递归创建目录（mkdir -p 语义，逐段创建避免依赖 shell） */
+/** 在服务器上递归创建目录（mkdir -p 语义，逐段创建避免依赖 shell；共用一条 SFTP 通道） */
 function mkdirp(conn, remoteDir) {
-  const dirs = String(remoteDir).split('/').filter(Boolean)
-  let cur = String(remoteDir).startsWith('/') ? '' : '.'
-  return dirs.reduce((chain, seg) => {
-    cur = `${cur}/${seg}`
-    const target = cur
-    return chain.then(() => new Promise((resolve, reject) => {
-      conn.sftp((err, sftp) => {
-        if (err) return reject(err)
-        sftp.mkdir(target, () => resolve()) // 已存在时 mkdir 报错，静默忽略
-      })
-    }))
-  }, Promise.resolve())
+  return new Promise((resolve, reject) => {
+    conn.sftp((err, sftp) => {
+      if (err) return reject(err)
+      const dirs = String(remoteDir).split('/').filter(Boolean)
+      let cur = String(remoteDir).startsWith('/') ? '' : '.'
+      const step = () => {
+        if (!dirs.length) {
+          sftp.end()
+          return resolve()
+        }
+        cur = `${cur}/${dirs.shift()}`
+        sftp.mkdir(cur, () => step()) // 已存在时 mkdir 报错，静默忽略
+      }
+      step()
+    })
+  })
 }
 
 /** 规范化远端路径（POSIX 风格） */
