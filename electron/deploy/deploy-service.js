@@ -290,11 +290,13 @@ async function run(projectId, runOpts) {
     log('success', 'SSH 连接成功')
 
     const remoteHome = project.server.remotePath
+    log('info', '初始化远程目录结构…')
     await ssh.mkdirp(conn, ssh.remoteJoin(remoteHome, 'uploads'))
     await ssh.mkdirp(conn, ssh.remoteJoin(remoteHome, 'deployer'))
 
     // 上传 deploy.sh（每次覆盖，保证与客户端版本一致）
     const scriptRemote = ssh.remoteJoin(remoteHome, 'deployer', 'deploy.sh')
+    log('info', '上传部署脚本…')
     await uploadTextFile(conn, readDeployScript(), scriptRemote)
     log('success', '部署脚本已就绪')
 

@@ -62,6 +62,19 @@ function close(conn) {
   try { conn.end() } catch { /* 已断开则忽略 */ }
 }
 
+/** 把 exec 阶段的底层错误转成可操作的提示 */
+function enhanceExecError(e) {
+  const msg = (e && e.message) || String(e)
+  if (/Channel open failure|open failed/i.test(msg)) {
+    return new Error(
+      msg + ' —— 服务器拒绝了命令执行通道：该账号很可能被限制为仅 SFTP（sshd 配置了 '
+      + 'ForceCommand internal-sftp）或没有 shell 权限。请检查服务器 /etc/ssh/sshd_config '
+      + '中该用户的 Match 配置，或改用有 shell 执行权限的账号',
+    )
+  }
+  return e
+}
+
 /**
  * 执行命令。onLine(chunkText, stream) 每收到一段输出回调一次。
  * @returns {Promise<{code: number, stdout: string, stderr: string}>}
@@ -69,7 +82,7 @@ function close(conn) {
 function exec(conn, command, onLine) {
   return new Promise((resolve, reject) => {
     conn.exec(command, (err, stream) => {
-      if (err) return reject(err)
+      if (err) return reject(enhanceExecError(err))
       let stdout = ''
       let stderr = ''
       stream.on('data', (d) => {
