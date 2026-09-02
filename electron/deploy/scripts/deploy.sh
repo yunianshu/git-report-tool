@@ -370,6 +370,8 @@ do_deploy() {
     rm -f "$pkg"
     log "已清理上传包: $PACKAGE"
   fi
+  # 顺带清理历史失败遗留的上传包（1 小时前的旧 zip）
+  find "$UPLOADS" -maxdepth 1 -name '*.zip' -mmin +60 -delete 2>/dev/null
   write_history "success"
 
   echo "__DEPLOY_OK__:$VERSION"

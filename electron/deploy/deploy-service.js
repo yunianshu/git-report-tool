@@ -132,7 +132,7 @@ function readDeployScript() {
 }
 
 /** 拼装 deploy.sh 参数（服务器目录结构方案 §8：home 下 releases/uploads/backups/shared/deployer） */
-function buildDeployArgs(project, pack) {
+function buildDeployArgs(project, pack, version) {
   const d = project.deploy || {}
   const h = project.health || {}
   const args = [
@@ -141,6 +141,7 @@ function buildDeployArgs(project, pack) {
     '--home', project.server.remotePath,
     '--package', pack.fileName,
     '--sha256', pack.sha256,
+    '--version', version,
     '--compose', project.composeFile || 'docker-compose.yml',
   ]
   args.push(d.backupCode ? '--backup-code' : '--no-backup-code')
@@ -321,7 +322,7 @@ async function run(projectId, runOpts) {
     tracker.end('upload', 'success', t2)
 
     // ── 阶段 4~8：服务器端执行 deploy.sh ────────────
-    const cmd = `bash ${quoteArg(scriptRemote)} ${buildDeployArgs(project, pack).map(quoteArg).join(' ')}`
+    const cmd = `bash ${quoteArg(scriptRemote)} ${buildDeployArgs(project, pack, ver.version).map(quoteArg).join(' ')}`
     const res = await ssh.exec(conn, cmd, (chunk) => pipeScriptOutput(chunk, tracker, resultBox))
 
     if (resultBox.ok && res.code === 0) {
@@ -525,5 +526,5 @@ async function rollback(projectId, version) {
 
 module.exports = {
   run, cancel, isBusy, testConnection, listReleases, rollback,
-  setEmitter, STAGES, resolveVersion,
+  setEmitter, STAGES, resolveVersion, buildDeployArgs,
 }

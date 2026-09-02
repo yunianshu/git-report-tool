@@ -34,6 +34,7 @@ require.cache[electronPath] = { id: electronPath, filename: electronPath, loaded
 const { detectVersion } = require('../electron/deploy/version-detector')
 const { createMatcher, buildPackage } = require('../electron/deploy/packager')
 const deployProjects = require('../electron/deploy/deploy-projects')
+const { buildDeployArgs } = require('../electron/deploy/deploy-service')
 
 // ═══════════ 版本识别 ═══════════
 console.log('版本识别 version-detector:')
@@ -196,6 +197,46 @@ test('自定义：根路径 a/b 只匹配根下', () => {
     const id = deployProjects.list()[0].id
     deployProjects.remove(id)
     assert.strictEqual(deployProjects.list().length, 0)
+  })
+
+  // ═══════════ 客户端参数 ↔ deploy.sh 解析一致性 ═══════════
+  console.log('客户端/服务端参数一致性 buildDeployArgs:')
+  test('发布参数包含 --version 及其值', () => {
+    const args = buildDeployArgs(
+      { name: 'demo', server: { remotePath: '/opt/apps/demo' }, deploy: {}, health: {} },
+      { fileName: 'demo-1.0.0.zip', sha256: 'a'.repeat(64) },
+      '1.0.0',
+    )
+    const i = args.indexOf('--version')
+    assert.ok(i > 0, `缺少 --version，实际: ${args}`)
+    assert.strictEqual(args[i + 1], '1.0.0')
+    for (const k of ['--app', '--home', '--package', '--sha256', '--compose']) {
+      assert.ok(args.includes(k), `缺少 ${k}`)
+    }
+  })
+  test('发布路径所有开关均被 deploy.sh 接受（防拼写/遗漏回归）', () => {
+    const args = buildDeployArgs(
+      {
+        name: 'demo', server: { remotePath: '/opt/apps/demo' },
+        deploy: { backupCode: true, backupDatabase: true, dbType: 'postgres', dbContainer: 'pg', dbName: 'db', dbUser: 'u', autoRollback: true, deleteUploadAfterSuccess: true, keepReleases: 5, keepBackups: 5 },
+        health: { enabled: true, url: 'http://x', timeout: 30, interval: 2 },
+      },
+      { fileName: 'demo-1.0.0.zip', sha256: 'b'.repeat(64) },
+      '1.0.0',
+    )
+    const sh = fs.readFileSync(path.join(__dirname, '../electron/deploy/scripts/deploy.sh'), 'utf8')
+    const accepted = new Set(
+      [...sh.matchAll(/^\s+(--[a-z0-9-]+)\)/gm)].map((m) => m[1]),
+    )
+    for (const a of args) {
+      if (a.startsWith('--')) {
+        assert.ok(accepted.has(a), `deploy.sh 不认识参数 ${a}`)
+      }
+    }
+    // 反向：脚本里 deploy/rollback 会消费的带值参数，客户端发布路径必须都传
+    for (const req of ['--app', '--home', '--package', '--sha256', '--version', '--compose']) {
+      assert.ok(args.includes(req), `发布参数缺少 ${req}`)
+    }
   })
 
   console.log(`\n结果: ${passed} 通过, ${failed} 失败`)
