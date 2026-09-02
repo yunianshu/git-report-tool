@@ -17,15 +17,24 @@ function connect(config) {
     const finish = (fn) => (v) => { if (!settled) { settled = true; fn(v) } }
 
     conn.on('ready', () => finish(resolve)(conn))
-    conn.on('error', finish(reject))
+    conn.on('error', (e) => {
+      let msg = (e && e.message) || String(e)
+      if (/Timed out while waiting for handshake/.test(msg)) {
+        msg += '（连接超时：请确认 SSH 端口正确、服务器防火墙/安全组已放行当前电脑 IP。'
+          + '若 FinalShell 等工具可连而本工具超时，常见原因是服务器只放行了其他机器的 IP，'
+          + '或 FinalShell 配置了跳板机/代理，或其连接端口并非 22）'
+      }
+      finish(reject)(new Error(msg))
+    })
     conn.on('end', () => finish(reject)(new Error('SSH 连接已断开')))
 
     const cfg = {
       host: config.host,
       port: Number(config.port) || 22,
       username: config.username || 'root',
-      readyTimeout: config.readyTimeout || 15000,
+      readyTimeout: config.readyTimeout || 20000,
       keepaliveInterval: 10000,
+      tryKeyboard: true, // 服务器仅启用 keyboard-interactive 认证时也能用密码登录
     }
     if ((config.authType || 'password') === 'key') {
       if (!config.keyPath || !fs.existsSync(config.keyPath)) {
@@ -40,6 +49,9 @@ function connect(config) {
     } else {
       cfg.password = config.password || ''
     }
+    conn.on('keyboard-interactive', (_name, _instr, _lang, prompts, cb) => {
+      cb(prompts.map(() => cfg.password || ''))
+    })
     conn.connect(cfg)
   })
 }
