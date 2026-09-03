@@ -219,34 +219,34 @@ function registerIpc() {
   ipcMain.handle('deploy:projects:save', (_e, p) => deployProjects.save(p))
   ipcMain.handle('deploy:projects:remove', (_e, id) => deployProjects.remove(id))
   ipcMain.handle('deploy:detectVersion', (_e, project) => deployService.resolveVersion(project || {}))
-  ipcMain.handle('deploy:testConnection', async (_e, id) => {
+  ipcMain.handle('deploy:testConnection', async (_e, { projectId, targetId }) => {
     try {
-      const info = await deployService.testConnection(id)
+      const info = await deployService.testConnection(projectId, targetId)
       return { ok: true, ...info }
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }
     }
   })
-  ipcMain.handle('deploy:run', async (_e, id) => {
+  ipcMain.handle('deploy:run', async (_e, { projectId, targetId }) => {
     try {
-      const record = await deployService.run(id)
+      const record = await deployService.run(projectId, targetId)
       return { ok: record.status === 'success', record }
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }
     }
   })
   ipcMain.handle('deploy:cancel', () => deployService.cancel())
-  ipcMain.handle('deploy:releases', async (_e, id) => {
+  ipcMain.handle('deploy:releases', async (_e, { projectId, targetId }) => {
     try {
-      const info = await deployService.listReleases(id)
+      const info = await deployService.listReleases(projectId, targetId)
       return { ok: true, ...info }
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }
     }
   })
-  ipcMain.handle('deploy:rollback', async (_e, { projectId, version }) => {
+  ipcMain.handle('deploy:rollback', async (_e, { projectId, targetId, version }) => {
     try {
-      const record = await deployService.rollback(projectId, version)
+      const record = await deployService.rollback(projectId, version, targetId)
       return { ok: record.status === 'success', record }
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }

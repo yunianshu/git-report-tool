@@ -166,37 +166,64 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
   })
 
   // ═══════════ 部署项目配置（electron 打桩：明文兜底） ═══════════
-  console.log('项目配置 deploy-projects:')
-  test('新增 + 列表脱敏', () => {
+  console.log('项目配置 deploy-projects（多目标）:')
+  test('旧版单服务器配置自动迁移为 targets[0]', () => {
     const r = deployProjects.save({
       name: 'demo',
       localPath: 'D:/x',
+      remotePath: '/opt/apps/demo',
       server: { host: '10.0.0.1', port: 22, username: 'root', authType: 'password', secret: 'pass#123' },
+      health: { enabled: true, url: 'http://h', timeout: 30, interval: 2 },
     })
     assert.ok(r.ok && r.id)
-    const list = deployProjects.list()
-    const p = list.find((x) => x.id === r.id)
-    assert.strictEqual(p.name, 'demo')
-    assert.strictEqual(p.server.secretConfigured, true)
-    assert.strictEqual(p.server.secret, undefined, '明文密码不应返回渲染层')
+    const p = deployProjects.list().find((x) => x.id === r.id)
+    assert.strictEqual(p.server, undefined, '项目根不应再有 server 字段')
+    assert.strictEqual(p.targets.length, 1)
+    const t = p.targets[0]
+    assert.strictEqual(t.server.host, '10.0.0.1')
+    assert.strictEqual(t.remotePath, '/opt/apps/demo')
+    assert.strictEqual(t.health.url, 'http://h')
+    assert.strictEqual(t.server.secret, undefined, '明文密码不应返回渲染层')
+    assert.strictEqual(t.server.secretConfigured, true)
   })
-  test('凭据可由主进程解出（getCredentials）', () => {
+  test('凭据可由主进程解出（getCredentials，默认第一个目标）', () => {
     const id = deployProjects.list()[0].id
     assert.strictEqual(deployProjects.getCredentials(id).password, 'pass#123')
   })
-  test('更新时空密码保留旧凭据', () => {
-    const id = deployProjects.list()[0].id
-    deployProjects.save({ id, name: 'demo2', server: { host: '10.0.0.2', authType: 'password' } })
-    assert.strictEqual(deployProjects.getCredentials(id).password, 'pass#123')
-    const p = deployProjects.list().find((x) => x.id === id)
-    assert.strictEqual(p.name, 'demo2')
-    assert.strictEqual(p.server.host, '10.0.0.2')
+  test('新增第二个目标并各自保存凭据', () => {
+    const p = deployProjects.list()[0]
+    const t2 = { ...deployProjects.defaultTarget(), name: '生产', remotePath: '/opt/apps/demo-prod' }
+    t2.server = { ...t2.server, host: '10.0.0.2', authType: 'password', secret: 'prod#456' }
+    deployProjects.save({ ...JSON.parse(JSON.stringify(p)), targets: [...p.targets.map((t) => ({ ...t })), t2] })
+    const saved = deployProjects.list().find((x) => x.id === p.id)
+    assert.strictEqual(saved.targets.length, 2)
+    assert.strictEqual(deployProjects.getCredentials(p.id, t2.id).password, 'prod#456')
+    assert.strictEqual(deployProjects.getCredentials(p.id).password, 'pass#123', '第一目标凭据不受影响')
   })
-  test('clearSecret 显式清除', () => {
-    const id = deployProjects.list()[0].id
-    deployProjects.save({ id, server: { clearSecret: true } })
-    assert.strictEqual(deployProjects.getCredentials(id).password, '')
-    assert.strictEqual(deployProjects.list().find((x) => x.id === id).server.secretConfigured, false)
+  test('更新时空密码分别保留各目标凭据', () => {
+    const saved = deployProjects.list()[0]
+    const clean = JSON.parse(JSON.stringify(saved))
+    for (const t of clean.targets) {
+      delete t.server.secretConfigured
+      delete t.server.secretMasked
+      delete t.server.passphraseConfigured
+    }
+    clean.name = 'demo2'
+    deployProjects.save(clean)
+    assert.strictEqual(deployProjects.getCredentials(saved.id, saved.targets[1].id).password, 'prod#456')
+    assert.strictEqual(deployProjects.getCredentials(saved.id, saved.targets[0].id).password, 'pass#123')
+    assert.strictEqual(deployProjects.list().find((x) => x.id === saved.id).name, 'demo2')
+  })
+  test('clearSecret 只清除指定目标', () => {
+    const saved = deployProjects.list()[0]
+    const [t1, t2] = saved.targets
+    const payload = JSON.parse(JSON.stringify(saved))
+    payload.targets[1].server.clearSecret = true
+    deployProjects.save(payload)
+    assert.strictEqual(deployProjects.getCredentials(saved.id, t2.id).password, '')
+    assert.strictEqual(deployProjects.getCredentials(saved.id, t1.id).password, 'pass#123')
+    const after = deployProjects.list().find((x) => x.id === saved.id)
+    assert.strictEqual(after.targets[1].server.secretConfigured, false)
   })
   test('删除项目', () => {
     const id = deployProjects.list()[0].id
@@ -207,8 +234,9 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
   // ═══════════ 客户端参数 ↔ deploy.sh 解析一致性 ═══════════
   console.log('客户端/服务端参数一致性 buildDeployArgs:')
   test('发布参数包含 --version 及其值', () => {
+    const project = { name: 'demo', deploy: {}, targets: [{ id: 't1', name: '测试', remotePath: '/opt/apps/demo', health: {} }] }
     const args = buildDeployArgs(
-      { name: 'demo', server: { remotePath: '/opt/apps/demo' }, deploy: {}, health: {} },
+      project, project.targets[0],
       { fileName: 'demo-1.0.0.zip', sha256: 'a'.repeat(64) },
       '1.0.0',
     )
@@ -220,12 +248,16 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
     }
   })
   test('发布路径所有开关均被 deploy.sh 接受（防拼写/遗漏回归）', () => {
-    const args = buildDeployArgs(
-      {
-        name: 'demo', server: { remotePath: '/opt/apps/demo' },
-        deploy: { backupCode: true, backupDatabase: true, dbType: 'postgres', dbContainer: 'pg', dbName: 'db', dbUser: 'u', autoRollback: true, deleteUploadAfterSuccess: true, keepReleases: 5, keepBackups: 5 },
+    const project = {
+      name: 'demo',
+      deploy: { backupCode: true, backupDatabase: true, dbType: 'postgres', dbContainer: 'pg', dbName: 'db', dbUser: 'u', autoRollback: true, deleteUploadAfterSuccess: true, keepReleases: 5, keepBackups: 5 },
+      targets: [{
+        id: 't1', name: '测试', remotePath: '/opt/apps/demo',
         health: { enabled: true, url: 'http://x', timeout: 30, interval: 2 },
-      },
+      }],
+    }
+    const args = buildDeployArgs(
+      project, project.targets[0],
       { fileName: 'demo-1.0.0.zip', sha256: 'b'.repeat(64) },
       '1.0.0',
     )

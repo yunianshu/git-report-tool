@@ -1,9 +1,10 @@
 /**
  * 部署项目配置管理 —— 对应方案 §5.1 / §21 / §22：
- *   - 多项目配置（名称、本地目录、版本策略、服务器、部署选项、健康检查）
- *   - 持久化到 userData/deploy-projects.json（独立于报告配置，便于整体迁移）
- *   - SSH 密码/私钥口令经 safeStorage 加密落盘，明文不出主进程
- *     （渲染层仅收到 secretConfigured / masked 片段）
+ *   - 多项目配置（名称、本地目录、版本策略、部署选项）
+ *   - 每个项目支持多个部署目标 targets[]（测试/生产等多环境）：
+ *     各目标独立的服务器（host/端口/用户/认证/密钥）、远程部署目录与健康检查
+ *   - 持久化到 userData/deploy-projects.json；旧版单服务器配置自动迁移为 targets[0]
+ *   - SSH 密码/私钥口令按目标分别经 safeStorage 加密落盘，明文不出主进程
  */
 const fs = require('fs')
 const path = require('path')
@@ -14,6 +15,25 @@ function file() {
   return path.join(app.getPath('userData'), 'deploy-projects.json')
 }
 
+function genId() {
+  return `dp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function defaultServer() {
+  return { host: '', port: 22, username: 'root', authType: 'password', keyPath: '' }
+}
+
+/** 单个部署目标（环境） */
+function defaultTarget() {
+  return {
+    id: genId(),
+    name: '默认环境',
+    server: defaultServer(),
+    remotePath: '',
+    health: { enabled: true, url: '', timeout: 90, interval: 3 },
+  }
+}
+
 function defaultProject() {
   return {
     id: genId(),
@@ -21,13 +41,6 @@ function defaultProject() {
     localPath: '',
     version: { strategy: 'auto', manual: '' },
     composeFile: 'docker-compose.yml',
-    server: {
-      host: '',
-      port: 22,
-      username: 'root',
-      authType: 'password', // password | key
-      keyPath: '',
-    },
     deploy: {
       backupCode: true,
       backupDatabase: false,
@@ -40,14 +53,39 @@ function defaultProject() {
       keepReleases: 10,
       keepBackups: 10,
     },
-    health: { enabled: true, url: '', timeout: 90, interval: 3 },
+    targets: [defaultTarget()],
     createdAt: Date.now(),
     updatedAt: Date.now(),
   }
 }
 
-function genId() {
-  return `dp_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+/**
+ * 旧版迁移：项目根上的 server/health/remotePath → targets[0]。
+ * 读取与保存路径统一走此函数，保证任何入口拿到的都是新结构。
+ */
+function normalizeProject(p) {
+  const c = JSON.parse(JSON.stringify(p || {}))
+  if (!Array.isArray(c.targets) || !c.targets.length) {
+    const t = defaultTarget()
+    if (c.server && (c.server.host || c.server.remotePath || c.remotePath)) {
+      t.server = { ...defaultServer(), ...c.server }
+      // 旧格式 remotePath 位于 server 内部（deploy-service 旧版读 project.server.remotePath）
+      t.remotePath = (c.server && c.server.remotePath) || c.remotePath || ''
+      t.health = { ...defaultTarget().health, ...(c.health || {}) }
+      t.name = '默认环境'
+    }
+    c.targets = [t]
+  }
+  c.targets = c.targets.map((t) => ({
+    ...defaultTarget(),
+    ...t,
+    server: { ...defaultServer(), ...(t.server || {}) },
+    health: { ...defaultTarget().health, ...(t.health || {}) },
+  }))
+  delete c.server
+  delete c.health
+  delete c.remotePath
+  return c
 }
 
 /** 掩码展示用 */
@@ -64,38 +102,40 @@ function list() {
     const raw = JSON.parse(fs.readFileSync(file(), 'utf8'))
     projects = Array.isArray(raw.projects) ? raw.projects : []
   } catch { /* 首次使用返回空 */ }
-  return projects.map((p) => {
-    const c = JSON.parse(JSON.stringify(p))
-    const secret = store.decryptText(c.server && c.server.secret)
-    const pass = store.decryptText(c.server && c.server.passphrase)
-    if (c.server) {
-      delete c.server.secret
-      delete c.server.passphrase
-      c.server.secretConfigured = !!secret
-      c.server.secretMasked = secret ? maskSecret(secret) : ''
-      c.server.passphraseConfigured = !!pass
-    }
-    return c
+  return projects.map(normalizeProject).map((p) => {
+    p.targets = p.targets.map((t) => {
+      const secret = store.decryptText(t.server && t.server.secret)
+      const pass = store.decryptText(t.server && t.server.passphrase)
+      const s = { ...t.server }
+      delete s.secret
+      delete s.passphrase
+      s.secretConfigured = !!secret
+      s.secretMasked = secret ? maskSecret(secret) : ''
+      s.passphraseConfigured = !!pass
+      return { ...t, server: s }
+    })
+    return p
   })
-}
-
-/** 主进程专用：取项目明文凭据 */
-function getCredentials(projectId) {
-  const raw = JSON.parse(fs.readFileSync(file(), 'utf8'))
-  const p = (raw.projects || []).find((x) => x.id === projectId)
-  if (!p) return null
-  return {
-    password: store.decryptText(p.server && p.server.secret),
-    passphrase: store.decryptText(p.server && p.server.passphrase),
-  }
 }
 
 function loadAllRaw() {
   try {
     const raw = JSON.parse(fs.readFileSync(file(), 'utf8'))
-    return Array.isArray(raw.projects) ? raw.projects : []
+    return (Array.isArray(raw.projects) ? raw.projects : []).map(normalizeProject)
   } catch {
     return []
+  }
+}
+
+/** 主进程专用：取某项目某目标的明文凭据（targetId 省略时用第一个目标） */
+function getCredentials(projectId, targetId) {
+  const p = loadAllRaw().find((x) => x.id === projectId)
+  if (!p) return null
+  const t = p.targets.find((x) => x.id === targetId) || p.targets[0]
+  if (!t) return { password: '', passphrase: '' }
+  return {
+    password: store.decryptText(t.server && t.server.secret),
+    passphrase: store.decryptText(t.server && t.server.passphrase),
   }
 }
 
@@ -105,14 +145,30 @@ function persistAll(projects) {
 }
 
 /**
- * 保存项目（新增或更新）。
- * 凭据规则（与 AI Key 相同）：
- *   - 传入 secret 非空 → 加密替换；空且未要求清除 → 保留既有；clearSecret=true → 清除
- *   - passphrase 同理（clearPassphrase）
+ * 按目标合并凭据（与 AI Key 相同规则）：
+ *   - 传入 secret 非空 → 加密替换；空且未要求清除 → 保留该目标既有；clearSecret → 清除
+ *   - passphrase 同理
+ */
+function mergeSecret(s, oldSecret, key, clearKey) {
+  const plain = s[key] || ''
+  delete s[key]
+  const clearFlag = s[clearKey]
+  delete s[clearKey]
+  if (plain) {
+    s[key] = store.encryptText(plain)
+  } else if (clearFlag) {
+    delete s[key]
+  } else if (oldSecret) {
+    s[key] = oldSecret // 字节原样保留，不触发解密
+  }
+}
+
+/**
+ * 保存项目（新增或更新）。targets 为完整数组，按 id 匹配旧目标保留凭据。
  */
 function save(input) {
   const projects = loadAllRaw()
-  const incoming = { ...defaultProject(), ...JSON.parse(JSON.stringify(input || {})) }
+  const incoming = normalizeProject(JSON.parse(JSON.stringify(input || {})))
   if (!incoming.id) incoming.id = genId()
   if (!incoming.createdAt) incoming.createdAt = Date.now()
   incoming.updatedAt = Date.now()
@@ -120,22 +176,12 @@ function save(input) {
   const idx = projects.findIndex((p) => p.id === incoming.id)
   const old = idx >= 0 ? projects[idx] : null
 
-  const s = incoming.server || {}
-  const handleSecret = (key, clearKey) => {
-    const plain = s[key] || ''
-    delete s[key]
-    const clearFlag = s[clearKey]
-    delete s[clearKey]
-    if (plain) {
-      s[key] = store.encryptText(plain)
-    } else if (clearFlag) {
-      delete s[key]
-    } else if (old && old.server && old.server[key]) {
-      s[key] = old.server[key] // 字节原样保留，不触发解密
-    }
-  }
-  handleSecret('secret', 'clearSecret')
-  handleSecret('passphrase', 'clearPassphrase')
+  incoming.targets = incoming.targets.map((t) => {
+    const oldT = old && old.targets.find((x) => x.id === t.id)
+    mergeSecret(t.server, oldT && oldT.server && oldT.server.secret, 'secret', 'clearSecret')
+    mergeSecret(t.server, oldT && oldT.server && oldT.server.passphrase, 'passphrase', 'clearPassphrase')
+    return t
+  })
 
   if (idx >= 0) projects[idx] = { ...old, ...incoming }
   else projects.push(incoming)
@@ -149,4 +195,4 @@ function remove(projectId) {
   return { ok: true }
 }
 
-module.exports = { list, save, remove, getCredentials, defaultProject }
+module.exports = { list, save, remove, getCredentials, defaultProject, defaultTarget, normalizeProject }

@@ -22,7 +22,7 @@
           </el-menu-item>
         </el-menu-item-group>
       </el-menu>
-      <div class="aside-footer">v1.2.0 · Windows / macOS / Linux</div>
+      <div class="aside-footer">v1.3.0 · Windows / macOS / Linux</div>
     </el-aside>
     <el-main class="main">
       <transition name="fade" mode="out-in">

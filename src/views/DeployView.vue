@@ -7,7 +7,7 @@
         <el-select
           v-model="state.deploy.currentProjectId"
           placeholder="选择项目（或新建）"
-          style="width: 220px"
+          style="width: 200px"
           @change="onSelectProject"
         >
           <el-option v-for="p in state.deploy.projects" :key="p.id" :value="p.id" :label="p.name || '未命名项目'" />
@@ -74,55 +74,85 @@
           <div class="f-hint">自动识别优先级：VERSION → package.json → pom.xml → build.gradle → pubspec.yaml → *.csproj</div>
         </el-card>
 
+        <!-- 部署目标（多环境） -->
         <el-card shadow="never" class="card">
-          <template #header><div class="card-header"><span>服务器（远程部署地址可配置）</span></div></template>
-          <div class="f-row">
-            <span class="f-label">主机地址</span>
-            <el-input v-model="form.server.host" placeholder="192.168.1.100 或 server.example.com" style="flex: 1" />
-            <el-input-number v-model="form.server.port" :min="1" :max="65535" controls-position="right" style="width: 100px" />
+          <template #header>
+            <div class="card-header">
+              <span>部署目标（多环境）</span>
+              <span class="target-ops">
+                <el-button text size="small" type="primary" @click="addTarget"><el-icon><Plus /></el-icon>新增环境</el-button>
+                <el-button text size="small" :disabled="!activeTarget" @click="renameTarget">重命名</el-button>
+                <el-button text size="small" type="danger" :disabled="form.targets.length <= 1" @click="removeTarget">删除</el-button>
+              </span>
+            </div>
+          </template>
+          <div class="target-row">
+            <el-select v-model="activeTargetId" style="width: 220px" placeholder="选择部署目标">
+              <el-option v-for="t in form.targets" :key="t.id" :value="t.id" :label="t.name || '未命名环境'" />
+            </el-select>
+            <span v-if="activeTarget" class="target-host mono">
+              {{ activeTarget.server.host || '未配置主机' }} → {{ activeTarget.remotePath || '未配置部署目录' }}
+            </span>
           </div>
-          <div class="f-row">
-            <span class="f-label">用户名</span>
-            <el-input v-model="form.server.username" placeholder="root" style="width: 200px" />
-            <el-radio-group v-model="form.server.authType" size="small">
-              <el-radio-button value="password">密码</el-radio-button>
-              <el-radio-button value="key">私钥</el-radio-button>
-            </el-radio-group>
+          <div class="f-hint">
+            同一项目可配置多个部署目标（测试 / 生产 / 多台服务器），各自独立保存服务器地址、部署目录、
+            健康检查与凭据；发布、测试连接、回滚均作用于当前选中的目标。
           </div>
-          <div v-if="form.server.authType === 'password'" class="f-row">
-            <span class="f-label">密码</span>
-            <el-input
-              v-model="form.server.secret"
-              type="password"
-              show-password
-              style="flex: 1"
-              :placeholder="form.server.secretConfigured ? `${form.server.secretMasked}（留空保持不变）` : 'SSH 登录密码'"
-            />
-            <el-button v-if="form.server.secretConfigured" text type="danger" size="small" @click="form.server.clearSecret = true">
-              清除
-            </el-button>
-          </div>
-          <template v-else>
+        </el-card>
+
+        <el-card shadow="never" class="card">
+          <template #header>
+            <div class="card-header"><span>服务器（当前目标）</span></div>
+          </template>
+          <template v-if="activeTarget">
             <div class="f-row">
-              <span class="f-label">私钥路径</span>
-              <el-input v-model="form.server.keyPath" placeholder="C:\Users\you\.ssh\id_rsa" style="flex: 1" />
-              <el-button @click="browseKey"><el-icon><Folder /></el-icon></el-button>
+              <span class="f-label">主机地址</span>
+              <el-input v-model="activeTarget.server.host" placeholder="192.168.1.100 或 server.example.com" style="flex: 1" />
+              <el-input-number v-model="activeTarget.server.port" :min="1" :max="65535" controls-position="right" style="width: 100px" />
             </div>
             <div class="f-row">
-              <span class="f-label">私钥口令</span>
+              <span class="f-label">用户名</span>
+              <el-input v-model="activeTarget.server.username" placeholder="root" style="width: 200px" />
+              <el-radio-group v-model="activeTarget.server.authType" size="small">
+                <el-radio-button value="password">密码</el-radio-button>
+                <el-radio-button value="key">私钥</el-radio-button>
+              </el-radio-group>
+            </div>
+            <div v-if="activeTarget.server.authType === 'password'" class="f-row">
+              <span class="f-label">密码</span>
               <el-input
-                v-model="form.server.passphrase"
+                v-model="activeTarget.server.secret"
                 type="password"
                 show-password
                 style="flex: 1"
-                :placeholder="form.server.passphraseConfigured ? '已保存（留空保持不变）' : '无口令可留空'"
+                :placeholder="activeTarget.server.secretConfigured ? `${activeTarget.server.secretMasked}（留空保持不变）` : 'SSH 登录密码'"
               />
+              <el-button v-if="activeTarget.server.secretConfigured" text type="danger" size="small" @click="activeTarget.server.clearSecret = true">
+                清除
+              </el-button>
+            </div>
+            <template v-else>
+              <div class="f-row">
+                <span class="f-label">私钥路径</span>
+                <el-input v-model="activeTarget.server.keyPath" placeholder="C:\Users\you\.ssh\id_rsa" style="flex: 1" />
+                <el-button @click="browseKey"><el-icon><Folder /></el-icon></el-button>
+              </div>
+              <div class="f-row">
+                <span class="f-label">私钥口令</span>
+                <el-input
+                  v-model="activeTarget.server.passphrase"
+                  type="password"
+                  show-password
+                  style="flex: 1"
+                  :placeholder="activeTarget.server.passphraseConfigured ? '已保存（留空保持不变）' : '无口令可留空'"
+                />
+              </div>
+            </template>
+            <div class="f-row">
+              <span class="f-label">部署目录</span>
+              <el-input v-model="activeTarget.remotePath" placeholder="/opt/apps/myapp" style="flex: 1" />
             </div>
           </template>
-          <div class="f-row">
-            <span class="f-label">部署目录</span>
-            <el-input v-model="form.server.remotePath" placeholder="/opt/apps/myapp" style="flex: 1" />
-          </div>
           <div class="f-hint">
             远程部署根目录，可自定义；其下自动创建 releases / uploads / backups / shared / deployer，
             current 软链接指向运行版本。密码经系统加密存储，明文不落盘。
@@ -159,26 +189,30 @@
         </el-card>
 
         <el-card shadow="never" class="card">
-          <template #header><div class="card-header"><span>健康检查</span></div></template>
-          <div class="f-row check-row">
-            <el-checkbox v-model="form.health.enabled">启用 HTTP 健康检查</el-checkbox>
-          </div>
-          <div class="f-row">
-            <span class="f-label">检查地址</span>
-            <el-input
-              v-model="form.health.url"
-              placeholder="http://127.0.0.1:8080/actuator/health"
-              style="flex: 1"
-              :disabled="!form.health.enabled"
-            />
-          </div>
-          <div class="f-row">
-            <span class="f-label">超时/间隔</span>
-            <el-input-number v-model="form.health.timeout" :min="10" :max="600" controls-position="right" style="width: 100px" :disabled="!form.health.enabled" />
-            <span class="f-mini">秒内，每</span>
-            <el-input-number v-model="form.health.interval" :min="1" :max="30" controls-position="right" style="width: 90px" :disabled="!form.health.enabled" />
-            <span class="f-mini">秒探测一次</span>
-          </div>
+          <template #header>
+            <div class="card-header"><span>健康检查（当前目标）</span></div>
+          </template>
+          <template v-if="activeTarget">
+            <div class="f-row check-row">
+              <el-checkbox v-model="activeTarget.health.enabled">启用 HTTP 健康检查</el-checkbox>
+            </div>
+            <div class="f-row">
+              <span class="f-label">检查地址</span>
+              <el-input
+                v-model="activeTarget.health.url"
+                placeholder="http://127.0.0.1:8080/actuator/health"
+                style="flex: 1"
+                :disabled="!activeTarget.health.enabled"
+              />
+            </div>
+            <div class="f-row">
+              <span class="f-label">超时/间隔</span>
+              <el-input-number v-model="activeTarget.health.timeout" :min="10" :max="600" controls-position="right" style="width: 100px" :disabled="!activeTarget.health.enabled" />
+              <span class="f-mini">秒内，每</span>
+              <el-input-number v-model="activeTarget.health.interval" :min="1" :max="30" controls-position="right" style="width: 90px" :disabled="!activeTarget.health.enabled" />
+              <span class="f-mini">秒探测一次</span>
+            </div>
+          </template>
           <div class="f-hint">未启用时仅检查 Docker 容器运行状态。健康检查地址在服务器本机访问，请使用 127.0.0.1。</div>
         </el-card>
       </el-col>
@@ -190,6 +224,8 @@
             <div class="card-header">
               <span>发布</span>
               <span class="ver-info">
+                目标 <b>{{ activeTarget ? (activeTarget.name || '未命名') : '—' }}</b>
+                <el-divider direction="vertical" />
                 本地版本 <b>{{ publishVersion || '—' }}</b>
                 <el-divider direction="vertical" />
                 线上版本 <b>{{ state.deploy.currentVersion || '未知' }}</b>
@@ -226,7 +262,7 @@
             >回滚到此版本</el-button>
           </div>
           <div v-if="!canPublish && !state.deploy.running" class="f-hint">
-            发布前需：项目已保存、本地目录与 Compose 文件存在、已识别版本号、已配置服务器与部署目录
+            发布前需：项目已保存、本地目录与 Compose 文件存在、已识别版本号、当前目标已配置服务器与部署目录
           </div>
           <div class="stages">
             <div
@@ -265,28 +301,33 @@
             </div>
           </template>
           <el-table :data="history" size="small" max-height="320" empty-text="暂无发布记录">
-            <el-table-column prop="version" label="版本" width="110">
+            <el-table-column prop="version" label="版本" width="100">
               <template #default="{ row }">
                 <span class="mono">{{ row.version || '—' }}</span>
                 <el-tag v-if="row.version && row.version === state.deploy.currentVersion" size="small" type="success" effect="plain" class="cur-tag">运行中</el-tag>
               </template>
             </el-table-column>
+            <el-table-column label="目标" width="90">
+              <template #default="{ row }">
+                <span>{{ row.targetName || '默认' }}</span>
+              </template>
+            </el-table-column>
             <el-table-column label="时间" width="150">
               <template #default="{ row }">{{ fmtTime(row.startedAt) }}</template>
             </el-table-column>
-            <el-table-column label="类型" width="80">
+            <el-table-column label="类型" width="70">
               <template #default="{ row }">
                 <el-tag size="small" :type="row.type === 'rollback' ? 'warning' : 'primary'" effect="plain">
                   {{ row.type === 'rollback' ? '回滚' : '发布' }}
                 </el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="状态" width="100">
+            <el-table-column label="状态" width="90">
               <template #default="{ row }">
                 <el-tag size="small" :type="statusType(row.status)">{{ statusText(row.status) }}</el-tag>
               </template>
             </el-table-column>
-            <el-table-column label="耗时" width="80">
+            <el-table-column label="耗时" width="75">
               <template #default="{ row }">{{ fmtDur(row.durationMs) }}</template>
             </el-table-column>
             <el-table-column prop="message" label="说明" show-overflow-tooltip />
@@ -295,7 +336,7 @@
                 <el-button text size="small" type="primary" @click="viewLog(row)">日志</el-button>
                 <el-button
                   v-if="row.type === 'deploy' && row.status === 'success' && row.version !== state.deploy.currentVersion"
-                  text size="small" type="warning" @click="doRollback(row.version)"
+                  text size="small" type="warning" @click="doRollback(row.version, row.targetId)"
                 >回滚</el-button>
               </template>
             </el-table-column>
@@ -328,28 +369,43 @@ const STAGE_LIST = [
   { id: 'health', label: '健康检查' },
 ]
 
+function genId() {
+  return `t_${Date.now().toString(36)}_${Math.random().toString(36).slice(2, 8)}`
+}
+
+function emptyTarget() {
+  return {
+    id: genId(),
+    name: '环境 1',
+    server: {
+      host: '', port: 22, username: 'root', authType: 'password', keyPath: '',
+      secret: '', clearSecret: false, passphrase: '', clearPassphrase: false,
+      secretConfigured: false, secretMasked: '', passphraseConfigured: false,
+    },
+    remotePath: '',
+    health: { enabled: true, url: '', timeout: 90, interval: 3 },
+  }
+}
+
 function emptyProject() {
+  const t = emptyTarget()
   return {
     id: '',
     name: '',
     localPath: '',
     version: { strategy: 'auto', manual: '' },
     composeFile: 'docker-compose.yml',
-    server: {
-      host: '', port: 22, username: 'root', authType: 'password', keyPath: '',
-      secret: '', clearSecret: false, passphrase: '', clearPassphrase: false,
-      secretConfigured: false, secretMasked: '', passphraseConfigured: false,
-    },
     deploy: {
       backupCode: true, backupDatabase: false, dbType: 'postgres', dbContainer: '',
       dbName: '', dbUser: '', autoRollback: true, deleteUploadAfterSuccess: true,
       keepReleases: 10, keepBackups: 10,
     },
-    health: { enabled: true, url: '', timeout: 90, interval: 3 },
+    targets: [t],
   }
 }
 
 const form = reactive(emptyProject())
+const activeTargetId = ref('')
 const detected = ref({ version: '', source: '' })
 const testing = ref(false)
 const connResult = ref(null)
@@ -363,16 +419,24 @@ const logBox = ref(null)
 let offDone = null
 let detectTimer = null
 
+/** 当前编辑的部署目标（响应式：切换目标后服务器/健康检查卡随之切换） */
+const activeTarget = computed(() => {
+  const t = form.targets.find((x) => x.id === activeTargetId.value)
+  return t || form.targets[0] || null
+})
+
 /** 当前选中项目（用于脏检查） */
 const selectedRaw = computed(() => state.deploy.projects.find((p) => p.id === state.deploy.currentProjectId) || null)
 
-/** 表单是否与已保存配置不一致 */
+/** 表单是否与已保存配置不一致（凭据字段不参与比较） */
 const dirty = computed(() => {
   if (!form.id || !selectedRaw.value) return false
   const norm = (o) => {
     const c = JSON.parse(JSON.stringify(o))
-    const s = c.server || {}
-    for (const k of ['secret', 'passphrase', 'clearSecret', 'clearPassphrase', 'secretConfigured', 'secretMasked', 'passphraseConfigured']) delete s[k]
+    for (const t of c.targets || []) {
+      const s = t.server || {}
+      for (const k of ['secret', 'passphrase', 'clearSecret', 'clearPassphrase', 'secretConfigured', 'secretMasked', 'passphraseConfigured']) delete s[k]
+    }
     return JSON.stringify(c)
   }
   return norm(form) !== norm(selectedRaw.value)
@@ -384,8 +448,9 @@ const publishVersion = computed(() => {
 })
 
 const canPublish = computed(() => {
-  if (state.deploy.running || !form.id || dirty.value) return false
-  return !!(form.name && form.localPath && publishVersion.value && form.server.host && form.server.remotePath)
+  if (state.deploy.running || !form.id || dirty.value || !activeTarget.value) return false
+  const t = activeTarget.value
+  return !!(form.name && form.localPath && publishVersion.value && t.server.host && t.remotePath)
 })
 
 // ─── 数据加载 ───
@@ -402,15 +467,22 @@ async function loadProjects() {
 function fillForm(p) {
   const base = emptyProject()
   const merged = { ...base, ...JSON.parse(JSON.stringify(p || {})) }
-  merged.server = { ...base.server, ...(p && p.server || {}) }
-  merged.deploy = { ...base.deploy, ...(p && p.deploy || {}) }
-  merged.health = { ...base.health, ...(p && p.health || {}) }
   merged.version = { ...base.version, ...(p && p.version || {}) }
-  merged.server.secret = ''
-  merged.server.passphrase = ''
-  merged.server.clearSecret = false
-  merged.server.clearPassphrase = false
+  merged.deploy = { ...base.deploy, ...(p && p.deploy || {}) }
+  // 目标数组：至少一个；密钥输入框每次填充后清空（留空＝保持已保存的凭据）
+  merged.targets = (p && Array.isArray(p.targets) && p.targets.length)
+    ? p.targets.map((t) => {
+        const et = emptyTarget()
+        const server = { ...et.server, ...(t.server || {}) }
+        server.secret = ''
+        server.passphrase = ''
+        server.clearSecret = false
+        server.clearPassphrase = false
+        return { ...et, ...t, server, health: { ...et.health, ...(t.health || {}) } }
+      })
+    : base.targets
   Object.assign(form, merged)
+  activeTargetId.value = merged.targets[0].id
   detectVersion()
 }
 
@@ -419,14 +491,16 @@ function onSelectProject(id) {
   releases.value = []
   rollbackVersion.value = ''
   connResult.value = null
+  state.deploy.currentVersion = ''
   if (p) fillForm(p)
-  else Object.assign(form, emptyProject())
+  else { Object.assign(form, emptyProject()); activeTargetId.value = form.targets[0].id }
   loadHistory()
 }
 
 function newProject() {
   state.deploy.currentProjectId = ''
   Object.assign(form, emptyProject())
+  activeTargetId.value = form.targets[0].id
   detected.value = { version: '', source: '' }
   releases.value = []
   connResult.value = null
@@ -435,9 +509,10 @@ function newProject() {
 async function saveProject() {
   if (!form.name) return ElMessage.warning('请填写项目名称')
   const payload = JSON.parse(JSON.stringify(form))
-  if (!form.server.remotePath && form.name) {
-    payload.server.remotePath = `/opt/apps/${form.name}`
-    form.server.remotePath = payload.server.remotePath
+  if (!payload.targets.length) payload.targets = [emptyTarget()]
+  // 部署目录留空时按目标随名称自动建议，用户仍可随时修改
+  for (const t of payload.targets) {
+    if (!t.remotePath && form.name) t.remotePath = `/opt/apps/${form.name}`
   }
   const r = await window.gitReport.deployProjectsSave(payload)
   if (r && r.ok) {
@@ -458,8 +533,46 @@ async function removeProject() {
   await window.gitReport.deployProjectsRemove(form.id)
   state.deploy.currentProjectId = ''
   Object.assign(form, emptyProject())
+  activeTargetId.value = form.targets[0].id
   await loadProjects()
   ElMessage.success('已删除')
+}
+
+// ─── 部署目标（多环境）管理 ───
+async function addTarget() {
+  const t = emptyTarget()
+  t.name = `环境 ${form.targets.length + 1}`
+  form.targets.push(t)
+  activeTargetId.value = t.id
+  connResult.value = null
+  ElMessage.success(`已添加「${t.name}」，填写服务器信息后记得保存配置`)
+}
+
+async function renameTarget() {
+  const t = activeTarget.value
+  if (!t) return
+  try {
+    const { value } = await ElMessageBox.prompt('环境名称（如：测试 / 生产）', '重命名目标', {
+      inputValue: t.name, confirmButtonText: '确定', cancelButtonText: '取消',
+      inputPattern: /\S+/, inputErrorMessage: '名称不能为空',
+    })
+    t.name = value.trim()
+  } catch { /* 取消 */ }
+}
+
+async function removeTarget() {
+  const t = activeTarget.value
+  if (!t || form.targets.length <= 1) return
+  try {
+    await ElMessageBox.confirm(
+      `确认删除目标「${t.name}」（${t.server.host || '未配置主机'}）？仅删除该环境的配置，不影响服务器。`,
+      '删除目标', { type: 'warning' },
+    )
+  } catch { return }
+  const i = form.targets.indexOf(t)
+  form.targets.splice(i, 1)
+  if (activeTargetId.value === t.id) activeTargetId.value = form.targets[Math.max(0, i - 1)].id
+  ElMessage.success('已删除目标')
 }
 
 async function browseLocal() {
@@ -468,7 +581,7 @@ async function browseLocal() {
 }
 async function browseKey() {
   const dir = await window.gitReport.pickDirectory()
-  if (dir) form.server.keyPath = dir
+  if (dir && activeTarget.value) activeTarget.value.server.keyPath = dir
 }
 
 // ─── 版本识别（防抖） ───
@@ -484,17 +597,13 @@ watch(() => form.localPath, () => {
   clearTimeout(detectTimer)
   detectTimer = setTimeout(detectVersion, 400)
 })
-watch(() => form.name, (name) => {
-  // 部署目录留空时随名称自动建议，用户仍可随时修改
-  if (!form.server.remotePath && name) form.server.remotePath = `/opt/apps/${name}`
-})
 
-// ─── 连接测试 ───
+// ─── 连接测试（当前目标） ───
 async function testConnection() {
   testing.value = true
   connResult.value = null
   try {
-    connResult.value = await window.gitReport.deployTestConnection(form.id)
+    connResult.value = await window.gitReport.deployTestConnection(form.id, activeTargetId.value)
   } catch (e) {
     connResult.value = { ok: false, error: e.message || String(e) }
   } finally {
@@ -502,7 +611,7 @@ async function testConnection() {
   }
 }
 
-// ─── 发布 ───
+// ─── 发布（当前目标） ───
 function resetStages() {
   const st = {}
   for (const s of STAGE_LIST) st[s.id] = { status: 'waiting', durationMs: 0 }
@@ -514,10 +623,11 @@ function resetStages() {
 
 async function publish() {
   const v = publishVersion.value
+  const t = activeTarget.value
   const oldV = state.deploy.currentVersion || '（未知）'
   try {
     await ElMessageBox.confirm(
-      `即将发布 ${form.name} ${v} 到 ${form.server.host}:${form.server.remotePath}（当前线上版本 ${oldV}）。发布过程中会备份并自动构建重启，是否继续？`,
+      `即将发布 ${form.name} ${v} 到【${t.name}】${t.server.host}:${t.remotePath}（当前线上版本 ${oldV}）。发布过程中会备份并自动构建重启，是否继续？`,
       '确认发布',
       { type: 'warning', confirmButtonText: '🚀 发布', cancelButtonText: '取消' },
     )
@@ -525,7 +635,7 @@ async function publish() {
   resetStages()
   state.deploy.running = true
   try {
-    const r = await window.gitReport.deployRun(form.id)
+    const r = await window.gitReport.deployRun(form.id, activeTargetId.value)
     if (r && r.error) ElMessage.error(r.error)
   } catch (e) {
     state.deploy.running = false
@@ -561,10 +671,10 @@ watch(() => state.deploy.logs.length, async () => {
   if (logBox.value) logBox.value.scrollTop = logBox.value.scrollHeight
 })
 
-// ─── 版本列表 / 回滚 ───
+// ─── 版本列表 / 回滚（当前目标） ───
 async function queryReleases() {
   try {
-    const r = await window.gitReport.deployReleases(form.id)
+    const r = await window.gitReport.deployReleases(form.id, activeTargetId.value)
     if (r && r.ok) {
       releases.value = r.releases || []
       state.deploy.currentVersion = r.current || state.deploy.currentVersion
@@ -577,10 +687,12 @@ async function queryReleases() {
   }
 }
 
-async function doRollback(version) {
+async function doRollback(version, targetId) {
+  const tid = targetId || activeTargetId.value
+  const tName = (form.targets.find((x) => x.id === tid) || {}).name || ''
   try {
     await ElMessageBox.confirm(
-      `确认回滚到 ${version}？服务器将停止当前版本、切换 current 并重启目标版本，随后执行健康检查。`,
+      `确认回滚到 ${version}${tName ? `（目标：${tName}）` : ''}？服务器将停止当前版本、切换 current 并重启目标版本，随后执行健康检查。`,
       '确认回滚',
       { type: 'warning', confirmButtonText: '回滚' },
     )
@@ -589,10 +701,10 @@ async function doRollback(version) {
   resetStages()
   state.deploy.running = true
   try {
-    const r = await window.gitReport.deployRollback(form.id, version)
+    const r = await window.gitReport.deployRollback(form.id, tid, version)
     if (r && r.ok) {
       ElMessage.success(`已回滚到 ${version}`)
-      state.deploy.currentVersion = version
+      if (tid === activeTargetId.value) state.deploy.currentVersion = version
     } else if (r && r.error) {
       ElMessage.error(r.error)
     }
@@ -649,22 +761,23 @@ onMounted(() => {
     const r = d && d.record
     if (!r) return
     const esc = (s) => String(s ?? '').replace(/[&<>]/g, (c) => ({ '&': '&amp;', '<': '&lt;', '>': '&gt;' }[c]))
+    const head = `<b>${esc(r.projectName)}</b>${r.targetName ? ` · ${esc(r.targetName)}` : ''} ${esc(r.version)} → ${esc(r.host)}`
     if (r.status === 'success') {
-      state.deploy.currentVersion = r.version
+      if (r.targetId === activeTargetId.value) state.deploy.currentVersion = r.version
       await ElMessageBox.alert(
-        `<b>${esc(r.projectName)}</b> ${esc(r.version)} → ${esc(r.host)}<br/>耗时 ${fmtDur(r.durationMs)}<br/><br/>✓ 发布成功`,
+        `${head}<br/>耗时 ${fmtDur(r.durationMs)}<br/><br/>✓ 发布成功`,
         '发布成功',
         { dangerouslyUseHTMLString: true, confirmButtonText: '好的' },
       )
     } else if (r.status === 'failed') {
       await ElMessageBox.alert(
-        `版本 ${esc(r.version)}（原版本 ${esc(r.oldVersion) || '无'}）<br/><br/>✗ 发布失败<br/>${esc(r.message) || ''}`,
+        `${head}<br/>版本 ${esc(r.version)}（原版本 ${esc(r.oldVersion) || '无'}）<br/><br/>✗ 发布失败<br/>${esc(r.message) || ''}`,
         '发布失败',
         { dangerouslyUseHTMLString: true, type: 'error', confirmButtonText: '知道了' },
       )
     } else if (r.status === 'rolled_back') {
       await ElMessageBox.alert(
-        `版本 ${esc(r.version)} 发布失败，已自动回滚到 <b>${esc(r.oldVersion) || '旧版本'}</b>。<br/><br/>原因：${esc(r.message) || ''}`,
+        `${head}<br/>版本 ${esc(r.version)} 发布失败，已自动回滚到 <b>${esc(r.oldVersion) || '旧版本'}</b>。<br/><br/>原因：${esc(r.message) || ''}`,
         '已自动回滚',
         { dangerouslyUseHTMLString: true, type: 'warning', confirmButtonText: '知道了' },
       )
@@ -693,6 +806,10 @@ onUnmounted(() => {
 .f-mini { font-size: 12.5px; color: var(--brand-text-sub); }
 .f-hint { font-size: 12px; color: var(--brand-text-sub); line-height: 1.6; margin-top: 2px; }
 .check-row { gap: 16px; }
+
+.target-row { display: flex; align-items: center; gap: 12px; flex-wrap: wrap; }
+.target-host { font-size: 12.5px; color: var(--brand-text-sub); overflow: hidden; text-overflow: ellipsis; white-space: nowrap; max-width: 420px; }
+.target-ops { display: inline-flex; align-items: center; gap: 2px; }
 
 .ver-info { font-size: 13px; color: var(--brand-text-sub); font-weight: 400; }
 .ver-info b { color: var(--brand-text); font-family: var(--brand-mono); }

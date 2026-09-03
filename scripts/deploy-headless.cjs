@@ -1,17 +1,18 @@
 /**
- * 无头发布入口 —— 用法: npx electron scripts/deploy-headless.cjs <projectId>
+ * 无头发布入口 —— 用法: npx electron scripts/deploy-headless.cjs <projectId> [targetId]
  *
  * 场景：参数已在 GUI 里配置好（密码经 safeStorage 加密保存在 userData），
  * 需要在不打开界面的情况下执行一次完整发布（CI / 脚本化 / 代办）。
- * 复用主进程 deploy 模块与 GUI 完全相同的链路；日志与阶段事件打到 stdout。
- * 退出码：0=发布成功，1=失败/回滚/取消。
+ * targetId 省略时使用项目第一个部署目标。复用主进程 deploy 模块与 GUI
+ * 完全相同的链路；日志与阶段事件打到 stdout。退出码：0=成功，1=失败/回滚/取消。
  */
 const path = require('path')
 const { app } = require('electron')
 
 const projectId = process.argv[2]
+const targetId = process.argv[3] || undefined
 if (!projectId) {
-  console.error('用法: electron scripts/deploy-headless.cjs <projectId>')
+  console.error('用法: electron scripts/deploy-headless.cjs <projectId> [targetId]')
   app.exit(1)
 }
 
@@ -37,7 +38,7 @@ app.whenReady().then(async () => {
   })
 
   try {
-    const record = await deployService.run(projectId)
+    const record = await deployService.run(projectId, targetId)
     console.log('FINAL_STATUS=' + record.status)
     app.exit(record.status === 'success' ? 0 : 1)
   } catch (e) {

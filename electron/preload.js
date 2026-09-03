@@ -65,11 +65,15 @@ contextBridge.exposeInMainWorld('gitReport', {
   deployProjectsSave: (p) => ipcRenderer.invoke('deploy:projects:save', toPlain(p)),
   deployProjectsRemove: (id) => ipcRenderer.invoke('deploy:projects:remove', id),
   deployDetectVersion: (project) => ipcRenderer.invoke('deploy:detectVersion', toPlain(project)),
-  deployTestConnection: (id) => ipcRenderer.invoke('deploy:testConnection', id),
-  deployRun: (id) => ipcRenderer.invoke('deploy:run', id),
+  deployTestConnection: (projectId, targetId) =>
+    ipcRenderer.invoke('deploy:testConnection', { projectId, targetId }),
+  deployRun: (projectId, targetId) =>
+    ipcRenderer.invoke('deploy:run', { projectId, targetId }),
   deployCancel: () => ipcRenderer.invoke('deploy:cancel'),
-  deployReleases: (id) => ipcRenderer.invoke('deploy:releases', id),
-  deployRollback: (projectId, version) => ipcRenderer.invoke('deploy:rollback', { projectId, version }),
+  deployReleases: (projectId, targetId) =>
+    ipcRenderer.invoke('deploy:releases', { projectId, targetId }),
+  deployRollback: (projectId, targetId, version) =>
+    ipcRenderer.invoke('deploy:rollback', { projectId, targetId, version }),
   deployHistoryList: (projectId) => ipcRenderer.invoke('deploy:history:list', projectId),
   deployHistoryReadLog: (logFile) => ipcRenderer.invoke('deploy:history:readLog', logFile),
   deployHistoryClear: (projectId) => ipcRenderer.invoke('deploy:history:clear', projectId),

@@ -132,13 +132,13 @@ function readDeployScript() {
 }
 
 /** 拼装 deploy.sh 参数（服务器目录结构方案 §8：home 下 releases/uploads/backups/shared/deployer） */
-function buildDeployArgs(project, pack, version) {
+function buildDeployArgs(project, target, pack, version) {
   const d = project.deploy || {}
-  const h = project.health || {}
+  const h = target.health || {}
   const args = [
     'deploy',
     '--app', project.name,
-    '--home', project.server.remotePath,
+    '--home', target.remotePath,
     '--package', pack.fileName,
     '--sha256', pack.sha256,
     '--version', version,
@@ -179,7 +179,7 @@ function resolveVersion(project) {
 }
 
 /** 发布前本地检查（方案 §23 的关键项） */
-function preCheckLocal(project, version) {
+function preCheckLocal(project, target, version) {
   const problems = []
   if (!project.name) problems.push('缺少项目名称')
   if (!project.localPath || !fs.existsSync(project.localPath)) problems.push(`本地项目目录不存在: ${project.localPath}`)
@@ -187,24 +187,32 @@ function preCheckLocal(project, version) {
     problems.push(`Docker Compose 文件不存在: ${project.composeFile}`)
   }
   if (!version) problems.push('未识别到版本号（可改用手动输入）')
-  const s = project.server || {}
-  if (!s.host) problems.push('未配置服务器地址')
-  if (!s.remotePath) problems.push('未配置远程部署目录')
-  if (s.authType === 'key' && (!s.keyPath || !fs.existsSync(s.keyPath))) problems.push(`SSH 私钥文件不存在: ${s.keyPath}`)
+  const s = target.server || {}
+  if (!s.host) problems.push(`[${target.name}] 未配置服务器地址`)
+  if (!target.remotePath) problems.push(`[${target.name}] 未配置远程部署目录`)
+  if (s.authType === 'key' && (!s.keyPath || !fs.existsSync(s.keyPath))) problems.push(`[${target.name}] SSH 私钥文件不存在: ${s.keyPath}`)
   return problems
 }
 
+/** 从项目取部署目标（targetId 省略时用第一个目标） */
+function getTarget(project, targetId) {
+  const targets = Array.isArray(project.targets) ? project.targets : []
+  return targets.find((t) => t.id === targetId) || targets[0]
+}
+
 /**
- * 执行完整发布。所有事件经 emit 推送：
+ * 执行完整发布（按部署目标）。所有事件经 emit 推送：
  *   deploy:stage {stage,status} / deploy:log {level,text,ts}
  *   deploy:progress {kind,percent} / deploy:done {record}
  */
-async function run(projectId, runOpts) {
+async function run(projectId, targetId) {
   if (activeRun) throw new Error('已有发布任务进行中，请等待完成或取消')
   const list = projects.list()
   const project = list.find((p) => p.id === projectId)
   if (!project) throw new Error('项目配置不存在，请重新保存')
-  const creds = projects.getCredentials(projectId)
+  const target = getTarget(project, targetId)
+  if (!target) throw new Error('项目缺少部署目标，请先在配置中添加')
+  const creds = projects.getCredentials(projectId, target.id) || { password: '', passphrase: '' }
 
   const runId = crypto.randomBytes(6).toString('hex')
   const tracker = newStageTracker()
@@ -216,6 +224,8 @@ async function run(projectId, runOpts) {
     id: runId,
     projectId: project.id,
     projectName: project.name,
+    targetId: target.id,
+    targetName: target.name,
     type: 'deploy',
     version: '',
     oldVersion: '',
@@ -223,8 +233,8 @@ async function run(projectId, runOpts) {
     startedAt: Date.now(),
     finishedAt: 0,
     durationMs: 0,
-    host: `${project.server.host}:${project.server.port}`,
-    remotePath: project.server.remotePath,
+    host: `${target.server.host}:${target.server.port}`,
+    remotePath: target.remotePath,
     message: '',
     logFile: '',
     stages: tracker.state,
@@ -253,13 +263,13 @@ async function run(projectId, runOpts) {
     const t0 = Date.now()
     const ver = resolveVersion(project)
     record.version = ver.version
-    const problems = preCheckLocal(project, ver.version)
+    const problems = preCheckLocal(project, target, ver.version)
     if (problems.length) {
       for (const p of problems) log('error', p)
       tracker.end('check', 'failed', t0)
       return finish('failed', problems[0])
     }
-    log('info', `开始发布 ${project.name} ${ver.version} → ${project.server.host}`)
+    log('info', `开始发布 ${project.name} ${ver.version} → ${target.name}（${target.server.host}）`)
     log('success', `项目检查通过（版本来源: ${ver.source}）`)
     tracker.end('check', 'success', t0)
 
@@ -279,19 +289,19 @@ async function run(projectId, runOpts) {
     // ── 阶段 3：连接 + 上传 ─────────────────────────
     tracker.begin('upload')
     const t2 = Date.now()
-    log('info', `连接服务器 ${project.server.host}:${project.server.port}……`)
+    log('info', `连接服务器 ${target.server.host}:${target.server.port}……`)
     setC(await ssh.connect({
-      host: project.server.host,
-      port: project.server.port,
-      username: project.server.username,
-      authType: project.server.authType,
+      host: target.server.host,
+      port: target.server.port,
+      username: target.server.username,
+      authType: target.server.authType,
       password: creds.password,
-      keyPath: project.server.keyPath,
+      keyPath: target.server.keyPath,
       passphrase: creds.passphrase,
     }))
     log('success', 'SSH 连接成功')
 
-    const remoteHome = project.server.remotePath
+    const remoteHome = target.remotePath
     log('info', '初始化远程目录结构…')
     await ssh.mkdirp(conn, ssh.remoteJoin(remoteHome, 'uploads'))
     await ssh.mkdirp(conn, ssh.remoteJoin(remoteHome, 'deployer'))
@@ -322,7 +332,7 @@ async function run(projectId, runOpts) {
     tracker.end('upload', 'success', t2)
 
     // ── 阶段 4~8：服务器端执行 deploy.sh ────────────
-    const cmd = `bash ${quoteArg(scriptRemote)} ${buildDeployArgs(project, pack, ver.version).map(quoteArg).join(' ')}`
+    const cmd = `bash ${quoteArg(scriptRemote)} ${buildDeployArgs(project, target, pack, ver.version).map(quoteArg).join(' ')}`
     const res = await ssh.exec(conn, cmd, (chunk) => pipeScriptOutput(chunk, tracker, resultBox))
 
     if (resultBox.ok && res.code === 0) {
@@ -380,21 +390,29 @@ function uploadTextFile(conn, text, remotePath) {
   })
 }
 
-/** 测试连接：返回服务器环境信息（Docker/Compose/unzip/磁盘） */
-async function testConnection(projectId) {
+/** 按目标连接服务器（公共取配置+连接逻辑） */
+async function connectTarget(projectId, targetId) {
   const list = projects.list()
   const project = list.find((p) => p.id === projectId)
   if (!project) throw new Error('项目配置不存在，请先保存')
-  const creds = projects.getCredentials(projectId)
+  const target = getTarget(project, targetId)
+  if (!target) throw new Error('项目缺少部署目标，请先在配置中添加')
+  const creds = projects.getCredentials(projectId, target.id) || { password: '', passphrase: '' }
   const conn = await ssh.connect({
-    host: project.server.host,
-    port: project.server.port,
-    username: project.server.username,
-    authType: project.server.authType,
+    host: target.server.host,
+    port: target.server.port,
+    username: target.server.username,
+    authType: target.server.authType,
     password: creds.password,
-    keyPath: project.server.keyPath,
+    keyPath: target.server.keyPath,
     passphrase: creds.passphrase,
   })
+  return { project, target, conn }
+}
+
+/** 测试连接：返回服务器环境信息（Docker/Compose/unzip/磁盘） */
+async function testConnection(projectId, targetId) {
+  const { target, conn } = await connectTarget(projectId, targetId)
   try {
     const cmd = [
       'echo __CONN_OK__',
@@ -421,21 +439,9 @@ async function testConnection(projectId) {
 }
 
 /** 服务器 releases 目录列表 + 当前指向（方案 §19/§20 的版本管理基础） */
-async function listReleases(projectId) {
-  const list = projects.list()
-  const project = list.find((p) => p.id === projectId)
-  if (!project) throw new Error('项目配置不存在，请先保存')
-  const creds = projects.getCredentials(projectId)
-  const home = project.server.remotePath
-  const conn = await ssh.connect({
-    host: project.server.host,
-    port: project.server.port,
-    username: project.server.username,
-    authType: project.server.authType,
-    password: creds.password,
-    keyPath: project.server.keyPath,
-    passphrase: creds.passphrase,
-  })
+async function listReleases(projectId, targetId) {
+  const { target, conn } = await connectTarget(projectId, targetId)
+  const home = target.remotePath
   try {
     const res = await ssh.exec(conn,
       `ls -1 ${quoteArg(ssh.remoteJoin(home, 'releases'))} 2>/dev/null; echo __CUR__$(readlink ${quoteArg(ssh.remoteJoin(home, 'current'))} 2>/dev/null)`)
@@ -449,25 +455,23 @@ async function listReleases(projectId) {
 }
 
 /** 手动回滚到指定版本（方案 §20：直接使用服务器已有 release，不重新上传） */
-async function rollback(projectId, version) {
+async function rollback(projectId, version, targetId) {
   if (activeRun) throw new Error('已有发布任务进行中')
-  const list = projects.list()
-  const project = list.find((p) => p.id === projectId)
-  if (!project) throw new Error('项目配置不存在')
-  const creds = projects.getCredentials(projectId)
-  const home = project.server.remotePath
-  const h = project.health || {}
+  const { project, target, conn } = await connectTarget(projectId, targetId)
+  const home = target.remotePath
+  const h = target.health || {}
   const logBuf = []
   const runId = crypto.randomBytes(6).toString('hex')
   const record = {
     id: runId, projectId: project.id, projectName: project.name, type: 'rollback',
+    targetId: target.id, targetName: target.name,
     version, oldVersion: '', status: 'running',
     startedAt: Date.now(), finishedAt: 0, durationMs: 0,
-    host: `${project.server.host}:${project.server.port}`, remotePath: home,
+    host: `${target.server.host}:${target.server.port}`, remotePath: home,
     message: '', logFile: '',
   }
   logSink = (level, text) => logBuf.push(`${ts()} [${level.toUpperCase()}] ${text}`)
-  log('info', `开始回滚 ${project.name} → ${version}`)
+  log('info', `开始回滚 ${project.name}（${target.name}）→ ${version}`)
   const finish = (status, message) => {
     record.status = status
     record.message = message || ''
@@ -479,15 +483,6 @@ async function rollback(projectId, version) {
     return JSON.parse(JSON.stringify(record))
   }
 
-  const conn = await ssh.connect({
-    host: project.server.host,
-    port: project.server.port,
-    username: project.server.username,
-    authType: project.server.authType,
-    password: creds.password,
-    keyPath: project.server.keyPath,
-    passphrase: creds.passphrase,
-  })
   activeRun = { id: runId, conn, canceled: false }
   try {
     await ssh.mkdirp(conn, ssh.remoteJoin(home, 'deployer'))
