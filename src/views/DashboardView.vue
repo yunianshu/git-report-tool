@@ -11,14 +11,16 @@
       </template>
     </PageHeader>
 
-    <template v-if="state.projects.items.length">
-      <section class="metric-strip" aria-label="项目概览">
-        <div class="metric-item"><span>项目总数</span><strong>{{ state.projects.items.length }}</strong><small>{{ activeCount }} 个进行中</small></div>
-        <div class="metric-item"><span>已关联目录</span><strong>{{ linkedCount }}</strong><small>可用于项目上下文</small></div>
-        <div class="metric-item"><span>Git 活动源</span><strong>{{ state.discoveredRepos.length }}</strong><small>Git 只是可选数据源</small></div>
-        <div class="metric-item"><span>已配置部署</span><strong>{{ deployReadyCount }}</strong><small>可直接进入发布流程</small></div>
-      </section>
+    <section class="metric-strip" aria-label="项目概览">
+      <div class="metric-item"><span>项目总数</span><strong>{{ state.projects.items.length }}</strong><small>{{ activeCount }} 个进行中</small></div>
+      <div class="metric-item"><span>已关联目录</span><strong>{{ linkedCount }}</strong><small>可用于项目上下文</small></div>
+      <button class="metric-item metric-item-action" type="button" aria-label="查看 Git 活动源列表" @click="$emit('navigate', 'activity-sources')">
+        <span>Git 活动源</span><strong>{{ state.discoveredRepos.length }}</strong><small>点击查看并转换为项目</small>
+      </button>
+      <div class="metric-item"><span>已配置部署</span><strong>{{ deployReadyCount }}</strong><small>可直接进入发布流程</small></div>
+    </section>
 
+    <template v-if="state.projects.items.length">
       <div class="dashboard-grid">
         <section class="workspace-panel capability-panel">
           <div class="section-heading">

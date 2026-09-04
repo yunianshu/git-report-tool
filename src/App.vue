@@ -9,12 +9,12 @@
       />
       <main class="content-area">
         <transition name="view-fade" mode="out-in">
-          <DashboardView v-if="view === 'dashboard'" key="dashboard" @navigate="view = $event" @create-project="openProjectEditor()" />
-          <ProjectsView v-else-if="view === 'projects'" key="projects" @navigate="view = $event" @create-project="openProjectEditor()" @edit-project="openProjectEditor" />
-          <ChatView v-else-if="view === 'chat'" key="chat" @navigate="view = $event" />
-          <ReportView v-else-if="view === 'report'" key="report" @navigate="view = $event" />
-          <DeployView v-else-if="view === 'deploy'" key="deploy" @navigate="view = $event" />
-          <SettingsView v-else key="settings" />
+          <DashboardView v-if="view === 'dashboard'" key="dashboard" @navigate="navigate" @create-project="openProjectEditor()" />
+          <ProjectsView v-else-if="view === 'projects'" key="projects" @navigate="navigate" @create-project="openProjectEditor()" @edit-project="openProjectEditor" />
+          <ChatView v-else-if="view === 'chat'" key="chat" @navigate="navigate" />
+          <ReportView v-else-if="view === 'report'" key="report" @navigate="navigate" />
+          <DeployView v-else-if="view === 'deploy'" key="deploy" @navigate="navigate" />
+          <SettingsView v-else key="settings" :initial-section="settingsSection" />
         </transition>
       </main>
     </section>
@@ -41,9 +41,20 @@ import { toPlain } from './utils/ipc'
 import { shortPath } from './utils/path'
 
 const view = ref('dashboard')
+const settingsSection = ref('ai')
 const editorVisible = ref(false)
 const editingProject = ref(null)
-const { loadProjects, selectProject, saveProject, promptImportDiscoveredRepos } = useProjects()
+const { loadProjects, selectProject, saveProject } = useProjects()
+
+/** 将页面导航意图集中映射；活动源列表复用设置页的 Git 活动分区。 */
+function navigate(target) {
+  if (target === 'activity-sources') {
+    settingsSection.value = 'git'
+    view.value = 'settings'
+    return
+  }
+  view.value = target
+}
 
 function openProjectEditor(project = null) {
   editingProject.value = project ? JSON.parse(JSON.stringify(project)) : null
@@ -102,7 +113,6 @@ onMounted(async () => {
       if (Array.isArray(repos) && repos.length && !state.discoveredRepos.length) {
         state.discoveredRepos = repos.map((path) => ({ path, shortName: shortPath(path), info: null }))
       }
-      promptImportDiscoveredRepos(repos)
     }).catch(() => { /* 预热失败时由活动报告和设置页按需扫描。 */ })
   } catch (error) {
     console.error('初始化应用失败', error)

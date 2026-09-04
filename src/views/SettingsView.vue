@@ -2,6 +2,63 @@
   <div class="settings-page">
     <PageHeader eyebrow="PREFERENCES" title="设置" description="管理 AI 服务、Git 活动采集和个人身份。" />
     <el-segmented v-model="activeSection" :options="SETTING_SECTIONS" class="settings-sections" />
+
+    <!-- Git 活动源：作为工作台入口的直接落点，优先于扫描配置展示 -->
+    <el-card v-show="activeSection === 'git'" shadow="never" class="card settings-repo-card">
+      <template #header>
+        <div class="card-header">
+          <span>Git 活动源（{{ state.discoveredRepos.length }}）</span>
+          <div class="header-actions">
+            <span v-if="scanning" class="progress-text">{{ progressText }}</span>
+            <el-button type="primary" plain :loading="scanning" @click="doScan">
+              <el-icon style="margin-right: 4px"><Refresh /></el-icon>重新扫描
+            </el-button>
+          </div>
+        </div>
+      </template>
+      <div class="table-wrap">
+        <el-table :data="state.discoveredRepos" height="100%" size="small">
+          <template #empty>
+            <div class="table-empty">
+              <el-icon><FolderOpened /></el-icon>
+              <p>暂无活动源，添加扫描根目录后会自动发现 Git 仓库</p>
+            </div>
+          </template>
+          <el-table-column label="活动源" min-width="200" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.shortName }}</template>
+          </el-table-column>
+          <el-table-column label="路径" min-width="260" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.path }}</template>
+          </el-table-column>
+          <el-table-column label="远程仓库" min-width="170" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.info?.remote || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="分支" width="90">
+            <template #default="{ row }">{{ row.info?.branch || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="最近提交" min-width="190" show-overflow-tooltip>
+            <template #default="{ row }">{{ row.info?.lastCommit || '-' }}</template>
+          </el-table-column>
+          <el-table-column label="操作" width="120" fixed="right">
+            <template #default="{ row }">
+              <el-button
+                v-if="!isRepoAdded(row.path)"
+                text
+                size="small"
+                type="primary"
+                :loading="isRepoConverting(row.path)"
+                :disabled="isRepoConverting(row.path)"
+                @click="convertRepoToProject(row)"
+              >
+                转换为项目
+              </el-button>
+              <span v-else class="repo-added-tag">已转换</span>
+            </template>
+          </el-table-column>
+        </el-table>
+      </div>
+    </el-card>
+
     <!-- 扫描根目录 -->
     <el-card v-show="activeSection === 'git'" shadow="never" class="card">
       <template #header>
@@ -155,54 +212,6 @@
       </div>
     </el-card>
 
-    <!-- 已发现仓库 -->
-    <el-card v-show="activeSection === 'git'" shadow="never" class="card settings-repo-card">
-      <template #header>
-        <div class="card-header">
-          <span>Git 数据源状态（{{ state.discoveredRepos.length }}）</span>
-          <div class="header-actions">
-            <span v-if="scanning" class="progress-text">{{ progressText }}</span>
-            <el-button type="primary" plain :loading="scanning" @click="doScan">
-              <el-icon style="margin-right: 4px"><Refresh /></el-icon>重新扫描
-            </el-button>
-          </div>
-        </div>
-      </template>
-      <div class="table-wrap">
-        <el-table :data="state.discoveredRepos" height="100%" size="small">
-          <template #empty>
-            <div class="table-empty">
-              <el-icon><FolderOpened /></el-icon>
-              <p>暂无仓库，添加根目录后会自动扫描</p>
-            </div>
-          </template>
-          <el-table-column label="项目" min-width="200" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.shortName }}</template>
-          </el-table-column>
-          <el-table-column label="路径" min-width="260" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.path }}</template>
-          </el-table-column>
-          <el-table-column label="远程仓库" min-width="170" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.info?.remote || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="分支" width="90">
-            <template #default="{ row }">{{ row.info?.branch || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="最近提交" min-width="190" show-overflow-tooltip>
-            <template #default="{ row }">{{ row.info?.lastCommit || '-' }}</template>
-          </el-table-column>
-          <el-table-column label="操作" width="100" fixed="right">
-            <template #default="{ row }">
-              <el-button v-if="!isRepoAdded(row.path)" text size="small" type="primary" @click="addRepoAsProject(row)">
-                加为项目
-              </el-button>
-              <span v-else class="repo-added-tag">已加入</span>
-            </template>
-          </el-table-column>
-        </el-table>
-      </div>
-    </el-card>
-
     <section v-show="activeSection === 'about'" class="workspace-panel settings-about">
       <span class="section-kicker">LOCAL FIRST</span>
       <h2>个人项目管理</h2>
@@ -225,7 +234,14 @@ import { toPlain } from '../utils/ipc'
 import { shortPath, pathKey } from '../utils/path'
 import PageHeader from '../components/PageHeader.vue'
 
-const { loadProjects, promptImportDiscoveredRepos } = useProjects()
+const props = defineProps({
+  initialSection: {
+    type: String,
+    default: 'ai',
+    validator: (value) => ['ai', 'git', 'identity', 'about'].includes(value),
+  },
+})
+const { loadProjects } = useProjects()
 
 const SETTING_SECTIONS = [
   { label: 'AI 服务', value: 'ai' },
@@ -233,7 +249,7 @@ const SETTING_SECTIONS = [
   { label: '个人身份', value: 'identity' },
   { label: '应用信息', value: 'about' },
 ]
-const activeSection = ref('ai')
+const activeSection = ref(props.initialSection)
 
 const EXCLUDE_GROUPS = [
   { label: '依赖与构建缓存', items: ['node_modules', '.cache', 'fvm_cache', '.gradle', 'Pods'] },
@@ -245,6 +261,7 @@ const EXCLUDE_PRESETS = EXCLUDE_GROUPS.flatMap((g) => g.items)
 const newRoot = ref('')
 const scanning = ref(false)
 const progressText = ref('')
+const convertingRepoKeys = ref([])
 const newIdName = ref('')
 const newIdEmail = ref('')
 
@@ -392,9 +409,10 @@ onMounted(() => {
   unsubScanDone = window.gitReport.onScanDone(() => {
     scanning.value = false
     progressText.value = ''
-    // 扫描完成后检查：有尚未加入项目的仓库时给出一次性「加为项目」提示
-    promptImportDiscoveredRepos(state.discoveredRepos.map((r) => r.path))
   })
+  // 启动预热已发现的仓库没有详情，进入列表时补充加载远程地址、分支和最近提交。
+  infoQueue = state.discoveredRepos.filter((row) => !row.info)
+  if (infoQueue.length) ensureInfoWorkers()
   // 已配置 AI 接口时静默拉取模型列表，填充下拉
   if (state.config.ai?.keyConfigured && state.config.ai?.baseUrl) {
     fetchModels(false)
@@ -450,16 +468,26 @@ function isRepoAdded(repoPath) {
   const key = pathKey(repoPath)
   return state.projects.items.some((p) => pathKey(p.localPath) === key)
 }
-/** 一键把发现的仓库加为工作区项目（不切换当前项目） */
-async function addRepoAsProject(row) {
+function isRepoConverting(repoPath) {
+  return convertingRepoKeys.value.includes(pathKey(repoPath))
+}
+/** 将单个活动源显式转换为项目；路径锁避免快速点击重复创建。 */
+async function convertRepoToProject(row) {
+  const key = pathKey(row.path)
+  if (!key || isRepoAdded(row.path) || convertingRepoKeys.value.includes(key)) return
   const name = String(row.path).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || row.shortName || '未命名项目'
+  convertingRepoKeys.value.push(key)
   try {
+    // 保存前再次检查，避免列表状态变化期间重复创建同目录项目。
+    if (isRepoAdded(row.path)) return
     const r = await window.gitReport.projectsSave(toPlain({ name, localPath: row.path }))
     if (!r?.ok) throw new Error(r?.error || '保存失败')
     await loadProjects()
-    ElMessage.success(`已将「${name}」加入项目`)
+    ElMessage.success(`已将活动源「${name}」转换为项目`)
   } catch (e) {
-    ElMessage.error(e?.message || '加入项目失败')
+    ElMessage.error(e?.message || '转换项目失败')
+  } finally {
+    convertingRepoKeys.value = convertingRepoKeys.value.filter((item) => item !== key)
   }
 }
 function removeRoot(i) {
