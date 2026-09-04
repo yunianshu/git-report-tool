@@ -27,7 +27,7 @@
     <div class="sidebar-footer">
       <span class="status-dot" />
       <span>本地数据</span>
-      <span class="sidebar-version">v1.4.3</span>
+      <span class="sidebar-version">v1.4.4</span>
     </div>
   </aside>
 </template>
