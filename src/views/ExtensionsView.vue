@@ -374,9 +374,8 @@ onMounted(loadExtensions)
 .ext-card-note {
   font-size: 12px;
   color: var(--brand-text-sub);
-  border-top: 1px solid #f2f4f7;
-  padding-top: 8px;
   margin-top: auto;
+  padding-top: 10px;
 }
 .ext-card-note-warn { color: #b8860b; }
 
