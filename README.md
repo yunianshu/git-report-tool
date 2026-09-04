@@ -82,7 +82,7 @@
 统一管理本机四个 AI CLI 平台的技能（skills）与插件（plugins）：**Claude Code / Codex / Kimi CLI / Zcode**。
 
 - **真实扫描**：读取各平台主目录（`~/.claude`、`~/.codex`、`~/.kimi`、`~/.zcode`）的技能目录与插件注册表，展示名称、描述、版本、来源市场与启用状态；支持 SKILL.md 原文预览与目录直达
-- **技能启停**：采用目录迁移法（`skills/` ↔ `skills-disabled/`），与 Codex 官方禁用机制一致，可逆且不改动各 CLI 自身文件；Zcode 等链接聚合目录（symlink/junction）可正常扫描与迁移，且不触碰链接源
+- **技能启停**：采用目录迁移法（`skills/` ↔ `skills-disabled/`），与 Codex 官方禁用机制一致，可逆且不改动各 CLI 自身文件；链接技能（如 Zcode 聚合层指向 Claude Code 的 junction/symlink）启停时**级联同步源平台**——禁用会连同源平台真实目录一起移入禁用位，启用时先恢复源目录再重建链接，失败自动回滚；指向外部目录的链接仅移动链接本身；源平台直接禁用导致的悬空链接会在列表中标记「链接失效」，仍可开关处置
 - **插件启停**：直接写入各平台自身的启用配置——Claude Code 写 `~/.claude/settings.json` 的 `enabledPlugins`，Zcode 写 `~/.zcode/cli/config.json` 的 `plugins.enabledPlugins`，Codex 定向翻转 `~/.codex/config.toml` 对应 `[plugins."id"]` 段（保留其余内容与换行风格）；Kimi CLI 暂无插件体系时明确提示
 - **安全边界**：配置文件解析失败时拒绝写入并保留原文件；技能/插件名称做路径穿越校验；同名冲突时拒绝覆盖
 

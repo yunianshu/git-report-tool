@@ -110,13 +110,53 @@ function isRealDir(entry, entryPath) {
   return false
 }
 
+/**
+ * 解析链接目标归属的平台技能目录（仅认各平台启用的 skills 目录下、单层技能名）。
+ * 返回 { platformId, name } 或 null：目标在外部 / 指向 skills-disabled / 多层嵌套时不级联。
+ */
+function matchCascadePlatform(linkTarget) {
+  let target = linkTarget || ''
+  if (target.startsWith('\\\\?\\')) target = target.slice(4)
+  // Electron 的 libuv 创建 junction 时会给目标附加尾部分隔符，必须剥掉再匹配
+  const normalized = path.normalize(target).replace(/[\\/]+$/, '')
+  for (const id of Object.keys(PLATFORMS)) {
+    const skillsDir = path.normalize(skillsEnabledDir(id))
+    const prefix = skillsDir + path.sep
+    let rest = ''
+    if (process.platform === 'win32') {
+      if (normalized.toLowerCase().startsWith(prefix.toLowerCase())) rest = normalized.slice(prefix.length)
+    } else if (normalized.startsWith(prefix)) {
+      rest = normalized.slice(prefix.length)
+    }
+    // 仅接受单层技能名：指向 skills 目录本身或多层嵌套路径的不级联
+    if (!rest || rest.includes(path.sep) || rest.includes('/')) continue
+    return { platformId: id, name: rest }
+  }
+  return null
+}
+
 /** 扫描单个技能目录（启用或禁用侧），目录下允许缺少 SKILL.md（标记但不吞掉） */
 function collectSkills(dir, enabled) {
   const skills = []
   if (!fs.existsSync(dir)) return skills
   for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
     const skillDir = path.join(dir, entry.name)
-    if (!isRealDir(entry, skillDir)) continue
+    let isDir = entry.isDirectory()
+    let linkTarget = ''
+    let linkBroken = false
+    if (entry.isSymbolicLink()) {
+      try {
+        linkTarget = fs.readlinkSync(skillDir)
+      } catch { /* 目标信息读取失败不阻断列表 */ }
+      try {
+        isDir = fs.statSync(skillDir).isDirectory()
+      } catch {
+        // 悬空链接（源已被禁用/删除）也要列出，交给用户处置
+        linkBroken = true
+        isDir = true
+      }
+    }
+    if (!isDir) continue
     let meta = {}
     let hasSkillMd = false
     const skillMdPath = path.join(skillDir, 'SKILL.md')
@@ -132,30 +172,129 @@ function collectSkills(dir, enabled) {
       enabled,
       dir: skillDir,
       hasSkillMd,
+      linkTarget,
+      linkBroken,
     })
   }
   return skills
 }
 
-/** 目录迁移启用/禁用技能；目标同名冲突时明确报错，绝不覆盖 */
-function moveSkillDir(platformId, name, enable) {
-  const from = enable ? skillsDisabledDir(platformId) : skillsEnabledDir(platformId)
-  const to = enable ? skillsEnabledDir(platformId) : skillsDisabledDir(platformId)
-  const src = path.join(from, name)
-  const dest = path.join(to, name)
-  if (!fs.existsSync(src)) {
-    throw new Error(`未找到${enable ? '已禁用' : '已启用'}技能目录：${src}`)
+/** 路径存在性（lstat，不跟随链接）：悬空链接的本体也算存在 */
+function pathExists(p) {
+  try {
+    fs.lstatSync(p)
+    return true
+  } catch {
+    return false
   }
-  if (fs.existsSync(dest)) {
+}
+
+function isLink(dirPath) {
+  try {
+    return fs.lstatSync(dirPath).isSymbolicLink()
+  } catch {
+    return false
+  }
+}
+
+/** 目录迁移；目标同名冲突时明确报错，绝不覆盖 */
+function moveDir(src, dest) {
+  if (pathExists(dest)) {
     throw new Error(`目标位置已存在同名目录，已取消操作：${dest}`)
   }
-  fs.mkdirSync(to, { recursive: true })
+  fs.mkdirSync(path.dirname(dest), { recursive: true })
   try {
     fs.renameSync(src, dest)
   } catch (err) {
     if (err.code !== 'EXDEV') throw err
     fs.cpSync(src, dest, { recursive: true })
     fs.rmSync(src, { recursive: true, force: true })
+  }
+}
+
+function createDirLink(linkPath, targetDir) {
+  fs.mkdirSync(path.dirname(linkPath), { recursive: true })
+  fs.symlinkSync(targetDir, linkPath, process.platform === 'win32' ? 'junction' : 'dir')
+}
+
+/** 删除链接本体（绝不递归进目标）；Windows junction 同样按链接删除 */
+function removeLink(linkPath) {
+  try {
+    fs.unlinkSync(linkPath)
+  } catch {
+    fs.rmSync(linkPath, { force: true })
+  }
+}
+
+/**
+ * 启用/禁用技能。
+ * 普通目录：直接在 skills ↔ skills-disabled 间迁移。
+ * 链接技能：若目标属于某平台的 skills 目录（如 Zcode 聚合层指向 Claude Code），
+ * 级联迁移源平台真实目录（禁用即同步禁用源，启用时反向恢复并重建链接）；
+ * 目标为外部目录时仅移动链接本身。任何一步失败都回滚已完成的迁移。
+ */
+function moveSkillDir(platformId, name, enable) {
+  const from = enable ? skillsDisabledDir(platformId) : skillsEnabledDir(platformId)
+  const to = enable ? skillsEnabledDir(platformId) : skillsDisabledDir(platformId)
+  const src = path.join(from, name)
+  const dest = path.join(to, name)
+  if (!pathExists(src)) {
+    throw new Error(`未找到${enable ? '已禁用' : '已启用'}技能目录：${src}`)
+  }
+  if (pathExists(dest)) {
+    throw new Error(`目标位置已存在同名目录，已取消操作：${dest}`)
+  }
+
+  // 级联目标解析（禁用看链接当前指向；启用看链接记录的原始指向，可能已悬空）
+  let cascade = null
+  if (isLink(src)) {
+    const match = matchCascadePlatform(fs.readlinkSync(src))
+    if (match && match.platformId !== platformId) {
+      const cascadeSrc = enable
+        ? path.join(skillsDisabledDir(match.platformId), match.name)
+        : path.join(skillsEnabledDir(match.platformId), match.name)
+      const cascadeDest = enable
+        ? path.join(skillsEnabledDir(match.platformId), match.name)
+        : path.join(skillsDisabledDir(match.platformId), match.name)
+      // 源不存在（悬空链接/已被处理）时降级为仅移动链接
+      if (pathExists(cascadeSrc) && !pathExists(cascadeDest)) {
+        cascade = { src: cascadeSrc, dest: cascadeDest, name: match.name, platformId: match.platformId }
+      }
+    }
+  }
+
+  if (!cascade) {
+    moveDir(src, dest)
+    return
+  }
+
+  if (enable) {
+    // 恢复源平台真实目录，再在本平台重建指向新位置的链接
+    try {
+      moveDir(cascade.src, cascade.dest)
+    } catch (err) {
+      throw new Error(`恢复源平台（${PLATFORMS[cascade.platformId].name}）技能「${cascade.name}」失败：${err.message}`)
+    }
+    try {
+      createDirLink(dest, cascade.dest)
+      removeLink(src)
+    } catch (err) {
+      try { moveDir(cascade.dest, cascade.src) } catch { /* 回滚失败保留现场并上报 */ }
+      throw new Error(`重建链接失败（已回滚源平台目录）：${err.message}`)
+    }
+  } else {
+    // 先禁用源平台真实目录，再移动链接本体
+    try {
+      moveDir(cascade.src, cascade.dest)
+    } catch (err) {
+      throw new Error(`禁用源平台（${PLATFORMS[cascade.platformId].name}）技能「${cascade.name}」失败：${err.message}`)
+    }
+    try {
+      moveDir(src, dest)
+    } catch (err) {
+      try { moveDir(cascade.dest, cascade.src) } catch { /* 回滚失败保留现场并上报 */ }
+      throw new Error(`移动链接失败（已回滚源平台目录）：${err.message}`)
+    }
   }
 }
 

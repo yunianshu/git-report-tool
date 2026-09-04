@@ -41,7 +41,7 @@
       <template #header>
         <div class="card-header">
           <span>技能 Skills（{{ skillRows.length }}）</span>
-          <span class="extensions-note">禁用 = 目录移入 skills-disabled，随时可恢复</span>
+          <span class="extensions-note">禁用 = 移入 skills-disabled；链接技能的启停会同步其源平台</span>
         </div>
       </template>
       <div class="table-wrap">
@@ -55,7 +55,11 @@
           <el-table-column label="技能" min-width="180" show-overflow-tooltip>
             <template #default="{ row }">
               <span class="skill-name">{{ row.name }}</span>
-              <el-tag v-if="!row.hasSkillMd" type="danger" size="small" effect="plain" class="skill-warn-tag">缺 SKILL.md</el-tag>
+              <el-tooltip v-if="row.linkTarget" :content="`链接目标：${row.linkTarget}`" placement="top">
+                <el-tag size="small" effect="plain" class="skill-warn-tag">链接</el-tag>
+              </el-tooltip>
+              <el-tag v-if="row.linkBroken" type="danger" size="small" effect="plain" class="skill-warn-tag">链接失效</el-tag>
+              <el-tag v-if="!row.hasSkillMd && !row.linkBroken" type="danger" size="small" effect="plain" class="skill-warn-tag">缺 SKILL.md</el-tag>
             </template>
           </el-table-column>
           <el-table-column label="描述" min-width="280" show-overflow-tooltip>
@@ -66,7 +70,7 @@
               <el-switch
                 :model-value="row.enabled"
                 :loading="row.busy"
-                :disabled="!row.hasSkillMd"
+                :disabled="!row.hasSkillMd && !row.linkBroken"
                 @change="toggleSkill(row, $event)"
               />
             </template>
