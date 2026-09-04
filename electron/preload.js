@@ -78,6 +78,8 @@ contextBridge.exposeInMainWorld('gitReport', {
     ipcRenderer.invoke('extensions:togglePlugin', { platform, id, enable }),
   extensionsReadSkill: (platform, name) =>
     ipcRenderer.invoke('extensions:readSkill', { platform, name }),
+  // 终端（在项目目录打开 PowerShell / 系统终端）
+  openTerminal: (dir) => ipcRenderer.invoke('terminal:open', dir),
   // ─── 一键部署模块（OneDeploy） ───
   deployProjectsList: () => ipcRenderer.invoke('deploy:projects:list'),
   deployProjectsSave: (p) => ipcRenderer.invoke('deploy:projects:save', toPlain(p)),

@@ -784,9 +784,11 @@ body {
 .project-section .section-heading { margin-bottom: 12px; }
 .project-notes { min-height: 82px; padding: 14px 0; color: #3e4652; line-height: 1.75; white-space: pre-wrap; }
 .inline-empty { width: 100%; padding: 24px; border: 1px dashed #ccd2d8; border-radius: 7px; background: #fafbfc; color: #737c88; cursor: pointer; }
-.project-capabilities { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 10px; }
+.project-capabilities { display: grid; grid-template-columns: repeat(auto-fill, minmax(180px, 1fr)); gap: 10px; }
 .project-capabilities button { min-width: 0; min-height: 82px; padding: 14px; display: flex; align-items: center; justify-content: space-between; gap: 8px; border: 1px solid var(--line); border-radius: 7px; background: #fff; color: #2d3540; text-align: left; cursor: pointer; }
 .project-capabilities button:hover { border-color: #9bc7c0; background: #f6faf9; }
+.project-capabilities button:disabled { opacity: .5; cursor: not-allowed; }
+.project-capabilities button:disabled:hover { border-color: var(--line); background: #fff; }
 .project-capabilities span { min-width: 0; display: flex; flex-direction: column; gap: 4px; }
 .project-capabilities small { color: #858d98; font-size: 11px; }
 .project-form .path-input-row { width: 100%; display: flex; gap: 8px; }

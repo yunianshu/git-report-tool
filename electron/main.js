@@ -10,6 +10,7 @@ const reportHistory = require('./report-history')
 const aiService = require('./ai-service')
 const projectService = require('./project-service')
 const extensionsService = require('./extensions-service')
+const terminalService = require('./terminal-service')
 const deployService = require('./deploy/deploy-service')
 const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
@@ -282,6 +283,17 @@ function registerIpc() {
   ipcMain.handle('extensions:readSkill', (_e, { platform, name }) => {
     try {
       return { ok: true, ...extensionsService.readSkillDoc(platform, name) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+
+  // 在项目目录打开系统终端（Windows 为 PowerShell）
+  ipcMain.handle('terminal:open', (_e, dir) => {
+    try {
+      // 只回传可克隆字段（child 进程对象不可结构化克隆）
+      const { cwd, child } = terminalService.openTerminal(dir)
+      return { ok: true, cwd, pid: child?.pid }
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }
     }
