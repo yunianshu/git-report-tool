@@ -8,13 +8,40 @@ const gitService = require('./git-service')
 const store = require('./store')
 const reportHistory = require('./report-history')
 const aiService = require('./ai-service')
+const projectService = require('./project-service')
 const deployService = require('./deploy/deploy-service')
 const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
 
 // 统一数据目录为 ASCII 固定值，与产品显示名（productName，可中文）解耦：
 // dev / 打包 GUI / 无头 CLI 三模式共用同一份配置，改名或换产品名不丢数据
-app.setPath('userData', path.join(app.getPath('appData'), 'dev-project-manager'))
+app.setPath('userData', process.env.PROJECT_MANAGER_USER_DATA || path.join(app.getPath('appData'), 'dev-project-manager'))
+
+// 一次性迁移：旧版本默认数据目录 %APPDATA%/git-report-desktop（更名前）。
+// 仅在新目录还没有任何配置、且未通过 PROJECT_MANAGER_USER_DATA 显式指定数据目录时，
+// 把旧数据文件复制过来（复制而非移动，旧目录保留作备份）。
+if (!process.env.PROJECT_MANAGER_USER_DATA) {
+  try {
+    const legacyDir = path.join(app.getPath('appData'), 'git-report-desktop')
+    const currentDir = app.getPath('userData')
+    const legacyFiles = ['config.json', 'deploy-projects.json', 'deploy-history.json', 'reports.json']
+    const legacyDirs = ['reports', 'deploy-logs']
+    if (legacyDir !== currentDir && fs.existsSync(path.join(legacyDir, 'config.json')) && !fs.existsSync(path.join(currentDir, 'config.json'))) {
+      fs.mkdirSync(currentDir, { recursive: true })
+      for (const f of legacyFiles) {
+        const src = path.join(legacyDir, f)
+        if (fs.existsSync(src)) fs.copyFileSync(src, path.join(currentDir, f))
+      }
+      for (const d of legacyDirs) {
+        const src = path.join(legacyDir, d)
+        if (fs.existsSync(src)) fs.cpSync(src, path.join(currentDir, d), { recursive: true })
+      }
+      console.log('[migrate] 已从旧数据目录 git-report-desktop 迁移配置')
+    }
+  } catch (e) {
+    console.error('[migrate] 旧数据目录迁移失败（不影响启动）', e.message)
+  }
+}
 
 let mainWindow
 
@@ -25,9 +52,12 @@ function broadcast(channel, payload) {
 }
 
 function createWindow() {
+  const smokeWidth = Number(process.env.SMOKE_WIDTH) || 1320
+  const smokeHeight = Number(process.env.SMOKE_HEIGHT) || 860
   mainWindow = new BrowserWindow({
-    width: 1320,
-    height: 860,
+    width: smokeWidth,
+    height: smokeHeight,
+    frame: false, // 无边框：原生标题栏隐藏，最小化/最大化/关闭由顶栏自定义按钮承担
     minWidth: 1080,
     minHeight: 700,
     title: '开发项目管理',
@@ -40,6 +70,10 @@ function createWindow() {
       sandbox: false,
     },
   })
+
+  // 最大化状态同步给渲染层（自定义标题栏按钮图标切换）
+  mainWindow.on('maximize', () => broadcast('win:maximized', true))
+  mainWindow.on('unmaximize', () => broadcast('win:maximized', false))
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
@@ -78,6 +112,17 @@ async function warmupPipeline() {
 }
 
 function registerIpc() {
+  // 窗口控制（无边框窗口的自定义标题栏按钮）
+  ipcMain.handle('win:minimize', () => mainWindow && mainWindow.minimize())
+  ipcMain.handle('win:toggleMaximize', () => {
+    if (!mainWindow) return false
+    if (mainWindow.isMaximized()) mainWindow.unmaximize()
+    else mainWindow.maximize()
+    return mainWindow.isMaximized()
+  })
+  ipcMain.handle('win:close', () => mainWindow && mainWindow.close())
+  ipcMain.handle('win:isMaximized', () => !!(mainWindow && mainWindow.isMaximized()))
+
   // 配置
   ipcMain.handle('config:load', () => store.load())
   ipcMain.handle('config:save', (_e, cfg) => {
@@ -212,6 +257,11 @@ function registerIpc() {
   })
   ipcMain.handle('clipboard:read', () => clipboard.readText())
 
+  // 项目中心：项目是 AI、活动报告与部署共享的一等上下文
+  ipcMain.handle('projects:list', () => projectService.list())
+  ipcMain.handle('projects:save', (_e, project) => projectService.save(project))
+  ipcMain.handle('projects:remove', (_e, projectId) => projectService.remove(projectId))
+
   // 系统
   ipcMain.handle('shell:openPath', (_e, p) => {
     if (p && fs.existsSync(p)) shell.showItemInFolder(p)
@@ -276,15 +326,47 @@ app.whenReady().then(() => {
       if (level >= 2) console.log(`[SMOKE][renderer:${level >= 3 ? 'error' : 'warn'}]`, message)
     })
     wc.on('did-fail-load', (_e, code, desc) => console.log('[SMOKE][did-fail-load]', code, desc))
-    // 3 秒后模拟点击「OneDeploy」菜单，验证部署页可正常挂载
+    // 点击打开目标视图（SMOKE_VIEW，默认「部署」），验证应用壳与各页面可正常挂载
     setTimeout(() => {
       wc.executeJavaScript(`(() => {
         const items = [...document.querySelectorAll('.el-menu-item')]
-        const target = items.find((e) => e.textContent.includes('OneDeploy'))
+        const view = ${JSON.stringify(process.env.SMOKE_VIEW || '部署')}
+        const target = items.find((e) => e.textContent.trim() === view)
         if (target) target.click()
         return items.map((e) => e.textContent.trim())
       })()`).then((menu) => console.log('[SMOKE][menu]', JSON.stringify(menu))).catch((e) => console.log('[SMOKE][click-err]', e.message))
-    }, 3000)
+    }, Number(process.env.SMOKE_CLICK_MS) || 3000)
+    // 调试用：SMOKE_WATCH_MS=间隔 时周期性 dump 内容区根节点 class，观察视图切换过程
+    if (process.env.SMOKE_WATCH_MS) {
+      const watchTimer = setInterval(() => {
+        wc.executeJavaScript(`(() => {
+          const kids = [...document.querySelectorAll('.content-area > *')]
+          return kids.map((k) => k.className)
+        })()`).then((c) => console.log('[SMOKE][watch]', JSON.stringify(c))).catch(() => {})
+      }, Number(process.env.SMOKE_WATCH_MS))
+      watchTimer.unref?.()
+    }
+    if (process.env.SMOKE_SCREENSHOT_PATH) {
+      setTimeout(async () => {
+        try {
+          const output = path.resolve(process.env.SMOKE_SCREENSHOT_PATH)
+          fs.mkdirSync(path.dirname(output), { recursive: true })
+          mainWindow.show()
+          mainWindow.focus()
+          const domInfo = await wc.executeJavaScript(`(() => {
+            const root = document.querySelector('.content-area > *')
+            return { content: root ? root.className : '(empty)', title: document.querySelector('.content-area h1, .content-area .page-title')?.textContent || '' }
+          })()`).catch(() => null)
+          if (domInfo) console.log('[SMOKE][dom]', JSON.stringify(domInfo))
+          const image = await wc.capturePage()
+          if (image.isEmpty()) throw new Error('渲染截图为空')
+          fs.writeFileSync(output, image.toPNG())
+          console.log('[SMOKE][screenshot]', output)
+        } catch (err) {
+          console.log('[SMOKE][screenshot-err]', err.message)
+        }
+      }, Number(process.env.SMOKE_SHOT_MS) || 4500)
+    }
     setTimeout(() => app.quit(), Number(process.env.SMOKE_EXIT_MS) || 8000)
   }
   app.on('activate', () => {

@@ -2,318 +2,229 @@
 <html lang="zh-CN">
 <head>
 <meta charset="UTF-8" />
-<title>开发项目管理 · 界面重设计方向</title>
+<title>开发项目管理 · 新信息架构设计说明</title>
 <style>
-  /* ============ 全局 ============ */
+  /* 自包含设计说明稿：不引入远程字体或外部资源，离线可用 */
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body {
-    background: #16161a;
+    background: #f5f6f7;
+    color: #2b2f33;
     font-family: -apple-system, 'Segoe UI', 'PingFang SC', 'Microsoft YaHei', sans-serif;
-    padding: 40px 32px 60px;
+    font-size: 14px;
+    line-height: 1.7;
+    padding: 40px 32px 64px;
   }
-  .page-head { max-width: 1700px; margin: 0 auto 28px; color: #e8e8ea; }
-  .page-head h1 { font-size: 22px; font-weight: 650; letter-spacing: .02em; }
-  .page-head p { margin-top: 8px; font-size: 13px; color: #9a9aa2; line-height: 1.6; }
-  .grid { display: flex; gap: 28px; max-width: 1740px; margin: 0 auto; align-items: flex-start; }
-  .panel-wrap { flex: 1; min-width: 0; }
-  .panel-label { margin-bottom: 10px; }
-  .panel-label .tag { display: inline-block; padding: 3px 10px; border-radius: 4px; font-size: 12px; font-weight: 600; letter-spacing: .04em; margin-right: 8px; }
-  .panel-label .desc { font-size: 12px; color: #b0b0b8; }
-  .window { border-radius: 10px; overflow: hidden; box-shadow: 0 24px 60px rgba(0,0,0,.5); }
+  .doc { max-width: 960px; margin: 0 auto; }
+  header.doc-head { margin-bottom: 36px; }
+  .doc-head h1 { font-size: 22px; font-weight: 700; color: #1c2124; }
+  .doc-head p { margin-top: 10px; color: #5d646a; }
+  .doc-head .meta { margin-top: 12px; font-size: 12.5px; color: #8a9096; }
 
-  /* ============ A · Linear 深色开发者工具 ============ */
-  .wA { background: #0e0f11; }
-  .wA .titlebar { height: 34px; background: #131417; display: flex; align-items: center; padding: 0 12px; gap: 6px; border-bottom: 1px solid #1f2126; }
-  .wA .dot { width: 9px; height: 9px; border-radius: 50%; }
-  .wA .titlebar .btitle { margin-left: 8px; font-size: 11px; color: #6a6a72; letter-spacing: .03em; }
-  .wA .app { display: flex; height: 470px; }
-  .wA .sb { width: 150px; background: #0a0b0d; padding: 14px 10px; border-right: 1px solid #1d1f24; }
-  .wA .logo { font-size: 12px; font-weight: 700; color: #fff; letter-spacing: .02em; padding: 2px 8px 14px; }
-  .wA .logo span { color: #5e6ad2; }
-  .wA .nav { font-size: 11.5px; color: #8b8b94; padding: 7px 8px; border-radius: 5px; margin-bottom: 2px; display: flex; align-items: center; gap: 7px; }
-  .wA .nav.on { background: #191b20; color: #e4e4ea; }
-  .wA .nav .ic { width: 13px; height: 13px; border-radius: 3px; background: #26282f; }
-  .wA .main { flex: 1; padding: 16px 18px; overflow: hidden; }
-  .wA h2 { font-size: 15px; color: #eaeaef; font-weight: 600; }
-  .wA .sub { font-size: 11px; color: #6f6f78; margin-top: 3px; }
-  .wA .ctl { display: flex; gap: 6px; margin-top: 14px; align-items: center; }
-  .wA .pill { font-size: 11px; padding: 5px 11px; border-radius: 5px; background: #17181b; color: #9a9aa2; border: 1px solid #23252b; }
-  .wA .pill.on { background: #262a33; color: #d7dbe4; border-color: #5e6ad2; }
-  .wA .sw { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 11px; color: #8b8b94; }
-  .wA .sw .track { width: 28px; height: 15px; border-radius: 8px; background: #5e6ad2; position: relative; }
-  .wA .sw .track::after { content: ''; position: absolute; width: 11px; height: 11px; border-radius: 50%; background: #fff; right: 2px; top: 2px; }
-  .wA .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 8px; margin-top: 14px; }
-  .wA .kpi { background: #141519; border: 1px solid #202228; border-radius: 7px; padding: 9px 11px; }
-  .wA .kpi .l { font-size: 10px; color: #6f6f78; }
-  .wA .kpi .v { font-size: 17px; font-weight: 650; color: #eaeaef; font-family: 'JetBrains Mono', 'SF Mono', monospace; margin-top: 3px; }
-  .wA .kpi .v .u { font-size: 10px; color: #6f6f78; font-family: -apple-system, sans-serif; font-weight: 400; }
-  .wA .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-  .wA .chart { background: #141519; border: 1px solid #202228; border-radius: 7px; padding: 10px 12px; }
-  .wA .chart .ct { font-size: 11px; color: #9a9aa2; margin-bottom: 9px; }
-  .wA .bar { height: 7px; border-radius: 3px; margin-bottom: 7px; background: #1f2126; position: relative; }
-  .wA .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: linear-gradient(90deg, #3f4bc4, #5e6ad2); }
-  .wA .bar.b2 i { background: linear-gradient(90deg, #2458a8, #2f6fd0); }
-  .wA .ln { display: flex; align-items: flex-end; gap: 3px; height: 52px; }
-  .wA .ln span { flex: 1; background: #23252b; border-radius: 2px 2px 0 0; }
-  .wA .ln span.hi { background: #5e6ad2; }
-  .wA .detail { margin-top: 10px; }
-  .wA .drow { padding: 8px 10px; background: #141519; border: 1px solid #202228; border-radius: 6px; margin-bottom: 5px; }
-  .wA .drow .t { font-size: 11px; color: #c9c9d2; }
-  .wA .drow .n { font-size: 10px; color: #5e6ad2; float: right; font-family: monospace; }
-  .wA .drow .m { font-size: 10px; color: #7c7c86; margin-top: 3px; }
+  section { margin-bottom: 40px; }
+  h2 {
+    font-size: 17px; font-weight: 650; color: #1c2124;
+    padding-bottom: 8px; margin-bottom: 16px;
+    border-bottom: 1px solid #e2e5e8;
+  }
+  h3 { font-size: 14.5px; font-weight: 650; color: #2b2f33; margin: 20px 0 8px; }
+  p + p { margin-top: 8px; }
+  ul { padding-left: 20px; }
+  li { margin: 4px 0; }
+  .muted { color: #5d646a; }
+  .accent { color: #0E7A6D; font-weight: 600; }
 
-  /* ============ B · 数据看板浅色 ============ */
-  .wB { background: #f5f7fa; }
-  .wB .titlebar { height: 34px; background: #ffffff; display: flex; align-items: center; padding: 0 12px; gap: 6px; border-bottom: 1px solid #e6e8ee; }
-  .wB .dot { width: 9px; height: 9px; border-radius: 50%; }
-  .wB .titlebar .btitle { margin-left: 8px; font-size: 11px; color: #8a909c; }
-  .wB .app { display: flex; height: 470px; }
-  .wB .sb { width: 150px; background: #ffffff; padding: 14px 10px; border-right: 1px solid #e6e8ee; }
-  .wB .logo { font-size: 12px; font-weight: 700; color: #1a1f2e; padding: 2px 8px 14px; }
-  .wB .logo span { color: #0e7a6d; }
-  .wB .nav { font-size: 11.5px; color: #5d6472; padding: 7px 8px; border-radius: 6px; margin-bottom: 2px; display: flex; align-items: center; gap: 7px; }
-  .wB .nav.on { background: #eaf3f2; color: #0e7a6d; font-weight: 600; }
-  .wB .nav .ic { width: 13px; height: 13px; border-radius: 3px; background: #e3e7ee; }
-  .wB .main { flex: 1; padding: 16px 18px; overflow: hidden; background: #f5f7fa; }
-  .wB h2 { font-size: 15px; color: #1a1f2e; font-weight: 700; }
-  .wB .sub { font-size: 11px; color: #8a909c; margin-top: 3px; }
-  .wB .ctl { display: flex; gap: 6px; margin-top: 14px; align-items: center; }
-  .wB .pill { font-size: 11px; padding: 5px 11px; border-radius: 6px; background: #fff; color: #5d6472; border: 1px solid #d8dce4; }
-  .wB .pill.on { background: #0e7a6d; color: #fff; border-color: #0e7a6d; }
-  .wB .sw { margin-left: auto; display: flex; align-items: center; gap: 6px; font-size: 11px; color: #5d6472; }
-  .wB .sw .track { width: 28px; height: 15px; border-radius: 8px; background: #0e7a6d; position: relative; }
-  .wB .sw .track::after { content: ''; position: absolute; width: 11px; height: 11px; border-radius: 50%; background: #fff; right: 2px; top: 2px; }
-  .wB .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 10px; margin-top: 14px; }
-  .wB .kpi { background: #fff; border-radius: 8px; padding: 11px 13px; box-shadow: 0 1px 2px rgba(20,30,50,.06); border: 1px solid #eef0f4; }
-  .wB .kpi .l { font-size: 10px; color: #8a909c; }
-  .wB .kpi .v { font-size: 18px; font-weight: 700; color: #1a1f2e; font-family: 'IBM Plex Mono', 'SF Mono', monospace; margin-top: 3px; }
-  .wB .kpi .v .u { font-size: 10px; color: #8a909c; font-family: -apple-system, sans-serif; font-weight: 400; }
-  .wB .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 10px; margin-top: 10px; }
-  .wB .chart { background: #fff; border-radius: 8px; padding: 11px 13px; box-shadow: 0 1px 2px rgba(20,30,50,.06); border: 1px solid #eef0f4; }
-  .wB .chart .ct { font-size: 11px; color: #5d6472; font-weight: 600; margin-bottom: 9px; }
-  .wB .bar { height: 8px; border-radius: 3px; margin-bottom: 7px; background: #edf0f5; position: relative; }
-  .wB .bar i { position: absolute; left: 0; top: 0; bottom: 0; border-radius: 3px; background: linear-gradient(90deg, #0e7a6d, #179c8c); }
-  .wB .ln { display: flex; align-items: flex-end; gap: 3px; height: 52px; }
-  .wB .ln span { flex: 1; background: #e3e9ef; border-radius: 2px 2px 0 0; }
-  .wB .ln span.hi { background: #0e7a6d; }
-  .wB .detail { margin-top: 10px; }
-  .wB .drow { padding: 8px 11px; background: #fff; border: 1px solid #eef0f4; border-radius: 7px; margin-bottom: 5px; }
-  .wB .drow .t { font-size: 11px; color: #3a4150; font-weight: 500; }
-  .wB .drow .n { font-size: 10px; color: #0e7a6d; float: right; font-family: monospace; }
-  .wB .drow .m { font-size: 10px; color: #8a909c; margin-top: 3px; }
+  /* 应用壳示意 */
+  .shell {
+    display: flex; border: 1px solid #dde1e4; border-radius: 10px;
+    overflow: hidden; background: #fff; margin: 16px 0 8px;
+  }
+  .shell .side {
+    width: 190px; background: #fafbfc; border-right: 1px solid #e8ebee;
+    padding: 16px 10px; flex-shrink: 0;
+  }
+  .shell .side .brand { font-size: 13px; font-weight: 700; color: #1c2124; padding: 4px 10px 14px; }
+  .shell .grp { font-size: 11px; color: #9aa0a6; padding: 10px 10px 4px; letter-spacing: .05em; }
+  .shell .nav {
+    font-size: 13px; color: #4a5055; padding: 8px 10px; border-radius: 6px;
+    min-height: 40px; display: flex; align-items: center; gap: 8px;
+  }
+  .shell .nav.on { background: #e7f2f0; color: #0E7A6D; font-weight: 600; }
+  .shell .nav .ic { width: 14px; height: 14px; border-radius: 4px; background: #d4d9dd; flex-shrink: 0; }
+  .shell .nav.on .ic { background: #0E7A6D; }
+  .shell .body { flex: 1; min-width: 0; display: flex; flex-direction: column; }
+  .shell .topbar {
+    height: 52px; border-bottom: 1px solid #e8ebee; background: #fff;
+    display: flex; align-items: center; padding: 0 18px; gap: 10px;
+  }
+  .shell .topbar .proj {
+    font-size: 13px; color: #2b2f33; border: 1px solid #dde1e4; border-radius: 6px;
+    padding: 6px 12px; background: #fafbfc;
+  }
+  .shell .topbar .hint { font-size: 12px; color: #8a9096; }
+  .shell .page { padding: 18px; background: #f5f6f7; min-height: 210px; }
+  .shell .page .ph { font-size: 15px; font-weight: 650; color: #1c2124; }
+  .shell .page .ps { font-size: 12.5px; color: #8a9096; margin-top: 4px; }
+  .shell .page .block {
+    margin-top: 14px; background: #fff; border: 1px solid #e8ebee; border-radius: 8px;
+    padding: 12px 14px; font-size: 12.5px; color: #5d646a;
+  }
+  .caption { font-size: 12.5px; color: #8a9096; margin-top: 6px; }
 
-  /* ============ C · 极简编辑风 ============ */
-  .wC { background: #faf9f6; font-family: 'Source Serif 4', Georgia, serif; }
-  .wC .titlebar { height: 34px; background: #faf9f6; display: flex; align-items: center; padding: 0 12px; border-bottom: 1px solid #e6e2d8; }
-  .wC .titlebar .btitle { font-size: 11px; color: #9a9486; letter-spacing: .08em; font-family: -apple-system, sans-serif; }
-  .wC .app { display: flex; height: 470px; }
-  .wC .sb { width: 150px; padding: 16px 12px; border-right: 1px solid #e6e2d8; }
-  .wC .logo { font-size: 13px; font-weight: 700; color: #1c1a16; letter-spacing: .06em; padding: 2px 8px 16px; }
-  .wC .logo span { color: #b4532a; font-style: italic; }
-  .wC .nav { font-size: 11.5px; color: #6b6659; padding: 8px; margin-bottom: 2px; display: flex; align-items: center; gap: 8px; border-radius: 2px; }
-  .wC .nav.on { color: #b4532a; font-weight: 600; background: transparent; }
-  .wC .nav .ic { width: 11px; height: 11px; border-radius: 50%; border: 1px solid #c9c3b5; }
-  .wC .main { flex: 1; padding: 20px 22px; overflow: hidden; }
-  .wC h2 { font-size: 19px; color: #1c1a16; font-weight: 600; letter-spacing: .01em; }
-  .wC .sub { font-size: 11.5px; color: #8c8677; font-family: -apple-system, sans-serif; margin-top: 4px; }
-  .wC .ctl { display: flex; gap: 18px; margin-top: 16px; align-items: center; border-bottom: 1px solid #e6e2d8; padding-bottom: 12px; }
-  .wC .pill { font-size: 11.5px; color: #8c8677; padding-bottom: 2px; border-bottom: 2px solid transparent; letter-spacing: .04em; }
-  .wC .pill.on { color: #b4532a; border-bottom-color: #b4532a; }
-  .wC .sw { margin-left: auto; font-size: 11.5px; color: #8c8677; font-family: -apple-system, sans-serif; }
-  .wC .kpis { display: grid; grid-template-columns: repeat(4, 1fr); gap: 12px; margin-top: 20px; }
-  .wC .kpi { padding: 4px 0; }
-  .wC .kpi .l { font-size: 10.5px; color: #8c8677; letter-spacing: .12em; text-transform: uppercase; }
-  .wC .kpi .v { font-size: 26px; font-weight: 600; color: #1c1a16; margin-top: 5px; font-variant-numeric: tabular-nums; }
-  .wC .kpi .v .u { font-size: 12px; color: #8c8677; font-weight: 400; }
-  .wC .charts { display: grid; grid-template-columns: 1fr 1fr; gap: 22px; margin-top: 22px; padding-top: 18px; border-top: 1px solid #e6e2d8; }
-  .wC .chart .ct { font-size: 11px; color: #8c8677; letter-spacing: .1em; text-transform: uppercase; margin-bottom: 12px; }
-  .wC .bar { height: 2px; margin-bottom: 9px; background: #e8e3d6; position: relative; }
-  .wC .bar i { position: absolute; left: 0; top: 0; bottom: 0; background: #b4532a; }
-  .wC .ln { display: flex; align-items: flex-end; gap: 4px; height: 48px; border-bottom: 1px solid #e8e3d6; padding-bottom: 2px; }
-  .wC .ln span { flex: 1; background: #ddd7c8; }
-  .wC .ln span.hi { background: #b4532a; }
-  .wC .detail { margin-top: 18px; }
-  .wC .drow { padding: 11px 2px; border-bottom: 1px solid #ece7da; }
-  .wC .drow .t { font-size: 12.5px; color: #1c1a16; }
-  .wC .drow .n { font-size: 10.5px; color: #b4532a; float: right; font-family: -apple-system, sans-serif; letter-spacing: .04em; }
-  .wC .drow .m { font-size: 11px; color: #8c8677; margin-top: 4px; font-family: -apple-system, sans-serif; }
+  /* 页面职责表 */
+  table { width: 100%; border-collapse: collapse; margin-top: 8px; }
+  th, td {
+    text-align: left; padding: 10px 12px; font-size: 13.5px;
+    border-bottom: 1px solid #e8ebee; vertical-align: top;
+  }
+  th { font-size: 12.5px; color: #8a9096; font-weight: 600; background: #fafbfc; }
+  td.pg { font-weight: 650; color: #1c2124; white-space: nowrap; }
+
+  /* 视觉系统 */
+  .swatches { display: flex; flex-wrap: wrap; gap: 12px; margin-top: 12px; }
+  .sw { width: 150px; }
+  .sw .chip {
+    height: 56px; border-radius: 8px; border: 1px solid #dde1e4;
+    display: flex; align-items: flex-end; padding: 6px 8px;
+    font-size: 11.5px; font-family: 'SF Mono', Consolas, monospace;
+  }
+  .sw .nm { font-size: 12.5px; margin-top: 6px; color: #4a5055; }
+  .chip.dark { color: #fff; border: none; }
+  .rules { margin-top: 8px; }
+  .rules li { margin: 6px 0; }
+  .kbd {
+    display: inline-block; font-family: 'SF Mono', Consolas, monospace; font-size: 12px;
+    background: #fff; border: 1px solid #dde1e4; border-radius: 4px; padding: 1px 6px;
+  }
 </style>
 </head>
 <body>
-  <div class="page-head">
-    <h1>开发项目管理 · 界面重设计方向</h1>
-    <p>三个方向：A · Linear 深色开发者工具｜B · 数据看板浅色｜C · 极简编辑风。下方为「报告生成」页的核心布局示意（侧栏 + KPI + 图表 + 明细）。</p>
-  </div>
-  <div class="grid">
+<div class="doc">
 
-    <!-- ============ A · Linear 深色 ============ -->
-    <div class="panel-wrap">
-      <div class="panel-label">
-        <span class="tag" style="background:#2a2c36;color:#c7cbf5">A</span>
-        <span class="desc">Linear 式深色 · 数据感 · 精密克制</span>
+  <header class="doc-head">
+    <h1>开发项目管理 · 新信息架构设计说明</h1>
+    <p>产品定位：个人项目管理工作台。项目是一等领域对象——不要求必须是 Git 仓库，也不要求配置部署；Git 活动、AI 助手、部署是项目的可选能力。本文档取代旧的「Git·报告 / 仓库扫描 / 报告生成」设计稿，作为界面实现的对照依据。</p>
+    <div class="meta">适用范围：Electron 桌面端 · 最小窗口 1080 × 700 · 约 1 米观看距离 · 离线可用（无远程字体/外部资源）</div>
+  </header>
+
+  <section>
+    <h2>一、信息架构：三组六入口</h2>
+    <p class="muted">侧栏分三组：工作区（工作台、项目）、项目能力（AI 助手、活动报告、部署）、系统（设置）。应用顶部为统一的当前项目选择器，切换项目后 AI、报告、部署使用同一上下文；选择「全部项目」时仅工作台与报告可用聚合视图，部署仍要求明确项目。</p>
+
+    <div class="shell">
+      <div class="side">
+        <div class="brand">开发项目管理</div>
+        <div class="grp">工作区</div>
+        <div class="nav on"><span class="ic"></span>工作台</div>
+        <div class="nav"><span class="ic"></span>项目</div>
+        <div class="grp">项目能力</div>
+        <div class="nav"><span class="ic"></span>AI 助手</div>
+        <div class="nav"><span class="ic"></span>活动报告</div>
+        <div class="nav"><span class="ic"></span>部署</div>
+        <div class="grp">系统</div>
+        <div class="nav"><span class="ic"></span>设置</div>
       </div>
-      <div class="window wA">
-        <div class="titlebar">
-          <span class="dot" style="background:#ff5f57"></span><span class="dot" style="background:#febc2e"></span><span class="dot" style="background:#28c840"></span>
-          <span class="btitle">开发项目管理</span>
+      <div class="body">
+        <div class="topbar">
+          <span class="proj">当前项目：示例项目 ▾</span>
+          <span class="hint">切换后 AI / 报告 / 部署使用同一项目</span>
         </div>
-        <div class="app">
-          <div class="sb">
-            <div class="logo">Git<span>.</span>报告</div>
-            <div class="nav"><span class="ic"></span>仓库扫描</div>
-            <div class="nav on"><span class="ic"></span>报告生成</div>
-          </div>
-          <div class="main">
-            <h2>报告生成</h2>
-            <div class="sub">5 个仓库 · 近 7 天</div>
-            <div class="ctl">
-              <span class="pill">日报</span><span class="pill on">周报</span><span class="pill">月报</span><span class="pill">自定义</span>
-              <div class="sw"><span>只看本人</span><span class="track"></span></div>
-            </div>
-            <div class="kpis">
-              <div class="kpi"><div class="l">提交数</div><div class="v">164</div></div>
-              <div class="kpi"><div class="l">活跃项目</div><div class="v">5</div></div>
-              <div class="kpi"><div class="l">作者数</div><div class="v">4</div></div>
-              <div class="kpi"><div class="l">时间范围</div><div class="v">7d</div></div>
-            </div>
-            <div class="charts">
-              <div class="chart">
-                <div class="ct">项目提交分布</div>
-                <div class="bar"><i style="width:92%"></i></div>
-                <div class="bar"><i style="width:68%"></i></div>
-                <div class="bar"><i style="width:45%"></i></div>
-                <div class="bar"><i style="width:22%"></i></div>
-              </div>
-              <div class="chart">
-                <div class="ct">每日提交趋势</div>
-                <div class="ln">
-                  <span style="height:30%"></span><span style="height:52%"></span><span style="height:40%" class="hi"></span>
-                  <span style="height:70%"></span><span style="height:58%"></span><span style="height:88%" class="hi"></span>
-                  <span style="height:66%"></span>
-                </div>
-              </div>
-            </div>
-            <div class="detail">
-              <div class="drow"><span class="n">85</span><div class="t">PlmInsight</div><div class="m">BI 助手 · 定时通知 · 授权画像</div></div>
-              <div class="drow"><span class="n">63</span><div class="t">MultPrtAgent</div><div class="m">RBAC · 模型网关 · 压测</div></div>
-              <div class="drow"><span class="n">14</span><div class="t">PrtProject</div><div class="m">云空间 · i18n</div></div>
-            </div>
-          </div>
+        <div class="page">
+          <div class="ph">工作台</div>
+          <div class="ps">一页一个主要任务：首屏只放真实状态与关键动作</div>
+          <div class="block">页面内容区：页面标题 + 分区线 + 列表 / 少量状态面板，减少卡片堆叠</div>
         </div>
       </div>
     </div>
+    <p class="caption">应用壳示意：左侧分组导航 + 顶部当前项目选择器 + 单主任务页面容器。</p>
+  </section>
 
-    <!-- ============ B · 数据看板浅色 ============ -->
-    <div class="panel-wrap">
-      <div class="panel-label">
-        <span class="tag" style="background:#eaf3f2;color:#0e7a6d">B</span>
-        <span class="desc">数据看板浅色 · 高信息密度 · 清晰层级</span>
-      </div>
-      <div class="window wB">
-        <div class="titlebar">
-          <span class="dot" style="background:#e5e7ec"></span><span class="dot" style="background:#e5e7ec"></span><span class="dot" style="background:#e5e7ec"></span>
-          <span class="btitle">开发项目管理</span>
-        </div>
-        <div class="app">
-          <div class="sb">
-            <div class="logo">Git<span>·</span>报告</div>
-            <div class="nav"><span class="ic"></span>仓库扫描</div>
-            <div class="nav on"><span class="ic"></span>报告生成</div>
-          </div>
-          <div class="main">
-            <h2>报告生成</h2>
-            <div class="sub">5 个仓库 · 近 7 天</div>
-            <div class="ctl">
-              <span class="pill">日报</span><span class="pill on">周报</span><span class="pill">月报</span><span class="pill">自定义</span>
-              <div class="sw"><span>只看本人</span><span class="track"></span></div>
-            </div>
-            <div class="kpis">
-              <div class="kpi"><div class="l">提交数</div><div class="v">164</div></div>
-              <div class="kpi"><div class="l">活跃项目</div><div class="v">5</div></div>
-              <div class="kpi"><div class="l">作者数</div><div class="v">4</div></div>
-              <div class="kpi"><div class="l">时间范围</div><div class="v">7d</div></div>
-            </div>
-            <div class="charts">
-              <div class="chart">
-                <div class="ct">项目提交分布</div>
-                <div class="bar"><i style="width:92%"></i></div>
-                <div class="bar"><i style="width:68%"></i></div>
-                <div class="bar"><i style="width:45%"></i></div>
-                <div class="bar"><i style="width:22%"></i></div>
-              </div>
-              <div class="chart">
-                <div class="ct">每日提交趋势</div>
-                <div class="ln">
-                  <span style="height:30%"></span><span style="height:52%"></span><span style="height:40%" class="hi"></span>
-                  <span style="height:70%"></span><span style="height:58%"></span><span style="height:88%" class="hi"></span>
-                  <span style="height:66%"></span>
-                </div>
-              </div>
-            </div>
-            <div class="detail">
-              <div class="drow"><span class="n">85</span><div class="t">PlmInsight · PLM BI 经营看板</div><div class="m">BI 助手 · 定时通知 · 授权画像</div></div>
-              <div class="drow"><span class="n">63</span><div class="t">MultPrtAgent · 多打印 Agent</div><div class="m">RBAC · 模型网关 · 压测</div></div>
-              <div class="drow"><span class="n">14</span><div class="t">PrtProject · 标签打印编辑器</div><div class="m">云空间 · i18n</div></div>
-            </div>
-          </div>
-        </div>
-      </div>
+  <section>
+    <h2>二、页面职责</h2>
+    <table>
+      <tr><th>页面</th><th>叙事角色</th><th>职责与主操作</th><th>容量策略</th></tr>
+      <tr>
+        <td class="pg">工作台</td>
+        <td>定向与概览</td>
+        <td>真实项目数量、当前项目资料完整度、Git 活动状态、部署状态、最近操作；快捷入口：创建项目 / 询问 AI / 生成报告 / 打开部署。不编造指标。</td>
+        <td>首屏只放真实状态与 4 个关键动作</td>
+      </tr>
+      <tr>
+        <td class="pg">项目</td>
+        <td>选择与维护</td>
+        <td>项目列表与详情；新建、编辑、归档/删除（危险操作确认）。字段：名称、说明、本地目录、状态、标签、备注。只填名称即可创建，Git 与部署均非必需。</td>
+        <td>列表 + 单项目详情，编辑使用抽屉</td>
+      </tr>
+      <tr>
+        <td class="pg">AI 助手</td>
+        <td>思考与协作</td>
+        <td>独立对话工作区；显示当前项目，可勾选上下文来源（项目资料 / Git 活动 / 报告摘要 / 部署状态）；项目级快捷问题：项目总结 / 风险梳理 / 下一步计划 / 生成项目报告。无 Git 数据也可正常对话。</td>
+        <td>对话为主，上下文来源为辅</td>
+      </tr>
+      <tr>
+        <td class="pg">活动报告</td>
+        <td>数据分析</td>
+        <td>日报 / 周报 / 双周报 / 月报 / 自定义周期，作者筛选、明细、统计、历史与导出；范围为当前项目或全部项目；明确标注「Git 活动是报告数据源之一」。非 Git 项目给出空状态并引导用 AI 基于项目资料整理。</td>
+        <td>筛选固定、结果独立滚动</td>
+      </tr>
+      <tr>
+        <td class="pg">部署</td>
+        <td>高风险执行</td>
+        <td>当前项目的发布状态、环境、主要发布动作、8 阶段进度、日志和历史；服务器、健康检查、备份等低频配置收进「部署设置」面板。发布前有确认，支持取消与回滚。</td>
+        <td>发布动作居中，配置降级到面板</td>
+      </tr>
+      <tr>
+        <td class="pg">设置</td>
+        <td>低频配置</td>
+        <td>按「AI 服务 / Git 活动采集 / 个人身份 / 应用信息」分区；已发现 Git 仓库仅作为数据源状态展示，不再承担项目管理入口。</td>
+        <td>分区导航，单区单职责</td>
+      </tr>
+    </table>
+  </section>
+
+  <section>
+    <h2>三、视觉系统要点</h2>
+    <p class="muted">视觉温度：冷静、可靠、轻量的桌面生产力工具；不做开发者霓虹风，不使用装饰性插画。</p>
+
+    <h3>色彩</h3>
+    <div class="swatches">
+      <div class="sw"><div class="chip dark" style="background:#0E7A6D">#0E7A6D</div><div class="nm">主强调色（唯一）</div></div>
+      <div class="sw"><div class="chip" style="background:#FFFFFF">#FFFFFF</div><div class="nm">主面 / 内容底色</div></div>
+      <div class="sw"><div class="chip" style="background:#F5F6F7">#F5F6F7</div><div class="nm">页面背景（低饱和中性灰）</div></div>
+      <div class="sw"><div class="chip" style="background:#E8EBEE">#E8EBEE</div><div class="nm">分区线 / 边框</div></div>
+      <div class="sw"><div class="chip" style="background:#2B2F33;color:#fff">#2B2F33</div><div class="nm">正文</div></div>
+      <div class="sw"><div class="chip" style="background:#8A9096;color:#fff">#8A9096</div><div class="nm">辅助说明文字</div></div>
     </div>
+    <ul class="rules">
+      <li><span class="accent">#0E7A6D</span> 是唯一主强调色，用于主按钮、当前导航、关键状态；语义色（成功 / 警告 / 危险）只用于状态，不参与装饰。</li>
+      <li>白色主面 + 低饱和中性灰背景；避免大面积高饱和大色块。</li>
+    </ul>
 
-    <!-- ============ C · 极简编辑风 ============ -->
-    <div class="panel-wrap">
-      <div class="panel-label">
-        <span class="tag" style="background:#f4e5dc;color:#b4532a">C</span>
-        <span class="desc">极简编辑风 · 大量留白 · 衬线标题 · 温度</span>
-      </div>
-      <div class="window wC">
-        <div class="titlebar"><span class="btitle">开发项目管理</span></div>
-        <div class="app">
-          <div class="sb">
-            <div class="logo">Git<span>报告</span></div>
-            <div class="nav"><span class="ic"></span>仓库扫描</div>
-            <div class="nav on"><span class="ic"></span>报告生成</div>
-          </div>
-          <div class="main">
-            <h2>报告生成</h2>
-            <div class="sub">五个仓库 · 近七天</div>
-            <div class="ctl">
-              <span class="pill">日报</span><span class="pill on">周报</span><span class="pill">月报</span><span class="pill">自定义</span>
-              <div class="sw">只看本人</div>
-            </div>
-            <div class="kpis">
-              <div class="kpi"><div class="l">提交数</div><div class="v">164</div></div>
-              <div class="kpi"><div class="l">活跃项目</div><div class="v">5</div></div>
-              <div class="kpi"><div class="l">作者数</div><div class="v">4</div></div>
-              <div class="kpi"><div class="l">时间范围</div><div class="v">7天</div></div>
-            </div>
-            <div class="charts">
-              <div class="chart">
-                <div class="ct">项目提交分布</div>
-                <div class="bar"><i style="width:92%"></i></div>
-                <div class="bar"><i style="width:68%"></i></div>
-                <div class="bar"><i style="width:45%"></i></div>
-                <div class="bar"><i style="width:22%"></i></div>
-              </div>
-              <div class="chart">
-                <div class="ct">每日提交趋势</div>
-                <div class="ln">
-                  <span style="height:30%"></span><span style="height:52%"></span><span style="height:40%" class="hi"></span>
-                  <span style="height:70%"></span><span style="height:58%"></span><span style="height:88%" class="hi"></span>
-                  <span style="height:66%"></span>
-                </div>
-              </div>
-            </div>
-            <div class="detail">
-              <div class="drow"><span class="n">85</span><div class="t">PlmInsight</div><div class="m">BI 助手 · 定时通知 · 授权画像</div></div>
-              <div class="drow"><span class="n">63</span><div class="t">MultPrtAgent</div><div class="m">RBAC · 模型网关 · 压测</div></div>
-              <div class="drow"><span class="n">14</span><div class="t">PrtProject</div><div class="m">云空间 · i18n</div></div>
-            </div>
-          </div>
-        </div>
-      </div>
-    </div>
+    <h3>排版与容器</h3>
+    <ul class="rules">
+      <li>沿用跨平台中文系统字体（<span class="kbd">PingFang SC / Microsoft YaHei / Segoe UI</span>），不引入远程字体，保证离线可用。</li>
+      <li>标题通过字号、字重和留白建立层级，不依赖色块。</li>
+      <li>主要页面使用页面标题、分区线、列表和少量有意义的状态面板；减少「每块内容一个圆角卡片」的堆叠。</li>
+    </ul>
 
-  </div>
+    <h3>可用性底线</h3>
+    <ul class="rules">
+      <li>正文字号不小于 <span class="kbd">14px</span>；主要点击区域不小于 <span class="kbd">40px</span>。</li>
+      <li>键盘焦点清晰可见；正文对比度达到 WCAG AA。</li>
+      <li>1440×900、1280×800、1080×700 三种窗口下无页面级横向滚动、无主要操作遮挡。</li>
+      <li>空项目、无 Git、无报告、未配置 AI、未配置部署五类空状态均提供单一明确的下一步。</li>
+      <li>动效只保留视图切换、抽屉和状态变化的短过渡；遵守 <span class="kbd">prefers-reduced-motion</span>。</li>
+    </ul>
+  </section>
+
+  <section>
+    <h2>四、文案口径</h2>
+    <ul class="rules">
+      <li>除「Git 活动 / 数据源」等必要语境外，Logo、导航、页标题、空状态和产品说明不再把产品称为 Git 管理或 Git 报告工具。</li>
+      <li>「仓库」一词仅在 Git 数据源语境使用；用户心智中的一级概念是「项目」。</li>
+      <li>不为缺失数据制造演示指标、虚假活动或虚假 AI 结论；空状态给出真实、可执行的下一步。</li>
+    </ul>
+  </section>
+
+</div>
 </body>
 </html>

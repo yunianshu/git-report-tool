@@ -34,12 +34,18 @@ export async function ensureRepos() {
 }
 
 /** 收集指定范围提交到 state.report.rawCommits，返回收集条数 */
-export async function collectReportData({ since, until } = {}) {
+export async function collectReportData({ since, until, repoPaths } = {}) {
   if (!(await ensureRepos())) return []
   state.report.phase = 'collecting'
   state.report.collectProgress = { done: 0, total: 0 }
   try {
-    const repos = state.discoveredRepos.map((r) => r.path)
+    const allowed = Array.isArray(repoPaths) && repoPaths.length ? new Set(repoPaths) : null
+    const repos = state.discoveredRepos.map((r) => r.path).filter((path) => !allowed || allowed.has(path))
+    if (!repos.length) {
+      state.report.rawCommits = []
+      state.report.phase = 'done'
+      return []
+    }
     const data = await window.gitReport.collectCommits(toPlain(repos), {
       since,
       until,

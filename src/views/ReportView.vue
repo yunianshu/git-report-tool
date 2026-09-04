@@ -1,5 +1,10 @@
 <template>
   <div class="report-page">
+    <PageHeader
+      eyebrow="ACTIVITY REPORT"
+      title="活动报告"
+      :description="currentProject ? `查看“${currentProject.name}”的 Git 活动，并整理为可回顾的项目报告。` : '汇总全部项目的 Git 活动；Git 是项目报告的可选数据源。'"
+    />
     <!-- 顶部工具条：选周期 → 点生成，一键完成 -->
     <el-card shadow="never" class="card report-toolbar-card">
       <div class="report-toolbar">
@@ -27,7 +32,7 @@
           <el-switch v-model="onlyMine" active-text="只看本人" inactive-text="全部作者" class="mine-switch" />
         </div>
         <div class="toolbar-right">
-          <span class="repo-count">{{ state.discoveredRepos.length }} 个仓库</span>
+          <span class="repo-count">{{ scopedRepos.length }} 个活动源</span>
           <el-button
             type="primary"
             size="large"
@@ -52,6 +57,13 @@
         type="warning"
         :closable="false"
         title="尚未配置扫描根目录，请到「设置」页添加后再生成报告。"
+        class="warn"
+      />
+      <el-alert
+        v-else-if="currentProject && !scopedRepos.length"
+        type="info"
+        :closable="false"
+        title="当前项目尚未关联可识别的 Git 仓库。项目仍可正常使用，也可以到“项目”中关联本地目录。"
         class="warn"
       />
     </el-card>
@@ -211,10 +223,17 @@ import { todayStr, addDays, untilToEnd } from '../utils/date'
 import { groupByProject, buildMarkdown, stripPrefix } from '../utils/report'
 import { toPlain } from '../utils/ipc'
 import { shortPath } from '../utils/path'
+import { reposForProject } from '../utils/project-context'
+import { useProjects } from '../composables/useProjects'
+import PageHeader from '../components/PageHeader.vue'
 import BaseChart from '../components/BaseChart.vue'
 import CountUp from '../components/CountUp.vue'
 
 const period = ref('daily')
+const { currentProject } = useProjects()
+const scopedRepos = computed(() => currentProject.value
+  ? reposForProject(currentProject.value, state.discoveredRepos)
+  : state.discoveredRepos)
 // 日报默认今天
 const dailyDate = ref(todayStr())
 const customSince = ref(addDays(todayStr(), -6))
@@ -291,6 +310,12 @@ async function generate() {
     }
   }
   // 阶段 2：收集提交
+  if (!scopedRepos.value.length) {
+    ElMessage.info(currentProject.value ? '当前项目没有可用的 Git 活动源' : '没有可用的 Git 活动源')
+    state.report.rawCommits = []
+    state.report.phase = 'done'
+    return
+  }
   await doCollect()
 }
 
@@ -299,7 +324,7 @@ async function doCollect() {
   state.report.collectProgress = { done: 0, total: 0 }
   const r = range()
   try {
-    const repos = state.discoveredRepos.map((row) => row.path)
+    const repos = scopedRepos.value.map((row) => row.path)
     const data = await window.gitReport.collectCommits(toPlain(repos), {
       since: r.since,
       until: r.until,
@@ -489,12 +514,13 @@ const trendOption = computed(() => {
 })
 
 function getTitle() {
+  const prefix = currentProject.value ? currentProject.value.name : '全部项目'
   const map = {
-    daily: `项目日报 — ${dailyDate.value}`,
-    weekly: `项目周报 — ${rangeLabel.value}`,
-    biweekly: `项目双周报 — ${rangeLabel.value}`,
-    monthly: `项目月报 — ${rangeLabel.value}`,
-    custom: `项目报告 — ${rangeLabel.value}`,
+    daily: `${prefix}日报 — ${dailyDate.value}`,
+    weekly: `${prefix}周报 — ${rangeLabel.value}`,
+    biweekly: `${prefix}双周报 — ${rangeLabel.value}`,
+    monthly: `${prefix}月报 — ${rangeLabel.value}`,
+    custom: `${prefix}报告 — ${rangeLabel.value}`,
   }
   return map[period.value]
 }
@@ -502,7 +528,7 @@ function getTitle() {
 function getMarkdown() {
   return buildMarkdown({
     title: getTitle(),
-    subtitle: `数据来源：${state.discoveredRepos.length} 个 Git 仓库 · 作者：${onlyMine.value ? `本人(${(state.config.identities || []).length}个账号)` : '全部作者'}`,
+    subtitle: `项目范围：${currentProject.value?.name || '全部项目'} · Git 活动源：${scopedRepos.value.length} 个 · 作者：${onlyMine.value ? `本人(${(state.config.identities || []).length}个账号)` : '全部作者'}`,
     commits: filteredCommits.value,
     stats: {
       commitCount: filteredCommits.value.length,
@@ -522,6 +548,7 @@ async function autoSave() {
       dateRange: rangeLabel.value,
       commitCount: filteredCommits.value.length,
       projectCount: filteredGroups.value.length,
+      projectId: currentProject.value?.id || '',
     })
     loadHistory()
   } catch (e) {

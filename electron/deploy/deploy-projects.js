@@ -38,7 +38,11 @@ function defaultProject() {
   return {
     id: genId(),
     name: '',
+    description: '',
     localPath: '',
+    status: 'active',
+    tags: [],
+    notes: '',
     version: { strategy: 'auto', manual: '' },
     composeFile: 'docker-compose.yml',
     deploy: {
@@ -64,17 +68,33 @@ function defaultProject() {
  * 读取与保存路径统一走此函数，保证任何入口拿到的都是新结构。
  */
 function normalizeProject(p) {
-  const c = JSON.parse(JSON.stringify(p || {}))
-  if (!Array.isArray(c.targets) || !c.targets.length) {
+  const source = JSON.parse(JSON.stringify(p || {}))
+  const defaults = defaultProject()
+  const c = {
+    ...defaults,
+    ...source,
+    version: { ...defaults.version, ...(source.version || {}) },
+    deploy: { ...defaults.deploy, ...(source.deploy || {}) },
+  }
+  c.name = String(c.name || '').trim()
+  c.description = String(c.description || '')
+  c.localPath = String(c.localPath || '')
+  c.status = ['active', 'paused', 'archived'].includes(c.status) ? c.status : 'active'
+  c.tags = [...new Set((Array.isArray(c.tags) ? c.tags : []).map((x) => String(x).trim()).filter(Boolean))]
+  c.notes = String(c.notes || '')
+
+  if (!Array.isArray(source.targets) || !source.targets.length) {
     const t = defaultTarget()
-    if (c.server && (c.server.host || c.server.remotePath || c.remotePath)) {
-      t.server = { ...defaultServer(), ...c.server }
+    if (source.server && (source.server.host || source.server.remotePath || source.remotePath)) {
+      t.server = { ...defaultServer(), ...source.server }
       // 旧格式 remotePath 位于 server 内部（deploy-service 旧版读 project.server.remotePath）
-      t.remotePath = (c.server && c.server.remotePath) || c.remotePath || ''
-      t.health = { ...defaultTarget().health, ...(c.health || {}) }
+      t.remotePath = (source.server && source.server.remotePath) || source.remotePath || ''
+      t.health = { ...defaultTarget().health, ...(source.health || {}) }
       t.name = '默认环境'
     }
     c.targets = [t]
+  } else {
+    c.targets = source.targets
   }
   c.targets = c.targets.map((t) => ({
     ...defaultTarget(),

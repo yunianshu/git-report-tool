@@ -1,9 +1,11 @@
 <template>
   <div class="settings-page">
+    <PageHeader eyebrow="PREFERENCES" title="设置" description="管理 AI 服务、Git 活动采集和个人身份。" />
+    <el-segmented v-model="activeSection" :options="SETTING_SECTIONS" class="settings-sections" />
     <!-- 扫描根目录 -->
-    <el-card shadow="never" class="card">
+    <el-card v-show="activeSection === 'git'" shadow="never" class="card">
       <template #header>
-        <div class="card-header"><span>扫描根目录</span></div>
+        <div class="card-header"><span>Git 活动采集 · 扫描根目录</span></div>
       </template>
       <div class="root-manager">
         <div class="root-ops">
@@ -35,7 +37,7 @@
     </el-card>
 
     <!-- 排除目录 -->
-    <el-card shadow="never" class="card">
+    <el-card v-show="activeSection === 'git'" shadow="never" class="card">
       <template #header>
         <div class="card-header"><span>排除目录</span></div>
       </template>
@@ -58,7 +60,7 @@
     </el-card>
 
     <!-- 本人身份 -->
-    <el-card shadow="never" class="card">
+    <el-card v-show="activeSection === 'identity'" shadow="never" class="card">
       <template #header>
         <div class="card-header"><span>本人身份</span></div>
       </template>
@@ -82,9 +84,9 @@
     </el-card>
 
     <!-- AI 模型 -->
-    <el-card shadow="never" class="card">
+    <el-card v-show="activeSection === 'ai'" shadow="never" class="card">
       <template #header>
-        <div class="card-header"><span>AI 模型</span></div>
+        <div class="card-header"><span>AI 服务</span></div>
       </template>
       <div class="ai-manager">
         <div class="ai-form">
@@ -148,16 +150,16 @@
           </span>
         </div>
         <div class="ai-hint ai-note">
-          API Key 使用系统安全存储加密后保存在本地，仅本机用于调用模型接口；支持 OpenAI / DeepSeek / Kimi / 通义千问 / Ollama 等兼容接口。配置后到「报告 → AI 助手」即可通过聊天生成报告。
+          API Key 使用系统安全存储加密后保存在本地，仅本机用于调用模型接口；支持 OpenAI / DeepSeek / Kimi / 通义千问 / Ollama 等兼容接口。配置后，AI 助手可按需读取当前项目资料与活动上下文。
         </div>
       </div>
     </el-card>
 
     <!-- 已发现仓库 -->
-    <el-card shadow="never" class="card settings-repo-card">
+    <el-card v-show="activeSection === 'git'" shadow="never" class="card settings-repo-card">
       <template #header>
         <div class="card-header">
-          <span>已发现仓库（{{ state.discoveredRepos.length }}）</span>
+          <span>Git 数据源状态（{{ state.discoveredRepos.length }}）</span>
           <div class="header-actions">
             <span v-if="scanning" class="progress-text">{{ progressText }}</span>
             <el-button type="primary" plain :loading="scanning" @click="doScan">
@@ -171,7 +173,7 @@
           <template #empty>
             <div class="table-empty">
               <el-icon><FolderOpened /></el-icon>
-              <p>暂无仓库，添加根目录后点击「重新扫描」</p>
+              <p>暂无仓库，添加根目录后会自动扫描</p>
             </div>
           </template>
           <el-table-column label="项目" min-width="200" show-overflow-tooltip>
@@ -189,9 +191,28 @@
           <el-table-column label="最近提交" min-width="190" show-overflow-tooltip>
             <template #default="{ row }">{{ row.info?.lastCommit || '-' }}</template>
           </el-table-column>
+          <el-table-column label="操作" width="100" fixed="right">
+            <template #default="{ row }">
+              <el-button v-if="!isRepoAdded(row.path)" text size="small" type="primary" @click="addRepoAsProject(row)">
+                加为项目
+              </el-button>
+              <span v-else class="repo-added-tag">已加入</span>
+            </template>
+          </el-table-column>
         </el-table>
       </div>
     </el-card>
+
+    <section v-show="activeSection === 'about'" class="workspace-panel settings-about">
+      <span class="section-kicker">LOCAL FIRST</span>
+      <h2>个人项目管理</h2>
+      <p>项目资料、报告记录和部署配置默认保存在本机。Git、AI 与部署都是按需启用的项目能力。</p>
+      <dl class="project-facts">
+        <div><dt>版本</dt><dd>1.3.0</dd></div>
+        <div><dt>平台</dt><dd>Windows / macOS / Linux</dd></div>
+        <div><dt>数据方式</dt><dd>本地优先</dd></div>
+      </dl>
+    </section>
   </div>
 </template>
 
@@ -199,8 +220,20 @@
 import { ref, computed, onMounted, onBeforeUnmount } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../store'
+import { useProjects } from '../composables/useProjects'
 import { toPlain } from '../utils/ipc'
-import { shortPath } from '../utils/path'
+import { shortPath, pathKey } from '../utils/path'
+import PageHeader from '../components/PageHeader.vue'
+
+const { loadProjects } = useProjects()
+
+const SETTING_SECTIONS = [
+  { label: 'AI 服务', value: 'ai' },
+  { label: 'Git 活动', value: 'git' },
+  { label: '个人身份', value: 'identity' },
+  { label: '应用信息', value: 'about' },
+]
+const activeSection = ref('ai')
 
 const EXCLUDE_GROUPS = [
   { label: '依赖与构建缓存', items: ['node_modules', '.cache', 'fvm_cache', '.gradle', 'Pods'] },
@@ -395,6 +428,7 @@ async function browseRoot() {
   if (dir && !state.config.roots.includes(dir)) {
     state.config.roots.push(dir)
     saveConfig()
+    doScan() // 添加根目录后立即扫描并列出仓库
   }
 }
 function addRoot() {
@@ -402,8 +436,27 @@ function addRoot() {
   if (v && !state.config.roots.includes(v)) {
     state.config.roots.push(v)
     saveConfig()
+    doScan() // 添加根目录后立即扫描并列出仓库
   }
   newRoot.value = ''
+}
+
+/** 该仓库是否已加入工作区项目（按 localPath 匹配） */
+function isRepoAdded(repoPath) {
+  const key = pathKey(repoPath)
+  return state.projects.items.some((p) => pathKey(p.localPath) === key)
+}
+/** 一键把发现的仓库加为工作区项目（不切换当前项目） */
+async function addRepoAsProject(row) {
+  const name = String(row.path).replace(/[\\/]+$/, '').split(/[\\/]/).pop() || row.shortName || '未命名项目'
+  try {
+    const r = await window.gitReport.projectsSave(toPlain({ name, localPath: row.path }))
+    if (!r?.ok) throw new Error(r?.error || '保存失败')
+    await loadProjects()
+    ElMessage.success(`已将「${name}」加入项目`)
+  } catch (e) {
+    ElMessage.error(e?.message || '加入项目失败')
+  }
 }
 function removeRoot(i) {
   state.config.roots.splice(i, 1)

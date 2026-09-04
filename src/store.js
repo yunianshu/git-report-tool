@@ -2,6 +2,12 @@ import { reactive } from 'vue'
 
 /** 跨视图共享状态 */
 export const state = reactive({
+  /** 个人项目：AI、活动报告与部署共享的统一上下文 */
+  projects: {
+    items: [],
+    currentId: '',
+    loading: false,
+  },
   /** 已启用的仓库路径（扫描页勾选后用于报告生成） */
   repos: [],
   /** 扫描发现的全部仓库（含 info，跨视图保留） */

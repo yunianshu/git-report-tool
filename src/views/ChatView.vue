@@ -1,181 +1,120 @@
 <template>
-  <div class="chat-view">
-    <!-- 顶部工具条：选周期 → 一键让 AI 生成（主页即聊天） -->
-    <el-card shadow="never" class="card chat-toolbar-card">
-      <div class="chat-toolbar">
-        <div class="toolbar-left">
-          <el-radio-group v-model="period">
-            <el-radio-button value="daily">日报</el-radio-button>
-            <el-radio-button value="weekly">周报</el-radio-button>
-            <el-radio-button value="biweekly">双周报</el-radio-button>
-            <el-radio-button value="monthly">月报</el-radio-button>
-          </el-radio-group>
-          <el-date-picker v-if="period === 'daily'" v-model="dailyDate" type="date" value-format="YYYY-MM-DD" />
-          <el-switch v-model="onlyMine" active-text="只看本人" inactive-text="全部作者" class="mine-switch" />
-        </div>
-        <div class="toolbar-right">
-          <span class="repo-count">{{ state.discoveredRepos.length }} 个仓库</span>
-          <el-button type="primary" size="large" :loading="busy" :disabled="busy || state.chat.streaming" @click="genReport">
-            <el-icon style="margin-right: 4px"><MagicStick /></el-icon>AI 生成报告
-          </el-button>
-        </div>
-      </div>
-      <el-alert
-        v-if="!state.config.roots.length"
-        type="warning"
-        :closable="false"
-        title="尚未配置扫描根目录，请到「设置」页添加后再生成报告。"
-        class="warn"
-      />
-    </el-card>
+  <div class="page ai-page">
+    <PageHeader eyebrow="AI WORKSPACE" title="AI 助手" description="让 AI 理解整个项目，再协助分析、规划和输出。">
+      <template #actions>
+        <el-button v-if="!configured" @click="$emit('navigate', 'settings')">配置 AI 服务</el-button>
+        <el-button v-else :loading="collecting" :disabled="!currentProject || !matchedRepos.length" @click="refreshActivity">
+          <el-icon><Refresh /></el-icon>刷新 Git 活动
+        </el-button>
+      </template>
+    </PageHeader>
 
-    <!-- 扫描/收集进度 -->
-    <div v-if="collecting" class="phase-card">
-      <el-icon class="is-loading phase-icon"><Loading /></el-icon>
-      <div class="phase-text">
-        <div class="phase-title">{{ phaseTitle }}</div>
-        <div class="phase-detail">{{ phaseDetail }}</div>
-      </div>
-      <el-progress v-if="state.report.collectProgress?.total" :percentage="collectPercent" :stroke-width="5" class="phase-bar" />
+    <div v-if="currentProject" class="ai-workspace">
+      <aside class="context-rail">
+        <div class="context-project">
+          <span class="section-kicker">CURRENT PROJECT</span>
+          <h2>{{ currentProject.name }}</h2>
+          <p>{{ currentProject.description || '未填写项目说明' }}</p>
+        </div>
+
+        <div class="context-section-head"><span>本次上下文</span><small>按需选择</small></div>
+        <label class="context-source">
+          <el-checkbox v-model="sources.project" />
+          <span><strong>项目资料</strong><small>{{ currentProject.notes ? '包含说明、标签和备注' : '包含说明和基础信息' }}</small></span>
+        </label>
+        <label class="context-source">
+          <el-checkbox v-model="sources.git" />
+          <span><strong>Git 活动</strong><small>{{ projectCommits.length }} 条活动 · {{ matchedRepos.length }} 个仓库</small></span>
+        </label>
+        <label class="context-source">
+          <el-checkbox v-model="sources.reports" />
+          <span><strong>报告记录</strong><small>{{ projectReports.length }} 条历史记录</small></span>
+        </label>
+        <label class="context-source">
+          <el-checkbox v-model="sources.deploy" />
+          <span><strong>部署状态</strong><small>{{ deployLabel }}</small></span>
+        </label>
+
+        <div class="context-note">
+          <el-icon><Lock /></el-icon>
+          <span>只发送已选择的上下文；密钥和 SSH 凭据不会进入对话。</span>
+        </div>
+      </aside>
+
+      <ChatPanel :context-text="contextText" :context-label="contextLabel" :quick-prompts="quickPrompts" />
     </div>
 
-    <!-- 聊天主页 -->
-    <div class="chat-body">
-      <ChatPanel ref="chatPanel" :context="chatContext" />
-    </div>
+    <EmptyState
+      v-else icon="ChatDotRound" title="先选择一个项目"
+      description="AI 需要明确的项目上下文。请从顶部选择项目，或先创建项目。"
+      action="前往项目" @action="$emit('navigate', 'projects')"
+    />
   </div>
 </template>
 
 <script setup>
-import { ref, computed } from 'vue'
+import { computed, onMounted, reactive, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
-import { state } from '../store'
-import { todayStr, addDays, untilToEnd } from '../utils/date'
+import PageHeader from '../components/PageHeader.vue'
+import EmptyState from '../components/EmptyState.vue'
 import ChatPanel from '../components/ChatPanel.vue'
+import { state } from '../store'
+import { useProjects } from '../composables/useProjects'
+import { buildProjectContext } from '../utils/ai-context'
+import { commitsForProject, deploymentConfigured, reposForProject } from '../utils/project-context'
+import { collectReportData } from '../utils/report-data'
+import { addDays, todayStr } from '../utils/date'
 
-const period = ref('daily')
-const dailyDate = ref(todayStr())
-const onlyMine = ref(true)
-const chatPanel = ref(null)
+defineEmits(['navigate'])
+const { currentProject } = useProjects()
+const sources = reactive({ project: true, git: false, reports: false, deploy: false })
+const reports = ref([])
+const deployments = ref([])
+const collecting = computed(() => ['scanning', 'collecting'].includes(state.report.phase))
+const configured = computed(() => !!(state.config.ai?.keyConfigured && state.config.ai?.model))
+const matchedRepos = computed(() => reposForProject(currentProject.value, state.discoveredRepos))
+const projectCommits = computed(() => commitsForProject(currentProject.value, state.report.rawCommits))
+const projectReports = computed(() => reports.value.filter((item) => !item.projectId || item.projectId === currentProject.value?.id))
+const projectDeployments = computed(() => deployments.value.filter((item) => item.projectId === currentProject.value?.id))
+const deployLabel = computed(() => deploymentConfigured(currentProject.value)
+  ? `${currentProject.value.targets.filter((target) => target?.server?.host && target?.remotePath).length} 个环境 · ${projectDeployments.value.length} 条记录`
+  : '尚未配置部署')
+const selectedCount = computed(() => Object.values(sources).filter(Boolean).length)
+const contextLabel = computed(() => `${currentProject.value?.name || '项目'} · ${selectedCount.value} 类上下文`)
+const contextText = computed(() => currentProject.value ? buildProjectContext({
+  project: currentProject.value,
+  sources,
+  commits: projectCommits.value,
+  reports: projectReports.value,
+  deployments: projectDeployments.value,
+  rangeLabel: '最近 30 天',
+}) : '')
+const quickPrompts = [
+  { label: '总结项目', prompt: '请根据当前项目资料，简要总结项目目标、现状和需要关注的重点。' },
+  { label: '梳理风险', prompt: '请识别当前项目的主要风险。区分已知事实与推断，并给出优先处理建议。' },
+  { label: '规划下一步', prompt: '请结合当前项目上下文，整理下一步行动清单，按优先级排序。' },
+  { label: '生成项目报告', prompt: '请综合当前已附带的项目上下文，生成一份简洁的项目进展报告；缺失的信息请明确标注。' },
+]
 
-/** 当前周期的 git 查询范围（until 为排他语义） */
-const range = computed(() => {
-  const T = todayStr()
-  if (period.value === 'daily') return { since: dailyDate.value, until: addDays(dailyDate.value, 1) }
-  if (period.value === 'weekly') return { since: addDays(T, -6), until: addDays(T, 1) }
-  if (period.value === 'biweekly') return { since: addDays(T, -13), until: addDays(T, 1) }
-  if (period.value === 'monthly') return { since: addDays(T, -29), until: addDays(T, 1) }
-  return { since: addDays(T, -6), until: addDays(T, 1) }
-})
-const rangeLabel = computed(() => {
-  const r = range.value
-  const end = untilToEnd(r.until) || r.since
-  return r.since === end ? r.since : `${r.since} ~ ${end}`
-})
-
-const collecting = computed(() => state.report.phase === 'scanning' || state.report.phase === 'collecting')
-const busy = computed(() => collecting.value)
-const phaseTitle = computed(() => (state.report.phase === 'scanning' ? '正在扫描仓库' : '正在收集提交'))
-const phaseDetail = computed(() => {
-  if (state.report.phase === 'scanning') {
-    return `已处理 ${state.report.scanProgress?.scanned || 0} 个目录 · 已发现 ${state.discoveredRepos.length} 个仓库`
-  }
-  const t = state.report.collectProgress?.total
-  return t ? `已完成 ${state.report.collectProgress?.done || 0} / ${t} 个仓库` : '正在收集提交…'
-})
-const collectPercent = computed(() => {
-  const t = state.report.collectProgress?.total
-  return t ? Math.round(((state.report.collectProgress?.done || 0) / t) * 100) : 0
-})
-
-function isMine(c) {
-  const ids = state.config?.identities || []
-  if (!ids.length) return false
-  return ids.some((id) => (id.email && c.authorEmail === id.email) || (id.name && c.authorName === id.name))
+async function loadHistory() {
+  const [reportRows, deploymentRows] = await Promise.all([
+    window.gitReport.listHistory().catch(() => []),
+    window.gitReport.deployHistoryList(currentProject.value?.id).catch(() => []),
+  ])
+  reports.value = Array.isArray(reportRows) ? reportRows : []
+  deployments.value = Array.isArray(deploymentRows) ? deploymentRows : []
 }
 
-/** 与「只看本人」口径一致的提交（供 AI 上下文使用） */
-const filteredCommits = computed(() => state.report.rawCommits.filter((c) => (onlyMine.value ? isMine(c) : true)))
-
-const chatContext = computed(() => ({
-  rangeLabel: rangeLabel.value,
-  onlyMine: onlyMine.value,
-  authorFilter: [],
-  identities: state.config.identities || [],
-  commits: filteredCommits.value,
-  range: range.value,
-}))
-
-const PERIOD_LABEL = { daily: '日报', weekly: '周报', biweekly: '双周报', monthly: '月报' }
-
-/** 一键生成：交由聊天面板（内部自动收集数据 → 附带上下文 → 发送报告请求） */
-async function genReport() {
-  if (busy.value || state.chat.streaming) return
-  if (!state.config.roots || !state.config.roots.length) {
-    ElMessage.warning('请先到「设置」添加扫描根目录')
-    return
-  }
-  await chatPanel.value?.quickGen(PERIOD_LABEL[period.value])
+async function refreshActivity() {
+  if (!currentProject.value || !matchedRepos.value.length) return
+  const until = addDays(todayStr(), 1)
+  const commits = await collectReportData({ since: addDays(todayStr(), -29), until, repoPaths: matchedRepos.value.map((repo) => repo.path) })
+  if (commits.length) {
+    sources.git = true
+    ElMessage.success(`已更新 ${commits.length} 条 Git 活动`)
+  } else ElMessage.info('最近 30 天没有发现 Git 活动')
 }
+
+watch(() => currentProject.value?.id, loadHistory)
+onMounted(loadHistory)
 </script>
-
-<style scoped>
-.chat-view {
-  display: flex;
-  flex-direction: column;
-  height: 100%;
-  min-height: 0;
-  gap: 14px;
-}
-.chat-toolbar-card { flex-shrink: 0; }
-.chat-toolbar {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  flex-wrap: wrap;
-}
-.toolbar-left {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-  flex-wrap: wrap;
-}
-.toolbar-right {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-}
-.repo-count {
-  font-size: 13px;
-  color: var(--brand-text-sub);
-  font-family: var(--brand-mono);
-}
-.mine-switch { margin-left: 4px; }
-.warn { margin-top: 10px; }
-
-.phase-card {
-  display: flex;
-  align-items: center;
-  gap: 16px;
-  padding: 20px 24px;
-  background: #fff;
-  border: 1px solid var(--brand-card-border);
-  border-radius: 10px;
-  box-shadow: 0 1px 2px rgba(20, 30, 50, .04);
-  flex-shrink: 0;
-}
-.phase-icon { font-size: 20px; color: var(--brand-accent); }
-.phase-text { flex: 1; min-width: 0; }
-.phase-title { font-size: 14px; font-weight: 600; color: var(--brand-text); }
-.phase-detail { font-size: 12px; color: var(--brand-text-sub); margin-top: 4px; }
-.phase-bar { width: 220px; flex-shrink: 0; }
-
-/* 聊天主体撑满剩余空间 */
-.chat-body {
-  flex: 1;
-  min-height: 0;
-  display: flex;
-}
-.chat-body > * { flex: 1; min-height: 0; }
-</style>
