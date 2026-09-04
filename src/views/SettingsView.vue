@@ -225,7 +225,7 @@ import { toPlain } from '../utils/ipc'
 import { shortPath, pathKey } from '../utils/path'
 import PageHeader from '../components/PageHeader.vue'
 
-const { loadProjects } = useProjects()
+const { loadProjects, promptImportDiscoveredRepos } = useProjects()
 
 const SETTING_SECTIONS = [
   { label: 'AI 服务', value: 'ai' },
@@ -383,6 +383,8 @@ onMounted(() => {
   })
   unsubRepoFound = window.gitReport.onScanRepoFound((repoPath) => {
     if (!scanning.value) return
+    const key = pathKey(repoPath)
+    if (state.discoveredRepos.some((repo) => pathKey(repo.path) === key)) return
     const row = { path: repoPath, shortName: shortPath(repoPath), info: null }
     state.discoveredRepos.push(row)
     infoQueue.push(row)
@@ -390,6 +392,8 @@ onMounted(() => {
   unsubScanDone = window.gitReport.onScanDone(() => {
     scanning.value = false
     progressText.value = ''
+    // 扫描完成后检查：有尚未加入项目的仓库时给出一次性「加为项目」提示
+    promptImportDiscoveredRepos(state.discoveredRepos.map((r) => r.path))
   })
   // 已配置 AI 接口时静默拉取模型列表，填充下拉
   if (state.config.ai?.keyConfigured && state.config.ai?.baseUrl) {

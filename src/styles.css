@@ -628,7 +628,7 @@ body {
   border-bottom: 1px solid var(--line);
   -webkit-app-region: drag; /* 无边框窗口：顶栏空白处可拖拽移动/双击最大化 */
 }
-.project-switcher, .topbar-actions { display: flex; align-items: center; gap: 10px; min-width: 0; -webkit-app-region: no-drag; }
+.project-switcher { display: flex; align-items: center; gap: 10px; min-width: 0; -webkit-app-region: no-drag; }
 .win-controls { display: flex; align-items: center; gap: 2px; margin-right: -14px; -webkit-app-region: no-drag; }
 .win-btn {
   width: 44px;
@@ -648,7 +648,6 @@ body {
 .topbar-label { color: var(--text-muted); font-size: 12px; white-space: nowrap; }
 .project-select { width: 230px; }
 .project-select .el-select__wrapper { box-shadow: none !important; background: #f3f5f6; }
-.data-note { color: #9299a4; font-size: 12px; }
 .content-area { flex: 1; min-width: 0; min-height: 0; overflow: auto; padding: 28px 32px 36px; }
 .page { width: 100%; max-width: 1480px; min-height: 100%; margin: 0 auto; }
 .page-header {

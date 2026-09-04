@@ -38,6 +38,20 @@ function normalizePath(p) {
   return process.platform === 'win32' ? p.replace(/\\/g, '/').toLowerCase() : p
 }
 
+/** 按跨平台规范化路径稳定去重，保留首次出现的原始路径与顺序 */
+function uniquePaths(paths) {
+  const seen = new Set()
+  const result = []
+  for (const value of paths || []) {
+    if (!value) continue
+    const key = normalizePath(value)
+    if (seen.has(key)) continue
+    seen.add(key)
+    result.push(value)
+  }
+  return result
+}
+
 /** 仓库内部常见的重型目录：下钻找嵌套仓库时跳过（几乎不可能含独立仓库） */
 const REPO_HEAVY_DIRS = ['build', 'out', 'target', 'dist', 'bin', '.cxx', 'CMakeFiles', '.dart_tool', '.hvigor']
 
@@ -131,7 +145,7 @@ async function scanRepos(roots, excludes, onProgress, onRepo) {
 /**
  * 扫描结果缓存 + 进行中去重 —— 预热/生成/设置页共用同一次扫盘：
  * - 相同 roots+excludes 的并发调用共享同一 Promise（不重复扫盘）
- * - 已完成的结果进程内缓存，重复调用瞬时返回（force=true 绕过，用于手动重新扫描）
+ * - 已完成的结果进程内缓存，重复调用瞬时返回（force=true 仅绕过已完成缓存，用于手动重新扫描）
  * - 进度/发现事件由调用方广播（main 层统一 send 到渲染端），多调用方共享进度流
  */
 const scanCache = new Map()
@@ -144,11 +158,12 @@ function scanKey(roots, excludes) {
 async function scanReposCached(roots, excludes, opts = {}) {
   const { force = false, onProgress, onRepo } = opts
   const key = scanKey(roots, excludes)
+  // 正在扫描的任务已经读取当前磁盘状态；强制扫描也应复用它，避免同一路径广播两套发现事件。
+  const inflight = scanInflight.get(key)
+  if (inflight) return inflight
   if (!force) {
     const cached = scanCache.get(key)
     if (cached) return cached
-    const inflight = scanInflight.get(key)
-    if (inflight) return inflight
   }
   const task = scanRepos(roots, excludes, onProgress, onRepo).then((repos) => {
     scanCache.set(key, repos)
@@ -324,7 +339,8 @@ function cacheUsable(entry) {
  */
 async function collectCommits(repos, opts, onProgress) {
   const o = normCollectOpts(opts)
-  const repoList = repos || []
+  // 调用方可能因并发扫描事件得到重复路径；底层集中去重，确保每个仓库只执行一次查询。
+  const repoList = uniquePaths(repos)
   const reposSig = repoList.join('\u0000')
   const key = [reposSig, o.since, o.until, o.includeMerges ? 1 : 0, o.authorsSig].join('\u0001')
 

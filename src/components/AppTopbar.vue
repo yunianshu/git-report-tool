@@ -20,10 +20,6 @@
         {{ projectStatusLabel(currentProject.status) }}
       </el-tag>
     </div>
-    <div class="topbar-actions">
-      <span class="data-note">数据仅保存在本机</span>
-      <el-button type="primary" @click="$emit('create-project')"><el-icon><Plus /></el-icon>新建项目</el-button>
-    </div>
     <!-- 无边框窗口的标题栏按钮（顶栏其余空白区域可拖拽移动窗口） -->
     <div class="win-controls">
       <button class="win-btn" type="button" title="最小化" @click="winMinimize">
@@ -48,7 +44,7 @@ const props = defineProps({
   projects: { type: Array, default: () => [] },
   currentId: { type: String, default: '' },
 })
-defineEmits(['select-project', 'create-project'])
+defineEmits(['select-project'])
 const currentProject = computed(() => props.projects.find((project) => project.id === props.currentId) || null)
 
 const maximized = ref(false)
