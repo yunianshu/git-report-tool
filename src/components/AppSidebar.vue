@@ -19,6 +19,7 @@
         <el-menu-item index="deploy"><el-icon><Promotion /></el-icon><span>部署</span></el-menu-item>
       </el-menu-item-group>
       <el-menu-item-group title="系统">
+        <el-menu-item index="extensions"><el-icon><MagicStick /></el-icon><span>扩展管理</span></el-menu-item>
         <el-menu-item index="settings"><el-icon><Setting /></el-icon><span>设置</span></el-menu-item>
       </el-menu-item-group>
     </el-menu>

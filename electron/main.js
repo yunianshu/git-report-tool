@@ -9,6 +9,7 @@ const store = require('./store')
 const reportHistory = require('./report-history')
 const aiService = require('./ai-service')
 const projectService = require('./project-service')
+const extensionsService = require('./extensions-service')
 const deployService = require('./deploy/deploy-service')
 const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
@@ -262,6 +263,30 @@ function registerIpc() {
   ipcMain.handle('projects:save', (_e, project) => projectService.save(project))
   ipcMain.handle('projects:remove', (_e, projectId) => projectService.remove(projectId))
 
+  // 扩展管理：统一管理 Claude Code / Codex / Kimi CLI / Zcode 的技能与插件
+  ipcMain.handle('extensions:list', () => extensionsService.listAll())
+  ipcMain.handle('extensions:toggleSkill', (_e, { platform, name, enable }) => {
+    try {
+      return { ok: true, ...extensionsService.toggleSkill(platform, name, enable) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('extensions:togglePlugin', (_e, { platform, id, enable }) => {
+    try {
+      return { ok: true, ...extensionsService.togglePlugin(platform, id, enable) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('extensions:readSkill', (_e, { platform, name }) => {
+    try {
+      return { ok: true, ...extensionsService.readSkillDoc(platform, name) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+
   // 系统
   ipcMain.handle('shell:openPath', (_e, p) => {
     if (p && fs.existsSync(p)) shell.showItemInFolder(p)
@@ -345,6 +370,12 @@ app.whenReady().then(() => {
         })()`).then((c) => console.log('[SMOKE][watch]', JSON.stringify(c))).catch(() => {})
       }, Number(process.env.SMOKE_WATCH_MS))
       watchTimer.unref?.()
+    }
+    // 调试用：SMOKE_EVAL=表达式 时在渲染层执行并打印结果（端到端验证 IPC 链路用）
+    if (process.env.SMOKE_EVAL) {
+      setTimeout(() => {
+        wc.executeJavaScript(`(${process.env.SMOKE_EVAL})`).then((r) => console.log('[SMOKE][eval]', JSON.stringify(r))).catch((e) => console.log('[SMOKE][eval-err]', e.message))
+      }, Number(process.env.SMOKE_EVAL_MS) || 4000)
     }
     if (process.env.SMOKE_SCREENSHOT_PATH) {
       setTimeout(async () => {

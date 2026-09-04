@@ -4,11 +4,11 @@
 
 在本应用中，**项目是一等领域对象**：只填写项目名称即可创建，不要求必须是 Git 仓库，也不要求配置部署。Git 活动、AI 助手和部署都是项目的**可选能力**——Git 只是报告的数据来源之一，而不是产品的中心。
 
-侧栏导航分三组、六个入口：
+侧栏导航分三组、七个入口：
 
 - **工作区**：工作台、项目
 - **项目能力**：AI 助手、活动报告、部署
-- **系统**：设置
+- **系统**：扩展管理、设置
 
 应用顶部提供统一的当前项目选择器，切换项目后 AI、报告和部署自动使用同一项目上下文。
 
@@ -77,6 +77,15 @@
 - 项目内提供 `Dockerfile` 与 `docker-compose.yml`（compose 文件名可配置）
 - 服务器端逻辑集中在 `deploy.sh`，由客户端自动上传，无需手工布置
 
+## 扩展管理
+
+统一管理本机四个 AI CLI 平台的技能（skills）与插件（plugins）：**Claude Code / Codex / Kimi CLI / Zcode**。
+
+- **真实扫描**：读取各平台主目录（`~/.claude`、`~/.codex`、`~/.kimi`、`~/.zcode`）的技能目录与插件注册表，展示名称、描述、版本、来源市场与启用状态；支持 SKILL.md 原文预览与目录直达
+- **技能启停**：采用目录迁移法（`skills/` ↔ `skills-disabled/`），与 Codex 官方禁用机制一致，可逆且不改动各 CLI 自身文件；Zcode 等链接聚合目录（symlink/junction）可正常扫描与迁移，且不触碰链接源
+- **插件启停**：直接写入各平台自身的启用配置——Claude Code 写 `~/.claude/settings.json` 的 `enabledPlugins`，Zcode 写 `~/.zcode/cli/config.json` 的 `plugins.enabledPlugins`，Codex 定向翻转 `~/.codex/config.toml` 对应 `[plugins."id"]` 段（保留其余内容与换行风格）；Kimi CLI 暂无插件体系时明确提示
+- **安全边界**：配置文件解析失败时拒绝写入并保留原文件；技能/插件名称做路径穿越校验；同名冲突时拒绝覆盖
+
 ## 设置
 
 按职责分区：**AI 服务 / Git 活动采集 / 个人身份 / 应用信息**。已发现 Git 仓库仅作为报告数据源状态展示，不再承担项目管理入口。
@@ -116,6 +125,7 @@ npm run build:linux     # Linux（AppImage + deb）
 │   ├── main.js            #   入口 + IPC
 │   ├── preload.js         #   contextBridge 安全桥接
 │   ├── project-service.js #   通用项目 CRUD（名称/目录/状态/标签/备注，凭据脱敏）
+│   ├── extensions-service.js # 四平台技能/插件扫描与启停（Claude Code/Codex/Kimi CLI/Zcode）
 │   ├── git-service.js     #   Git 扫描/收集/仓库信息（纯 Node）
 │   ├── ai-service.js      #   AI 对话（流式）
 │   ├── report-history.js  #   报告历史
@@ -129,7 +139,7 @@ npm run build:linux     # Linux（AppImage + deb）
 │       ├── history.js           #   发布历史
 │       └── scripts/deploy.sh    #   服务器端部署脚本
 ├── src/                   # 渲染进程（Vue 3）
-│   ├── views/             #   工作台 / 项目 / AI 助手 / 活动报告 / 部署 / 设置
+│   ├── views/             #   工作台 / 项目 / AI 助手 / 活动报告 / 部署 / 扩展管理 / 设置
 │   ├── components/        #   导航、页头、项目编辑、对话面板、图表等
 │   ├── composables/       #   项目加载与当前项目选择
 │   └── utils/             #   项目上下文 / AI 上下文 / 报告生成 / 日期

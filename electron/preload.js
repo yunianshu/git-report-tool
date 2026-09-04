@@ -70,6 +70,14 @@ contextBridge.exposeInMainWorld('gitReport', {
   projectsList: () => ipcRenderer.invoke('projects:list'),
   projectsSave: (project) => ipcRenderer.invoke('projects:save', toPlain(project)),
   projectsRemove: (projectId) => ipcRenderer.invoke('projects:remove', projectId),
+  // 扩展管理（四平台技能与插件）
+  extensionsList: () => ipcRenderer.invoke('extensions:list'),
+  extensionsToggleSkill: (platform, name, enable) =>
+    ipcRenderer.invoke('extensions:toggleSkill', { platform, name, enable }),
+  extensionsTogglePlugin: (platform, id, enable) =>
+    ipcRenderer.invoke('extensions:togglePlugin', { platform, id, enable }),
+  extensionsReadSkill: (platform, name) =>
+    ipcRenderer.invoke('extensions:readSkill', { platform, name }),
   // ─── 一键部署模块（OneDeploy） ───
   deployProjectsList: () => ipcRenderer.invoke('deploy:projects:list'),
   deployProjectsSave: (p) => ipcRenderer.invoke('deploy:projects:save', toPlain(p)),

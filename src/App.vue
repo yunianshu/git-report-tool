@@ -14,6 +14,7 @@
           <ChatView v-else-if="view === 'chat'" key="chat" @navigate="navigate" />
           <ReportView v-else-if="view === 'report'" key="report" @navigate="navigate" />
           <DeployView v-else-if="view === 'deploy'" key="deploy" @navigate="navigate" />
+          <ExtensionsView v-else-if="view === 'extensions'" key="extensions" />
           <SettingsView v-else key="settings" :initial-section="settingsSection" />
         </transition>
       </main>
@@ -34,6 +35,7 @@ import ProjectsView from './views/ProjectsView.vue'
 import ChatView from './views/ChatView.vue'
 import ReportView from './views/ReportView.vue'
 import DeployView from './views/DeployView.vue'
+import ExtensionsView from './views/ExtensionsView.vue'
 import SettingsView from './views/SettingsView.vue'
 import { state } from './store'
 import { useProjects } from './composables/useProjects'
