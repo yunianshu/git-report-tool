@@ -4,14 +4,15 @@
  * 统一走主进程（net.fetch），规避渲染层 CORS；API Key 由主进程解析，不下发渲染层
  */
 const { net } = require('electron')
+const dns = require('dns')
 
 const DEFAULT_BASE_URL = 'https://api.openai.com/v1'
 /** 输出 token 上限（防止长报告溢出上下文或静默截断） */
 const DEFAULT_MAX_TOKENS = 4096
 
-/** 是否为内网/本机主机（http 仅允许这些地址，防止向公网明文发送 Key） */
-function isPrivateHost(hostname) {
-  const h = (hostname || '').toLowerCase()
+/** 是否为内网/本机 IP（http 仅允许这些地址，防止向公网明文发送 Key） */
+function isPrivateIp(host) {
+  const h = (host || '').toLowerCase()
   if (['localhost', '127.0.0.1', '::1', '0.0.0.0'].includes(h)) return true
   const parts = h.split('.').map(Number)
   if (parts.length === 4 && parts.every((n) => Number.isInteger(n) && n >= 0 && n <= 255)) {
@@ -23,17 +24,38 @@ function isPrivateHost(hostname) {
   return false
 }
 
-/** 校验接口地址：仅允许 https，或 http 限本机/内网（自建网关场景）。返回去尾部斜杠的完整 base（含路径前缀） */
-function assertSafeBaseUrl(baseUrl) {
+/**
+ * 域名形式的内网地址（如 ai.sysapp.prttech.com → 10.11.9.2）：
+ * 解析后任一地址落在私网段即放行；解析失败视为不可信。
+ */
+async function hostResolvesPrivate(hostname) {
+  if (!hostname || /^\d{1,3}(\.\d{1,3}){3}$/.test(hostname)) return isPrivateIp(hostname)
+  try {
+    const addrs = await dns.promises.lookup(hostname, { all: true })
+    return addrs.some(({ address }) => isPrivateIp(address))
+  } catch {
+    return false
+  }
+}
+
+/**
+ * 校验接口地址：https 一律允许；http 仅限本机/内网——IP 直接判段，
+ * 域名解析后含私网地址才放行（兼容公司内网网关域名）。返回去尾部斜杠的完整 base（含路径前缀）
+ */
+async function assertSafeBaseUrl(baseUrl) {
   let u
   try {
     u = new URL(baseUrl || DEFAULT_BASE_URL)
   } catch {
     throw new Error('接口地址格式不正确，请检查「设置 → AI 模型 → 接口地址」')
   }
-  const ok = u.protocol === 'https:' || (u.protocol === 'http:' && isPrivateHost(u.hostname))
+  if (u.protocol !== 'https:' && u.protocol !== 'http:') {
+    throw new Error('接口地址协议不支持（仅支持 http / https）')
+  }
+  const hostname = u.hostname
+  const ok = u.protocol === 'https:' || (u.protocol === 'http:' && (isPrivateIp(hostname) || await hostResolvesPrivate(hostname)))
   if (!ok) {
-    throw new Error('接口地址仅支持 https，或 http 仅限本机/内网（localhost、10.x、172.16-31.x、192.168.x）')
+    throw new Error('接口地址仅支持 https，或 http 仅限本机/内网（localhost、10.x、172.16-31.x、192.168.x，及解析到这些网段的域名）')
   }
   // 保留路径前缀（如 /v1、/anthropic），仅去尾部斜杠，供后续拼 /chat/completions
   return u.href.replace(/\/+$/, '')
@@ -48,7 +70,7 @@ async function chat({ baseUrl, apiKey, model, messages, temperature = 0.7, maxTo
   if (!model) throw new Error('未配置模型名称，请先在「设置 → AI 模型」中填写')
   if (!Array.isArray(messages) || !messages.length) throw new Error('消息列表为空')
 
-  const url = `${assertSafeBaseUrl(baseUrl)}/chat/completions`
+  const url = `${await assertSafeBaseUrl(baseUrl)}/chat/completions`
   const resp = await net.fetch(url, {
     method: 'POST',
     headers: {
@@ -125,7 +147,7 @@ async function test({ baseUrl, apiKey, model }) {
 /** 获取可用模型列表（OpenAI 兼容 /models） */
 async function listModels({ baseUrl, apiKey }) {
   if (!apiKey) throw new Error('未配置 API Key，请先填写后再获取模型列表')
-  const url = `${assertSafeBaseUrl(baseUrl)}/models`
+  const url = `${await assertSafeBaseUrl(baseUrl)}/models`
   const resp = await net.fetch(url, {
     method: 'GET',
     headers: { Authorization: `Bearer ${apiKey}` },
