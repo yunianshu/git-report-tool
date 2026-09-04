@@ -82,6 +82,8 @@ function normalizeProject(p) {
   c.status = ['active', 'paused', 'archived'].includes(c.status) ? c.status : 'active'
   c.tags = [...new Set((Array.isArray(c.tags) ? c.tags : []).map((x) => String(x).trim()).filter(Boolean))]
   c.notes = String(c.notes || '')
+  // 本地调试模式：bat = 运行根目录 start.bat（默认）；off = 该项目不需要本地调试
+  c.debugMode = c.debugMode === 'off' ? 'off' : 'bat'
 
   if (!Array.isArray(source.targets) || !source.targets.length) {
     const t = defaultTarget()

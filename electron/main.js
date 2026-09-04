@@ -11,6 +11,7 @@ const aiService = require('./ai-service')
 const projectService = require('./project-service')
 const extensionsService = require('./extensions-service')
 const terminalService = require('./terminal-service')
+const localDebugService = require('./local-debug-service')
 const deployService = require('./deploy/deploy-service')
 const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
@@ -294,6 +295,30 @@ function registerIpc() {
       // 只回传可克隆字段（child 进程对象不可结构化克隆）
       const { cwd, child } = terminalService.openTerminal(dir)
       return { ok: true, cwd, pid: child?.pid }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+
+  // 本地调试：探测 / 运行 / 生成项目根目录 start.bat
+  ipcMain.handle('debug:status', (_e, dir) => {
+    try {
+      return { ok: true, ...localDebugService.status(dir) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('debug:run', (_e, dir) => {
+    try {
+      const { cwd, batPath } = localDebugService.run(dir)
+      return { ok: true, cwd, batPath }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('debug:generate', (_e, dir) => {
+    try {
+      return { ok: true, ...localDebugService.generate(dir) }
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }
     }

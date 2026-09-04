@@ -71,6 +71,18 @@
             <button type="button" @click="$emit('navigate', 'report')"><span><strong>活动报告</strong><small>{{ matchedRepos.length ? '查看关联 Git 活动' : '关联目录后可采集 Git 活动' }}</small></span><el-icon><ArrowRight /></el-icon></button>
             <button type="button" @click="$emit('navigate', 'deploy')"><span><strong>部署</strong><small>{{ deploymentConfigured(selected) ? '进入发布工作区' : '需要时再配置部署' }}</small></span><el-icon><ArrowRight /></el-icon></button>
             <button type="button" :disabled="!canOpenTerminal" @click="openPowerShell"><span><strong>PowerShell</strong><small>{{ canOpenTerminal ? '在项目目录打开终端' : '关联本地目录后可用' }}</small></span><el-icon><ArrowRight /></el-icon></button>
+            <button
+              type="button"
+              :class="{ 'debug-off': isDebugOff }"
+              :disabled="!canOpenTerminal"
+              @click="onDebugCardClick"
+            >
+              <span>
+                <strong>本地调试 <el-tag v-if="isDebugOff" size="small" effect="plain" type="info">已关闭</el-tag></strong>
+                <small>{{ debugCardHint }}</small>
+              </span>
+              <el-icon><ArrowRight /></el-icon>
+            </button>
           </div>
         </div>
       </section>
@@ -81,7 +93,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { Search } from '@element-plus/icons-vue'
 import PageHeader from '../components/PageHeader.vue'
@@ -93,7 +105,7 @@ import { deploymentConfigured, projectStatusLabel, reposForProject } from '../ut
 defineEmits(['navigate', 'create-project', 'edit-project'])
 const query = ref('')
 const status = ref('')
-const { currentProject, selectProject, removeProject } = useProjects()
+const { currentProject, selectProject, removeProject, saveProject } = useProjects()
 const filteredProjects = computed(() => state.projects.items.filter((project) => {
   const haystack = `${project.name} ${project.description} ${(project.tags || []).join(' ')}`.toLowerCase()
   return (!query.value || haystack.includes(query.value.toLowerCase())) && (!status.value || project.status === status.value)
@@ -110,6 +122,84 @@ async function openPowerShell() {
   }
   const r = await window.gitReport.openTerminal(dir)
   if (!r?.ok) ElMessage.error(r?.error || '打开终端失败')
+}
+
+// ─── 本地调试（项目根目录 start.bat） ───
+const hasStartBat = ref(false)
+const isDebugOff = computed(() => selected.value?.debugMode === 'off')
+const debugCardHint = computed(() => {
+  if (!selected.value?.localPath) return '关联本地目录后可用'
+  if (isDebugOff.value) return '点击重新开启'
+  return hasStartBat.value ? '运行项目根目录的 start.bat' : '未找到 start.bat，点击生成模板'
+})
+
+watch(
+  () => [selected.value?.id, selected.value?.localPath],
+  async () => {
+    hasStartBat.value = false
+    const dir = selected.value?.localPath
+    if (!dir) return
+    try {
+      const r = await window.gitReport.debugStatus(dir)
+      hasStartBat.value = !!r?.hasStartBat
+    } catch { /* 探测失败按未找到处理 */ }
+  },
+  { immediate: true }
+)
+
+/** 持久化本地调试开关 */
+async function saveDebugMode(mode) {
+  const project = selected.value
+  if (!project) return
+  try {
+    await saveProject({ ...project, debugMode: mode })
+  } catch (error) {
+    ElMessage.error(error?.message || '保存项目失败')
+  }
+}
+
+async function onDebugCardClick() {
+  const project = selected.value
+  const dir = project?.localPath
+  if (!dir) {
+    ElMessage.warning('请先在编辑中关联本地目录')
+    return
+  }
+  if (isDebugOff.value) {
+    await saveDebugMode('bat')
+    ElMessage.success('已重新开启本地调试')
+    return
+  }
+  let st = { hasStartBat: false }
+  try {
+    st = await window.gitReport.debugStatus(dir) || st
+  } catch { /* 按未找到处理 */ }
+  if (st.hasStartBat) {
+    const r = await window.gitReport.debugRun(dir)
+    if (r?.ok) ElMessage.success('已在项目目录启动 start.bat')
+    else ElMessage.error(r?.error || '运行 start.bat 失败')
+    return
+  }
+  try {
+    await ElMessageBox.confirm(
+      '项目目录未找到 start.bat。是否生成模板文件？生成后可编辑为项目实际的启动命令。',
+      '本地调试',
+      { distinguishCancelAndClose: true, confirmButtonText: '生成 start.bat', cancelButtonText: '本项目不需要', type: 'info' }
+    )
+    const g = await window.gitReport.debugGenerate(dir)
+    if (g?.ok) {
+      hasStartBat.value = true
+      ElMessage.success('已生成 start.bat，编辑为实际启动命令后即可一键运行')
+    } else {
+      ElMessage.error(g?.error || '生成 start.bat 失败')
+    }
+  } catch (action) {
+    if (action === 'cancel') {
+      await saveDebugMode('off')
+      ElMessage.success('已关闭本项目的本地调试，点击卡片可重新开启')
+    }
+    // close（右上角 ×）不做任何事
+  }
 }
 
 function formatTime(timestamp) {

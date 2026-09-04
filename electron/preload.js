@@ -80,6 +80,10 @@ contextBridge.exposeInMainWorld('gitReport', {
     ipcRenderer.invoke('extensions:readSkill', { platform, name }),
   // 终端（在项目目录打开 PowerShell / 系统终端）
   openTerminal: (dir) => ipcRenderer.invoke('terminal:open', dir),
+  // 本地调试（项目根目录 start.bat 探测 / 运行 / 生成模板）
+  debugStatus: (dir) => ipcRenderer.invoke('debug:status', dir),
+  debugRun: (dir) => ipcRenderer.invoke('debug:run', dir),
+  debugGenerate: (dir) => ipcRenderer.invoke('debug:generate', dir),
   // ─── 一键部署模块（OneDeploy） ───
   deployProjectsList: () => ipcRenderer.invoke('deploy:projects:list'),
   deployProjectsSave: (p) => ipcRenderer.invoke('deploy:projects:save', toPlain(p)),
