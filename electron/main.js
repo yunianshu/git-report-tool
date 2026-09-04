@@ -12,6 +12,10 @@ const deployService = require('./deploy/deploy-service')
 const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
 
+// 统一数据目录为 ASCII 固定值，与产品显示名（productName，可中文）解耦：
+// dev / 打包 GUI / 无头 CLI 三模式共用同一份配置，改名或换产品名不丢数据
+app.setPath('userData', path.join(app.getPath('appData'), 'dev-project-manager'))
+
 let mainWindow
 
 /** 向主窗口广播事件（预热等主进程主动任务无 sender，统一走此通道） */
@@ -26,7 +30,7 @@ function createWindow() {
     height: 860,
     minWidth: 1080,
     minHeight: 700,
-    title: 'Git 报告 · 一键部署',
+    title: '开发项目管理',
     autoHideMenuBar: true,
     backgroundColor: '#f5f7fa',
     webPreferences: {

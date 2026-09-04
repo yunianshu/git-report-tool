@@ -1,9 +1,9 @@
 <template>
   <el-container class="app">
     <el-aside width="200px" class="aside">
-      <div class="logo">Dev<b>·</b>工具箱</div>
+      <div class="logo">开发项目管理</div>
       <el-menu :default-active="view" class="menu" @select="(i) => (view = i)">
-        <el-menu-item-group title="Git 报告">
+        <el-menu-item-group title="项目报告">
           <el-menu-item index="chat">
             <el-icon><ChatDotRound /></el-icon><span>AI 助手</span>
           </el-menu-item>

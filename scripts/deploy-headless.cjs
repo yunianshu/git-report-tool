@@ -17,7 +17,7 @@ if (!projectId) {
 }
 
 // 复用 GUI 应用的 userData（部署项目配置、加密凭据、发布历史都在这里）
-app.setPath('userData', path.join(app.getPath('appData'), 'git-report-desktop'))
+app.setPath('userData', path.join(app.getPath('appData'), 'dev-project-manager'))
 
 app.whenReady().then(async () => {
   // 延迟 require：history/deploy-projects 在调用时才取 userData 路径，ready 后再加载最稳妥

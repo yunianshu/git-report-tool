@@ -36,7 +36,7 @@ jobs:
           CSC_IDENTITY_AUTO_DISCOVERY: 'false'
       - uses: actions/upload-artifact@v4
         with:
-          name: git-report-mac
+          name: dev-project-manager-mac
           path: release/*/*.dmg
           if-no-files-found: error
 
@@ -56,7 +56,7 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
-          name: git-report-windows
+          name: dev-project-manager-windows
           path: release/*/*.exe
           if-no-files-found: error
 
@@ -76,6 +76,6 @@ jobs:
           GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - uses: actions/upload-artifact@v4
         with:
-          name: git-report-linux
+          name: dev-project-manager-linux
           path: release/*/*.AppImage
           if-no-files-found: error
