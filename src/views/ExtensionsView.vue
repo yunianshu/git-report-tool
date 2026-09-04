@@ -6,25 +6,63 @@
       description="统一管理 Claude Code、Codex、Kimi CLI、Zcode 四个平台的技能与插件。"
     />
 
-    <!-- 一级：扩展项卡片（平台 × 技能/插件） -->
+    <!-- 一级：扩展项卡片，按 技能 / 插件 分区 -->
     <template v-if="!selected">
-      <div class="ext-grid">
-        <div v-for="c in overviewCards" :key="c.key" class="ext-card" @click="openCard(c)">
-          <div class="ext-card-top">
-            <el-tag size="small" :type="c.installed ? 'success' : 'info'" effect="plain">{{ c.platformName }}</el-tag>
-            <el-icon class="ext-card-icon"><component :is="c.icon" /></el-icon>
+      <div class="ext-section">
+        <div class="ext-section-head">
+          <div class="ext-section-title">
+            <el-icon><MagicStick /></el-icon>
+            <span>技能 Skills</span>
+            <span class="ext-section-sub">四平台共 {{ skillSummary.total }} 项 · 启用 {{ skillSummary.enabled }}</span>
           </div>
-          <div class="ext-card-title">{{ c.title }}</div>
-          <template v-if="c.supported && c.installed">
-            <div class="ext-card-count">启用 {{ c.enabled }} / {{ c.total }}</div>
-            <el-progress
-              :percentage="c.total ? Math.round((c.enabled / c.total) * 100) : 0"
-              :stroke-width="6"
-              :show-text="false"
-              class="ext-card-progress"
-            />
-          </template>
-          <div class="ext-card-note" :class="{ 'ext-card-note-warn': !c.installed || !c.supported }">{{ c.note }}</div>
+        </div>
+        <div class="ext-grid">
+          <div v-for="c in skillCards" :key="c.key" class="ext-card" @click="openCard(c)">
+            <div class="ext-card-top">
+              <el-tag size="small" :type="c.installed ? 'success' : 'info'" effect="plain">{{ c.platformName }}</el-tag>
+              <el-icon class="ext-card-icon"><component :is="c.icon" /></el-icon>
+            </div>
+            <div class="ext-card-title">{{ c.title }}</div>
+            <template v-if="c.installed">
+              <div class="ext-card-count">启用 {{ c.enabled }} / {{ c.total }}</div>
+              <el-progress
+                :percentage="c.total ? Math.round((c.enabled / c.total) * 100) : 0"
+                :stroke-width="6"
+                :show-text="false"
+                class="ext-card-progress"
+              />
+            </template>
+            <div class="ext-card-note" :class="{ 'ext-card-note-warn': !c.installed }">{{ c.note }}</div>
+          </div>
+        </div>
+      </div>
+
+      <div class="ext-section">
+        <div class="ext-section-head">
+          <div class="ext-section-title">
+            <el-icon><Box /></el-icon>
+            <span>插件 Plugins</span>
+            <span class="ext-section-sub">四平台共 {{ pluginSummary.total }} 项 · 启用 {{ pluginSummary.enabled }}</span>
+          </div>
+        </div>
+        <div class="ext-grid">
+          <div v-for="c in pluginCards" :key="c.key" class="ext-card" @click="openCard(c)">
+            <div class="ext-card-top">
+              <el-tag size="small" :type="c.installed ? 'success' : 'info'" effect="plain">{{ c.platformName }}</el-tag>
+              <el-icon class="ext-card-icon"><component :is="c.icon" /></el-icon>
+            </div>
+            <div class="ext-card-title">{{ c.title }}</div>
+            <template v-if="c.supported && c.installed">
+              <div class="ext-card-count">启用 {{ c.enabled }} / {{ c.total }}</div>
+              <el-progress
+                :percentage="c.total ? Math.round((c.enabled / c.total) * 100) : 0"
+                :stroke-width="6"
+                :show-text="false"
+                class="ext-card-progress"
+              />
+            </template>
+            <div class="ext-card-note" :class="{ 'ext-card-note-warn': !c.installed || !c.supported }">{{ c.note }}</div>
+          </div>
         </div>
       </div>
     </template>
@@ -166,37 +204,36 @@ const rows = computed(() => {
 const enabledCount = computed(() => rows.value.filter((r) => r.enabled).length)
 const typeTitle = computed(() => (selected.value?.type === 'skills' ? '技能 Skills' : '插件 Plugins'))
 
-/** 一级卡片：平台 × 类型，共 8 张 */
-const overviewCards = computed(() =>
-  platforms.value.flatMap((p) => [
-    {
-      key: `${p.id}:skills`,
-      platformId: p.id,
-      type: 'skills',
-      platformName: p.name,
-      title: '技能 Skills',
-      icon: 'MagicStick',
-      installed: p.installed,
-      supported: true,
-      enabled: p.skills.filter((s) => s.enabled).length,
-      total: p.skills.length,
-      note: p.installed ? '目录迁移启停 · 链接技能级联源平台' : '未检测到平台目录',
-    },
-    {
-      key: `${p.id}:plugins`,
-      platformId: p.id,
-      type: 'plugins',
-      platformName: p.name,
-      title: '插件 Plugins',
-      icon: 'Box',
-      installed: p.installed,
-      supported: p.pluginsSupported,
-      enabled: p.plugins.filter((x) => x.enabled).length,
-      total: p.plugins.length,
-      note: !p.pluginsSupported ? '该平台暂无插件体系' : !p.installed ? '未检测到平台目录' : '开关写入平台自身配置',
-    },
-  ])
-)
+/** 一级卡片：按类型分区，每个区块内为各平台的卡片 */
+function makeCard(p, type) {
+  const isSkill = type === 'skills'
+  return {
+    key: `${p.id}:${type}`,
+    platformId: p.id,
+    type,
+    platformName: p.name,
+    title: isSkill ? '技能 Skills' : '插件 Plugins',
+    icon: isSkill ? 'MagicStick' : 'Box',
+    installed: p.installed,
+    supported: isSkill || p.pluginsSupported,
+    enabled: (isSkill ? p.skills : p.plugins).filter((x) => x.enabled).length,
+    total: (isSkill ? p.skills : p.plugins).length,
+    note: isSkill
+      ? (p.installed ? '目录迁移启停 · 链接技能级联源平台' : '未检测到平台目录')
+      : (!p.pluginsSupported ? '该平台暂无插件体系' : !p.installed ? '未检测到平台目录' : '开关写入平台自身配置'),
+  }
+}
+
+const skillCards = computed(() => platforms.value.map((p) => makeCard(p, 'skills')))
+const pluginCards = computed(() => platforms.value.map((p) => makeCard(p, 'plugins')))
+const skillSummary = computed(() => ({
+  total: skillCards.value.reduce((n, c) => n + c.total, 0),
+  enabled: skillCards.value.reduce((n, c) => n + c.enabled, 0),
+}))
+const pluginSummary = computed(() => ({
+  total: pluginCards.value.reduce((n, c) => n + c.total, 0),
+  enabled: pluginCards.value.reduce((n, c) => n + c.enabled, 0),
+}))
 
 function openCard(card) {
   selected.value = { platformId: card.platformId, type: card.type }
@@ -288,6 +325,25 @@ onMounted(loadExtensions)
   gap: 14px;
 }
 .ext-items { grid-template-columns: repeat(auto-fill, minmax(320px, 1fr)); }
+
+/* 一级分区 */
+.ext-section { margin-bottom: 6px; }
+.ext-section-head { margin-bottom: 10px; }
+.ext-section-title {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 15px;
+  font-weight: 600;
+  color: var(--brand-text);
+}
+.ext-section-title .el-icon { font-size: 17px; color: var(--brand-text-sub); }
+.ext-section-sub {
+  font-size: 12px;
+  font-weight: 400;
+  color: var(--brand-text-sub);
+  margin-left: 4px;
+}
 
 /* 一级扩展项卡片 */
 .ext-card {
