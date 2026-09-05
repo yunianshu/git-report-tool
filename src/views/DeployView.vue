@@ -157,7 +157,10 @@ function fillForm(p) {
         server.passphrase = ''
         server.clearSecret = false
         server.clearPassphrase = false
-        return { ...et, ...t, server, health: { ...et.health, ...(t.health || {}) } }
+        const dataSync = { ...et.dataSync, ...(t.dataSync || {}) }
+        dataSync.importSecret = ''
+        dataSync.clearImportSecret = false
+        return { ...et, ...t, server, health: { ...et.health, ...(t.health || {}) }, dataSync }
       })
     : base.targets
   Object.assign(form, merged)

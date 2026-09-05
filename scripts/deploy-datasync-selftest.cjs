@@ -237,6 +237,70 @@ async function main() {
     passed += 1
     console.log('  ✓ 数据目录缺失在检查阶段即失败，且不产生服务器操作')
 
+    // ── 8. 导入钩子：importMode=command → 数据落盘后执行导入命令（占位符展开） ──
+    const importDir = path.join(tmpRoot, 'proj-import')
+    fs.mkdirSync(importDir, { recursive: true })
+    fs.writeFileSync(path.join(importDir, 'VERSION'), '3.0.0\n', 'utf8')
+    fs.writeFileSync(path.join(importDir, 'docker-compose.yml'), 'services: {}\n', 'utf8')
+    fs.mkdirSync(path.join(importDir, 'data'), { recursive: true })
+    fs.writeFileSync(path.join(importDir, 'data', 'en.json'), '{"code":200}', 'utf8')
+    const savedImport = deployProjects.save(deployProjects.normalizeProject({
+      name: '导入钩子项目', localPath: importDir, version: { strategy: 'auto' },
+      targets: [{
+        id: 't1', name: '生产', remotePath: '/srv/app2',
+        server: { host: '203.0.113.10', port: 22, username: 'root', authType: 'password' },
+        health: { enabled: false },
+        dataSync: {
+          enabled: true, localDir: 'data', remoteDir: 'shared/data',
+          importMode: 'command', importCommand: 'bash /opt/import.sh {dataDir} {user} {secret}',
+          importUser: 'admin', importSecret: "p@ss'word",
+        },
+      }],
+    }))
+    serverState.execScripts = [
+      { pattern: /unzip -o .* && rm -f/, stdout: '__DATA_SYNC_OK__\n', code: 0 },
+      { pattern: /bash \/opt\/import\.sh/, stdout: 'imported 61 products\n', code: 0 },
+      { pattern: /readlink/, stdout: '' },
+      { pattern: /bash .*deploy\.sh/, stdout: '__DEPLOY_OK__:ok\n', code: 0 },
+    ]
+    const { record: recHook } = await runDeploy(savedImport.id)
+    assert.strictEqual(recHook.status, 'success', '导入钩子成功时整单应 success: ' + recHook.message)
+    assert.strictEqual(recHook.stages.datasync.status, 'success')
+    const importCmd = serverState.execLog.find((c) => c.includes('/opt/import.sh'))
+    assert.ok(importCmd, '应执行导入命令')
+    assert.ok(importCmd.includes("'/srv/app2/shared/data'"), '占位符 {dataDir} 应展开为带引号远端目录')
+    assert.ok(importCmd.includes("'admin'"), '{user} 应展开')
+    assert.ok(importCmd.includes("'p@ss'\\''word'"), '{secret} 应单引号转义展开')
+    // 导入命令退出码非 0 → 整单 failed
+    serverState.execScripts[1] = { pattern: /bash \/opt\/import\.sh/, stdout: 'import failed\n', code: 3 }
+    serverState.uploads = fs.mkdtempSync(path.join(tmpRoot, 'server-uploads3-'))
+    const { record: recHookFail } = await runDeploy(savedImport.id)
+    assert.strictEqual(recHookFail.status, 'failed')
+    assert.ok(recHookFail.message.includes('数据导入命令执行失败'), '失败消息应含导入失败: ' + recHookFail.message)
+    assert.strictEqual(recHookFail.stages.datasync.status, 'failed')
+    // 未配置导入钩子 → 不执行导入命令
+    serverState.execScripts[1] = { pattern: /unzip -o .* && rm -f/, stdout: '__DATA_SYNC_OK__\n', code: 0 }
+    serverState.execLog.length = 0
+    const { record: recHookNone } = await runDeploy(projectIdOff)
+    assert.strictEqual(recHookNone.status, 'success')
+    assert.ok(!serverState.execLog.some((c) => c.includes('/opt/import.sh')), '未配置导入时不得执行导入命令')
+    passed += 1
+    console.log('  ✓ 导入钩子：命令执行/占位符转义/失败传播/未配置跳过全部正确')
+
+    // ── 9. 导入凭据：save 加密落盘、list 脱敏（不出主进程）、明文更新替换 ──
+    const listedHook = deployProjects.list().find((p) => p.id === savedImport.id)
+    const dsHook = listedHook.targets[0].dataSync
+    assert.strictEqual(dsHook.importSecretConfigured, true, 'list 应标记导入凭据已配置')
+    assert.ok(!('importSecret' in dsHook), 'list 不得携带加密对象/明文凭据')
+    assert.ok(dsHook.importSecretMasked && dsHook.importSecretMasked.includes('•'), '应返回掩码')
+    // 原始文件中应存加密对象而非明文
+    const rawFile = JSON.parse(fs.readFileSync(path.join(tmpRoot, 'userdata', 'deploy-projects.json'), 'utf8'))
+    const rawDs = rawFile.projects.find((p) => p.id === savedImport.id).targets[0].dataSync
+    assert.ok(rawDs.importSecret && typeof rawDs.importSecret === 'object' && ('plain' in rawDs.importSecret || 'enc' in rawDs.importSecret),
+      '落盘应为 store 加密封装对象，而非裸明文字符串')
+    passed += 1
+    console.log('  ✓ 导入凭据：加密落盘、list 脱敏、掩码返回正确')
+
     console.log(`\n数据同步专项自测通过（${passed} 组断言）`)
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true })

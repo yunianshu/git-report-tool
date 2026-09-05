@@ -11,6 +11,7 @@ const ssh = require('./ssh-service')
 const packager = require('./packager')
 const projects = require('./deploy-projects')
 const history = require('./history')
+const store = require('../store')
 const { detectVersion } = require('./version-detector')
 
 /** 服务端脚本随应用分发（asar 内也可 readFileSync） */
@@ -239,6 +240,29 @@ function buildDataSyncCommand(dataZipRemote, remoteDestDir) {
   return `mkdir -p ${quoteArg(remoteDestDir)} && unzip -o ${quoteArg(dataZipRemote)} -d ${quoteArg(remoteDestDir)} && rm -f ${quoteArg(dataZipRemote)} && echo __DATA_SYNC_OK__`
 }
 
+/** 解析目标的数据导入钩子配置（凭据经 getDataSyncCredentials 从原始数据解密，list() 脱敏版不含） */
+function getDataImport(projectId, target, targetId) {
+  const s = (target && target.dataSync) || {}
+  return {
+    mode: s.importMode === 'command' ? 'command' : 'none',
+    command: String(s.importCommand || ''),
+    user: String(s.importUser || ''),
+    secret: projectId ? projects.getDataSyncCredentials(projectId, targetId) : '',
+  }
+}
+
+/**
+ * 展开导入命令占位符：{dataDir}=远端数据目录 {user}/{secret}=应用账号凭据。
+ * 替换值按 POSIX 单引号规则转义，防止凭据/路径中的特殊字符破坏命令结构。
+ */
+function renderImportCommand(command, { dataDir, user, secret }) {
+  const shQuote = (v) => `'${String(v).replace(/'/g, `'\\''`)}'`
+  return String(command || '')
+    .replaceAll('{dataDir}', shQuote(dataDir))
+    .replaceAll('{user}', shQuote(user))
+    .replaceAll('{secret}', shQuote(secret))
+}
+
 /**
  * 执行完整发布（按部署目标）。所有事件经 emit 推送：
  *   deploy:stage {stage,status} / deploy:log {level,text,ts}
@@ -425,6 +449,21 @@ async function run(projectId, targetId) {
           const dres = await ssh.exec(conn, buildDataSyncCommand(dataZipRemote, destDir))
           if (dres.code !== 0 || !/__DATA_SYNC_OK__/.test(dres.stdout || '')) {
             throw new Error(`服务器执行数据同步失败（退出码 ${dres.code}）`)
+          }
+          // ── 同步后导入钩子：把数据写入应用（如调用应用导入接口） ──
+          const di = getDataImport(projectId, target, target.id)
+          if (di.mode === 'command' && di.command.trim()) {
+            log('info', '执行数据导入命令……')
+            const finalCmd = renderImportCommand(di.command, { dataDir: destDir, user: di.user, secret: di.secret })
+            const ires = await ssh.exec(conn, finalCmd, (chunk) => {
+              for (const line of String(chunk).split(/\r?\n/)) {
+                if (line.trim()) log('info', `[导入] ${line.replace(/\s+$/, '')}`)
+              }
+            })
+            if (ires.code !== 0) {
+              throw new Error(`数据导入命令执行失败（退出码 ${ires.code}），详见日志`)
+            }
+            log('success', '数据导入完成')
           }
           try { fs.unlinkSync(dataPack.zipPath) } catch { /* noop */ }
           tracker.end('datasync', 'success', tds)
@@ -618,4 +657,5 @@ module.exports = {
   run, cancel, isBusy, testConnection, listReleases, rollback,
   setEmitter, STAGES, resolveVersion, buildDeployArgs,
   getDataSync, validateDataSync, buildDataSyncCommand,
+  getDataImport, renderImportCommand,
 }

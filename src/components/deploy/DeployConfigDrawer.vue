@@ -212,10 +212,37 @@
             />
             <span class="f-mini">相对部署目录</span>
           </div>
+          <div class="f-row check-row" style="margin-top: 6px">
+            <el-checkbox v-model="importEnabled" :disabled="!activeTarget.dataSync.enabled">同步后执行导入命令</el-checkbox>
+          </div>
+          <template v-if="importEnabled">
+            <div class="f-row">
+              <span class="f-label">导入命令</span>
+              <el-input
+                v-model="activeTarget.dataSync.importCommand"
+                type="textarea"
+                :rows="3"
+                placeholder="bash {dataDir}/../deployer/import-products.sh {dataDir}"
+                style="flex: 1; font-family: monospace"
+              />
+            </div>
+            <div class="f-row">
+              <span class="f-label">应用账号</span>
+              <el-input v-model="activeTarget.dataSync.importUser" placeholder="应用登录用户名" style="width: 180px" />
+              <el-input
+                v-model="importSecretInput"
+                type="password"
+                show-password
+                :placeholder="activeTarget.dataSync.importSecretConfigured ? `${activeTarget.dataSync.importSecretMasked || '••••••'}（留空保持，输入新值替换）` : '应用登录密码'"
+                style="width: 220px"
+              />
+            </div>
+          </template>
         </template>
         <div class="f-hint">
           发布成功后把本地数据目录打包覆盖到服务器目标目录（解压覆盖，不清除服务器已有其他文件）。
-          建议放在 shared/ 下，跨版本共享，发布与回滚不影响数据。生产与测试目标可分别设置。
+          建议放在 shared/ 下，跨版本共享，发布与回滚不影响数据。导入命令在服务器上执行，占位符：
+          <code>{dataDir}</code> 远端数据目录、<code>{user}</code>/<code>{secret}</code> 应用账号凭据（密码加密存储，不出主进程）。
         </div>
       </el-card>
     </div>
@@ -249,6 +276,25 @@ const emit = defineEmits(['update:modelValue', 'update:activeTargetId', 'save', 
 const activeTarget = computed(() => {
   const t = props.form.targets.find((x) => x.id === props.activeTargetId)
   return t || props.form.targets[0] || null
+})
+
+// ─── 数据同步导入钩子：开关代理（写入 dataSync.importMode）+ 密码输入缓冲 ───
+const importEnabled = computed({
+  get: () => activeTarget.value?.dataSync?.importMode === 'command',
+  set: (v) => {
+    if (activeTarget.value?.dataSync) activeTarget.value.dataSync.importMode = v ? 'command' : 'none'
+  },
+})
+let importSecretBuffer = ''
+const importSecretInput = computed({
+  get: () => importSecretBuffer,
+  set: (v) => {
+    importSecretBuffer = v || ''
+    if (activeTarget.value?.dataSync) {
+      activeTarget.value.dataSync.importSecret = importSecretBuffer // 保存时由主进程加密
+      if (importSecretBuffer) activeTarget.value.dataSync.clearImportSecret = false
+    }
+  },
 })
 
 // ─── 部署目标（多环境）管理 ───

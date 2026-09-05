@@ -36,6 +36,13 @@ function normalizeDataSync(raw) {
     localDir: str(s.localDir, 'data'),
     // 相对远程部署目录；shared/ 跨版本共享，发布/回滚不影响数据
     remoteDir: str(s.remoteDir, 'shared/data'),
+    // 同步后导入钩子：'none' | 'command'——发布同步文件后在服务器上执行导入命令
+    importMode: s.importMode === 'command' ? 'command' : 'none',
+    // 占位符：{dataDir}=远端数据目录绝对路径 {user}/{secret}=下方账号凭据
+    importCommand: typeof s.importCommand === 'string' ? s.importCommand : '',
+    importUser: str(s.importUser, ''),
+    // importSecret 原样保留（明文字符串或加密对象），由 save() 的 mergeSecret 统一加密合并
+    importSecret: s.importSecret ?? null,
   }
 }
 
@@ -152,7 +159,13 @@ function list() {
       s.secretConfigured = !!secret
       s.secretMasked = secret ? maskSecret(secret) : ''
       s.passphraseConfigured = !!pass
-      return { ...t, server: s }
+      // 数据同步导入凭据：加密对象不出主进程，只回配置状态与掩码
+      const ds = { ...(t.dataSync || {}) }
+      const importSecret = store.decryptText(ds.importSecret)
+      delete ds.importSecret
+      ds.importSecretConfigured = !!importSecret
+      if (importSecret) ds.importSecretMasked = maskSecret(importSecret)
+      return { ...t, server: s, dataSync: ds }
     })
     return p
   })
@@ -177,6 +190,13 @@ function getCredentials(projectId, targetId) {
     password: store.decryptText(t.server && t.server.secret),
     passphrase: store.decryptText(t.server && t.server.passphrase),
   }
+}
+
+/** 主进程专用：取数据同步导入钩子的明文凭据（list() 脱敏后不含，需走原始数据） */
+function getDataSyncCredentials(projectId, targetId) {
+  const p = loadAllRaw().find((x) => x.id === projectId)
+  const t = p && (p.targets.find((x) => x.id === targetId) || p.targets[0])
+  return store.decryptText(t && t.dataSync && t.dataSync.importSecret)
 }
 
 function persistAll(projects) {
@@ -220,6 +240,10 @@ function save(input) {
     const oldT = old && old.targets.find((x) => x.id === t.id)
     mergeSecret(t.server, oldT && oldT.server && oldT.server.secret, 'secret', 'clearSecret')
     mergeSecret(t.server, oldT && oldT.server && oldT.server.passphrase, 'passphrase', 'clearPassphrase')
+    // 数据同步导入凭据：与 server.secret 同一合并规则
+    if (t.dataSync) {
+      mergeSecret(t.dataSync, oldT && oldT.dataSync && oldT.dataSync.importSecret, 'importSecret', 'clearImportSecret')
+    }
     return t
   })
 
@@ -235,4 +259,4 @@ function remove(projectId) {
   return { ok: true }
 }
 
-module.exports = { list, save, remove, getCredentials, defaultProject, defaultTarget, normalizeProject }
+module.exports = { list, save, remove, getCredentials, getDataSyncCredentials, defaultProject, defaultTarget, normalizeProject }
