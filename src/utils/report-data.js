@@ -4,8 +4,8 @@
  */
 import { ElMessage } from 'element-plus'
 import { state } from '../store'
-import { toPlain } from './ipc'
-import { shortPath } from './path'
+import { toPlain } from './ipc.js'
+import { shortPath } from './path.js'
 
 /** 确保已发现仓库（无则自动扫描），返回是否就绪 */
 export async function ensureRepos() {

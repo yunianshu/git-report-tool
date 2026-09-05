@@ -3,7 +3,7 @@
  * 项目资料、Git 活动、报告记录和部署记录都属于可选且不可信的外部数据，
  * 必须与系统指令隔离，并在行边界内截断。
  */
-import { groupByProject, stripPrefix } from './report'
+import { groupByProject, stripPrefix } from './report.js'
 
 const MAX_COMMITS_PER_PROJECT = 24
 const MAX_CONTEXT_CHARS = 10000
