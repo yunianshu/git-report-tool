@@ -103,6 +103,7 @@ const STAGE_LIST = [
   { id: 'build', label: 'Docker构建' },
   { id: 'start', label: '启动服务' },
   { id: 'health', label: '健康检查' },
+  { id: 'datasync', label: '数据同步' },
 ]
 
 const rollingBack = ref(false)

@@ -15,6 +15,7 @@ export function emptyTarget() {
     },
     remotePath: '',
     health: { enabled: true, url: '', timeout: 90, interval: 3 },
+    dataSync: { enabled: false, localDir: 'data', remoteDir: 'shared/data' },
   }
 }
 

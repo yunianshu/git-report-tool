@@ -150,4 +150,59 @@ function sha256File(p) {
   return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')
 }
 
-module.exports = { buildPackage, createMatcher, DEFAULT_EXCLUDES }
+/**
+ * 生成数据同步包：把项目内指定数据目录完整打为 ZIP（不做任何忽略过滤，
+ * 数据目录内容所见即所得），服务器端解压覆盖到共享目录。
+ * @param {object} opts { projectDir, dataDir(相对项目根), appName, version }
+ * @returns {Promise<{zipPath, fileName, sha256, fileCount, sizeBytes, sourceDir}>}
+ */
+function buildDataPackage(opts) {
+  const { projectDir, dataDir, appName, version } = opts || {}
+  if (!dataDir || typeof dataDir !== 'string') {
+    return Promise.reject(new Error('未指定数据目录'))
+  }
+  const sourceDir = path.resolve(projectDir, dataDir)
+  if (!fs.existsSync(sourceDir)) return Promise.reject(new Error(`数据目录不存在: ${sourceDir}`))
+  if (!fs.statSync(sourceDir).isDirectory()) return Promise.reject(new Error(`数据目录不是文件夹: ${sourceDir}`))
+
+  const stamp = formatStamp(new Date())
+  const safeName = (appName || 'app').replace(/[^\w.-]+/g, '_')
+  const fileName = `${safeName}-data-${version || 'unknown'}-${stamp}.zip`
+  const zipPath = path.join(os.tmpdir(), 'onedeploy', fileName)
+  fs.mkdirSync(path.dirname(zipPath), { recursive: true })
+
+  return new Promise((resolve, reject) => {
+    const output = fs.createWriteStream(zipPath)
+    const archive = archiver('zip', { zlib: { level: 6 } })
+    let fileCount = 0
+    let settled = false
+    const done = (fn) => (v) => { if (!settled) { settled = true; fn(v) } }
+
+    output.on('close', done(() => {
+      resolve({ zipPath, fileName, sha256: sha256File(zipPath), fileCount, sizeBytes: archive.pointer(), sourceDir })
+    }))
+    output.on('error', done(reject))
+    archive.on('error', done(reject))
+    archive.on('entry', () => { fileCount += 1 })
+    archive.pipe(output)
+
+    // 完整收集：数据目录内容所见即所得（空目录会被打包为目录条目，保留结构）
+    const walk = (dir, rel) => {
+      for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+        const abs = path.join(dir, ent.name)
+        const relPath = rel ? `${rel}/${ent.name}` : ent.name
+        if (ent.isDirectory()) {
+          archive.append(null, { name: `${relPath}/` }) // 空目录占位
+          walk(abs, relPath)
+        } else if (ent.isFile()) {
+          archive.file(abs, { name: relPath })
+          fileCount += 1
+        }
+      }
+    }
+    walk(sourceDir, '')
+    archive.finalize()
+  })
+}
+
+module.exports = { buildPackage, buildDataPackage, createMatcher, DEFAULT_EXCLUDES }

@@ -16,7 +16,7 @@ const { detectVersion } = require('./version-detector')
 /** 服务端脚本随应用分发（asar 内也可 readFileSync） */
 const DEPLOY_SCRIPT_PATH = path.join(__dirname, 'scripts', 'deploy.sh')
 
-/** 8 个发布阶段（方案 §17），渲染层按此渲染进度 */
+/** 9 个发布阶段，渲染层按此渲染进度；datasync 在发布成功后由客户端执行 */
 const STAGES = [
   { id: 'check', label: '检查项目' },
   { id: 'package', label: '项目打包' },
@@ -26,6 +26,7 @@ const STAGES = [
   { id: 'build', label: 'Docker构建' },
   { id: 'start', label: '启动服务' },
   { id: 'health', label: '健康检查' },
+  { id: 'datasync', label: '数据同步' },
 ]
 
 let emitFn = null
@@ -200,6 +201,44 @@ function getTarget(project, targetId) {
   return targets.find((t) => t.id === targetId) || targets[0]
 }
 
+/** 解析目标的数据同步配置（缺省关闭） */
+function getDataSync(target) {
+  const s = (target && target.dataSync) || {}
+  return {
+    enabled: s.enabled === true,
+    localDir: String(s.localDir || 'data').trim(),
+    remoteDir: String(s.remoteDir || 'shared/data').trim(),
+  }
+}
+
+/**
+ * 校验数据同步配置与本地数据目录。
+ * 返回 { ok, sourceDir, problem }：ok=false 时 problem 为用户可读原因。
+ */
+function validateDataSync(project, dataSync) {
+  if (!dataSync.localDir) return { ok: false, problem: '数据目录未填写' }
+  const sourceDir = path.resolve(project.localPath, dataSync.localDir)
+  // 防越界：数据目录必须位于项目目录内（resolve 后前缀校验）
+  const projectRoot = path.resolve(project.localPath)
+  if (sourceDir !== projectRoot && !sourceDir.startsWith(projectRoot + path.sep)) {
+    return { ok: false, problem: `数据目录必须在项目目录内: ${dataSync.localDir}` }
+  }
+  if (sourceDir === projectRoot) {
+    return { ok: false, problem: '数据目录不能是项目根目录本身' }
+  }
+  if (!fs.existsSync(sourceDir)) return { ok: false, problem: `数据目录不存在: ${sourceDir}` }
+  if (!fs.statSync(sourceDir).isDirectory()) return { ok: false, problem: `数据目录不是文件夹: ${sourceDir}` }
+  if (!dataSync.remoteDir || dataSync.remoteDir.includes('..')) {
+    return { ok: false, problem: `远程数据目录非法: ${dataSync.remoteDir}` }
+  }
+  return { ok: true, sourceDir }
+}
+
+/** 服务器端数据同步命令：建目录 → 解压覆盖 → 删包（单条命令，任一步失败整体失败） */
+function buildDataSyncCommand(dataZipRemote, remoteDestDir) {
+  return `mkdir -p ${quoteArg(remoteDestDir)} && unzip -o ${quoteArg(dataZipRemote)} -d ${quoteArg(remoteDestDir)} && rm -f ${quoteArg(dataZipRemote)} && echo __DATA_SYNC_OK__`
+}
+
 /**
  * 执行完整发布（按部署目标）。所有事件经 emit 推送：
  *   deploy:stage {stage,status} / deploy:log {level,text,ts}
@@ -268,6 +307,18 @@ async function run(projectId, targetId) {
       for (const p of problems) log('error', p)
       tracker.end('check', 'failed', t0)
       return finish('failed', problems[0])
+    }
+    // 数据同步前置校验：目录缺失等问题在检查阶段就失败，避免发布到一半才发现
+    const dataSyncCfg = getDataSync(target)
+    if (dataSyncCfg.enabled) {
+      const vds = validateDataSync(project, dataSyncCfg)
+      if (!vds.ok) {
+        const msg = `[数据同步] ${vds.problem}`
+        log('error', msg)
+        tracker.end('check', 'failed', t0)
+        return finish('failed', msg)
+      }
+      log('info', `数据同步已启用：${dataSyncCfg.localDir} → ${dataSyncCfg.remoteDir}`)
     }
     log('info', `开始发布 ${project.name} ${ver.version} → ${target.name}（${target.server.host}）`)
     log('success', `项目检查通过（版本来源: ${ver.source}）`)
@@ -345,12 +396,56 @@ async function run(projectId, targetId) {
       log('success', `发布成功：${ver.version}`)
       // 成功后删除本地临时 zip
       try { fs.unlinkSync(pack.zipPath) } catch { /* 清理失败不影响结果 */ }
+
+      // ── 阶段 9：数据同步（可选，发布成功后推送本地数据到服务器共享目录） ──
+      if (dataSyncCfg.enabled && !resultBox.rolledBack) {
+        tracker.begin('datasync')
+        const tds = Date.now()
+        try {
+          const vds = validateDataSync(project, dataSyncCfg)
+          if (!vds.ok) throw new Error(vds.problem)
+          log('info', `正在打包数据目录 ${dataSyncCfg.localDir} ……`)
+          const dataPack = await packager.buildDataPackage({
+            projectDir: project.localPath,
+            dataDir: dataSyncCfg.localDir,
+            appName: project.name,
+            version: ver.version,
+          })
+          log('info', `数据包 ${dataPack.fileName}（${dataPack.fileCount} 项，${(dataPack.sizeBytes / 1024 / 1024).toFixed(1)} MB）`)
+          const dataZipRemote = ssh.remoteJoin(remoteHome, 'uploads', dataPack.fileName)
+          await ssh.upload(conn, dataPack.zipPath, dataZipRemote, (done, total) => {
+            emit('deploy:progress', { kind: 'datasync', percent: total ? Math.round((done / total) * 100) : 0 })
+          })
+          const dsum = await ssh.exec(conn, `sha256sum ${quoteArg(dataZipRemote)} | awk '{print $1}'`)
+          if ((dsum.stdout || '').trim() !== dataPack.sha256) {
+            throw new Error('数据包上传校验失败（SHA256 不一致）')
+          }
+          const destDir = ssh.remoteJoin(remoteHome, dataSyncCfg.remoteDir)
+          log('info', `解压覆盖到 ${dataSyncCfg.remoteDir} ……`)
+          const dres = await ssh.exec(conn, buildDataSyncCommand(dataZipRemote, destDir))
+          if (dres.code !== 0 || !/__DATA_SYNC_OK__/.test(dres.stdout || '')) {
+            throw new Error(`服务器执行数据同步失败（退出码 ${dres.code}）`)
+          }
+          try { fs.unlinkSync(dataPack.zipPath) } catch { /* noop */ }
+          tracker.end('datasync', 'success', tds)
+          log('success', `数据同步完成 → ${dataSyncCfg.remoteDir}`)
+        } catch (dsErr) {
+          tracker.end('datasync', 'failed', tds)
+          const msg = `数据同步失败: ${(dsErr && dsErr.message) || dsErr}`
+          log('error', msg)
+          log('warn', '代码已发布成功但数据未同步，请排查后重新发布')
+          return finish('failed', msg)
+        }
+      } else {
+        tracker.end('datasync', 'skipped')
+      }
       return finish(resultBox.rolledBack ? 'rolled_back' : 'success', resultBox.message)
     }
     if (isCanceled()) {
       log('warn', '发布已取消，服务器脚本将自动回滚')
       return finish('canceled', '用户取消')
     }
+    if (tracker.state.datasync.status === 'waiting') tracker.end('datasync', 'skipped')
     for (const s of STAGES) {
       if (tracker.state[s.id].status === 'running') tracker.end(s.id, resultBox.rolledBack ? 'rollback' : 'failed')
     }
@@ -522,4 +617,5 @@ async function rollback(projectId, version, targetId) {
 module.exports = {
   run, cancel, isBusy, testConnection, listReleases, rollback,
   setEmitter, STAGES, resolveVersion, buildDeployArgs,
+  getDataSync, validateDataSync, buildDataSyncCommand,
 }

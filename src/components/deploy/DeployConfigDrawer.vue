@@ -183,6 +183,41 @@
         </template>
         <div class="f-hint">未启用时仅检查 Docker 容器运行状态。健康检查地址在服务器本机访问，请使用 127.0.0.1。</div>
       </el-card>
+
+      <el-card shadow="never" class="card">
+        <template #header>
+          <div class="card-header"><span>数据同步（当前目标）</span></div>
+        </template>
+        <template v-if="activeTarget">
+          <div class="f-row check-row">
+            <el-checkbox v-model="activeTarget.dataSync.enabled">发布成功后同步本地数据</el-checkbox>
+          </div>
+          <div class="f-row">
+            <span class="f-label">本地数据目录</span>
+            <el-input
+              v-model="activeTarget.dataSync.localDir"
+              placeholder="data"
+              style="width: 220px"
+              :disabled="!activeTarget.dataSync.enabled"
+            />
+            <span class="f-mini">相对项目根</span>
+          </div>
+          <div class="f-row">
+            <span class="f-label">服务器目标目录</span>
+            <el-input
+              v-model="activeTarget.dataSync.remoteDir"
+              placeholder="shared/data"
+              style="width: 220px"
+              :disabled="!activeTarget.dataSync.enabled"
+            />
+            <span class="f-mini">相对部署目录</span>
+          </div>
+        </template>
+        <div class="f-hint">
+          发布成功后把本地数据目录打包覆盖到服务器目标目录（解压覆盖，不清除服务器已有其他文件）。
+          建议放在 shared/ 下，跨版本共享，发布与回滚不影响数据。生产与测试目标可分别设置。
+        </div>
+      </el-card>
     </div>
     <template #footer>
       <div class="drawer-footer">

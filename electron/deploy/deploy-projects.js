@@ -23,6 +23,22 @@ function defaultServer() {
   return { host: '', port: 22, username: 'root', authType: 'password', keyPath: '' }
 }
 
+/** 目标级数据同步配置：发布成功后把本地数据目录推送到服务器共享目录 */
+function normalizeDataSync(raw) {
+  const s = raw && typeof raw === 'object' ? raw : {}
+  const str = (v, fallback) => {
+    const out = String(v ?? fallback).trim()
+    return out
+  }
+  return {
+    enabled: s.enabled === true,
+    // 相对项目根的数据目录；禁止绝对路径与 ..（防越界打包）
+    localDir: str(s.localDir, 'data'),
+    // 相对远程部署目录；shared/ 跨版本共享，发布/回滚不影响数据
+    remoteDir: str(s.remoteDir, 'shared/data'),
+  }
+}
+
 /** 单个部署目标（环境） */
 function defaultTarget() {
   return {
@@ -31,6 +47,7 @@ function defaultTarget() {
     server: defaultServer(),
     remotePath: '',
     health: { enabled: true, url: '', timeout: 90, interval: 3 },
+    dataSync: normalizeDataSync(),
   }
 }
 
@@ -103,6 +120,7 @@ function normalizeProject(p) {
     ...t,
     server: { ...defaultServer(), ...(t.server || {}) },
     health: { ...defaultTarget().health, ...(t.health || {}) },
+    dataSync: normalizeDataSync(t.dataSync),
   }))
   delete c.server
   delete c.health
