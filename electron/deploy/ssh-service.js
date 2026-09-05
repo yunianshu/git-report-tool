@@ -76,26 +76,31 @@ function enhanceExecError(e) {
 }
 
 /**
- * 执行命令。onLine(chunkText, stream) 每收到一段输出回调一次。
+ * 执行命令。onLine(chunkText, stream) 每收到一段输出回调一次（仅供日志流式展示，
+ * chunk 边界可能切断多字节字符，展示用途可接受；完整结果以返回值的 stdout/stderr 为准）。
+ * stdout/stderr 先按 Buffer 累积、结束时一次性按 UTF-8 解码——大数据量（如 psql 导出
+ * 数十 MB 含中文/多字节文本）时逐 chunk toString 会把跨界多字节字符损坏成替换符。
  * @returns {Promise<{code: number, stdout: string, stderr: string}>}
  */
 function exec(conn, command, onLine) {
   return new Promise((resolve, reject) => {
     conn.exec(command, (err, stream) => {
       if (err) return reject(enhanceExecError(err))
-      let stdout = ''
-      let stderr = ''
+      const outBufs = []
+      const errBufs = []
       stream.on('data', (d) => {
-        const text = d.toString('utf8')
-        stdout += text
-        if (onLine) onLine(text, 'stdout')
+        outBufs.push(d)
+        if (onLine) onLine(d.toString('utf8'), 'stdout')
       })
       stream.stderr.on('data', (d) => {
-        const text = d.toString('utf8')
-        stderr += text
-        if (onLine) onLine(text, 'stderr')
+        errBufs.push(d)
+        if (onLine) onLine(d.toString('utf8'), 'stderr')
       })
-      stream.on('close', (code) => resolve({ code: code || 0, stdout, stderr }))
+      stream.on('close', (code) => resolve({
+        code: code || 0,
+        stdout: Buffer.concat(outBufs).toString('utf8'),
+        stderr: Buffer.concat(errBufs).toString('utf8'),
+      }))
     })
   })
 }
