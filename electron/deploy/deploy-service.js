@@ -588,6 +588,137 @@ async function listReleases(projectId, targetId) {
   }
 }
 
+/** 校验数据库备份文件名（防路径注入：仅允许 db_ 前缀 + 安全字符） */
+function assertDbBackupName(fileName) {
+  if (typeof fileName !== 'string' || !/^db_[\w.-]+\.sql$/.test(fileName)) {
+    throw new Error(`非法的备份文件名：${fileName}`)
+  }
+}
+
+/** 数据库恢复所需配置（沿用发布前备份的 dbType/dbContainer/dbName/dbUser） */
+function requireDbConfig(project) {
+  const d = project.deploy || {}
+  if (!d.backupDatabase) throw new Error('未启用「发布前备份数据库」，无法恢复（请先在部署设置中开启并配置数据库信息）')
+  const container = String(d.dbContainer || '').trim()
+  const name = String(d.dbName || '').trim()
+  const user = String(d.dbUser || 'postgres').trim()
+  if (!container || !name) throw new Error('数据库容器名或库名未配置')
+  // 容器名/库名/用户名进入 shell 与 SQL 标识符位置，只放行安全字符
+  for (const v of [container, name, user]) {
+    if (!/^[\w.-]+$/.test(v)) throw new Error(`数据库配置含非法字符：${v}`)
+  }
+  if (d.dbType !== 'postgres') throw new Error('当前仅支持 PostgreSQL 备份恢复')
+  return { container, name, user }
+}
+
+/** 列出服务器 backups/ 下的数据库备份（按时间倒序） */
+async function listDbBackups(projectId, targetId) {
+  const { project, target, conn } = await connectTarget(projectId, targetId)
+  requireDbConfig(project) // 未配置数据库信息时列表也无意义
+  const home = target.remotePath
+  try {
+    const res = await ssh.exec(conn,
+      // glob 展开为全路径，awk 内取 basename；$5=大小 $6/$7=日期时间
+      `ls -lht --time-style=+%Y-%m-%d\\ %H:%M ${quoteArg(ssh.remoteJoin(home, 'backups'))}/db_*.sql 2>/dev/null | awk '{n=split($8,a,"/"); print $5, $6, $7, a[n]}'`)
+    const backups = (res.stdout || '').split(/\r?\n/).map((l) => l.trim()).filter(Boolean).map((l) => {
+      const m = l.match(/^(\S+)\s+(\S+)\s+(\S+)\s+(db_[\w.-]+\.sql)$/)
+      return m ? { size: m[1], time: `${m[2]} ${m[3]}`, fileName: m[4] } : null
+    }).filter(Boolean)
+    return { backups }
+  } finally {
+    ssh.close(conn)
+  }
+}
+
+/**
+ * 恢复数据库备份（高危操作，编排全程写部署日志并记入发布历史）：
+ *   保底备份当前库 → 杀连接并重建空库 → 灌入备份 SQL（出错即停）→ 重启同 compose 项目容器。
+ * 保底备份失败则中止——绝不覆盖「唯一可能完好的当前数据」。
+ */
+async function restoreDbBackup(projectId, targetId, fileName) {
+  if (activeRun) throw new Error('已有发布任务进行中，请等待完成或取消')
+  assertDbBackupName(fileName)
+  const { project, target, conn } = await connectTarget(projectId, targetId)
+  const db = requireDbConfig(project)
+  const home = target.remotePath
+  const backupDir = ssh.remoteJoin(home, 'backups')
+  const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)
+
+  const runId = crypto.randomBytes(6).toString('hex')
+  const logBuf = []
+  logSink = (level, text) => logBuf.push(`${ts()} [${level.toUpperCase()}] ${text}`)
+  const record = {
+    id: runId, projectId: project.id, projectName: project.name, type: 'db-restore',
+    targetId: target.id, targetName: target.name,
+    version: fileName, oldVersion: '', status: 'running',
+    startedAt: Date.now(), finishedAt: 0, durationMs: 0,
+    host: `${target.server.host}:${target.server.port}`, remotePath: home,
+    message: '', logFile: '',
+  }
+  activeRun = { id: runId, conn, canceled: false }
+  const finish = (status, message) => {
+    record.status = status
+    record.message = message || ''
+    record.finishedAt = Date.now()
+    record.durationMs = record.finishedAt - record.startedAt
+    record.logFile = history.writeLog(runId, logBuf.join('\n'))
+    history.add(record)
+    emit('deploy:done', { record: JSON.parse(JSON.stringify(record)) })
+    return JSON.parse(JSON.stringify(record))
+  }
+
+  try {
+    const sqlFile = ssh.remoteJoin(backupDir, fileName)
+    const has = await ssh.exec(conn, `test -f ${quoteArg(sqlFile)} && echo Y || echo N`)
+    if (!/Y/.test(has.stdout || '')) throw new Error(`备份文件不存在：${fileName}`)
+
+    log('info', `开始恢复数据库：${fileName}（库 ${db.name}@${db.container}）`)
+    // 1. 保底备份当前库（失败即中止）
+    const guardFile = ssh.remoteJoin(backupDir, `db_guard_${stamp}.sql`)
+    log('info', '恢复前先保底备份当前数据库……')
+    const guard = await ssh.exec(conn, `docker exec ${quoteArg(db.container)} pg_dump -U ${quoteArg(db.user)} ${quoteArg(db.name)} > ${quoteArg(guardFile)} && echo __GUARD_OK__`)
+    if (guard.code !== 0 || !/__GUARD_OK__/.test(guard.stdout || '')) {
+      throw new Error('保底备份失败，已中止恢复（当前数据未做任何改动）')
+    }
+    log('success', `保底备份完成：db_guard_${stamp}.sql`)
+
+    // 2. 杀连接 + 重建空库 + 灌入（单条命令链，任一步失败整体失败）
+    log('info', '重建数据库并灌入备份……')
+    const restoreCmd = [
+      `docker exec ${quoteArg(db.container)} psql -U ${quoteArg(db.user)} -d postgres -c "SELECT pg_terminate_backend(pid) FROM pg_stat_activity WHERE datname='${db.name}' AND pid <> pg_backend_pid();"`,
+      `docker exec ${quoteArg(db.container)} psql -U ${quoteArg(db.user)} -d postgres -c "DROP DATABASE ${db.name} WITH (FORCE);"`,
+      `docker exec ${quoteArg(db.container)} psql -U ${quoteArg(db.user)} -d postgres -c "CREATE DATABASE ${db.name} OWNER ${db.user};"`,
+      `docker exec -i ${quoteArg(db.container)} psql -U ${quoteArg(db.user)} -d ${quoteArg(db.name)} -v ON_ERROR_STOP=1 < ${quoteArg(sqlFile)}`,
+      `echo __DB_RESTORE_OK__`,
+    ].join(' && ')
+    const res = await ssh.exec(conn, restoreCmd, (chunk) => {
+      for (const line of String(chunk).split(/\r?\n/)) {
+        const t = line.replace(/\s+$/, '')
+        if (t && !/^(__DB_RESTORE_OK__|DROP DATABASE|CREATE DATABASE|pg_terminate_backend)/.test(t)) log('info', `[恢复] ${t}`)
+      }
+    })
+    if (res.code !== 0 || !/__DB_RESTORE_OK__/.test(res.stdout || '')) {
+      throw new Error(`数据库恢复失败（退出码 ${res.code}），可用保底备份 db_guard_${stamp}.sql 再次恢复`)
+    }
+    log('success', '备份已灌入')
+
+    // 3. 重启同 compose 项目的容器（应用连接池指向已重建的库）
+    log('info', '重启应用容器……')
+    await ssh.exec(conn,
+      `PROJ=$(docker inspect ${quoteArg(db.container)} --format '{{index .Config.Labels "com.docker.compose.project"}}') && [ -n "$PROJ" ] && docker restart $(docker ps --filter label=com.docker.compose.project=$PROJ -q) || echo __NO_COMPOSE__`)
+    log('success', `数据库恢复完成：${fileName}`)
+    return finish('success', `数据库已恢复到备份 ${fileName}`)
+  } catch (err) {
+    const msg = (err && err.message) || String(err)
+    log('error', `数据库恢复异常: ${msg}`)
+    return finish('failed', msg)
+  } finally {
+    ssh.close(conn)
+    logSink = null
+    activeRun = null
+  }
+}
+
 /** 手动回滚到指定版本（方案 §20：直接使用服务器已有 release，不重新上传） */
 async function rollback(projectId, version, targetId) {
   if (activeRun) throw new Error('已有发布任务进行中')
@@ -655,6 +786,7 @@ async function rollback(projectId, version, targetId) {
 
 module.exports = {
   run, cancel, isBusy, testConnection, listReleases, rollback,
+  listDbBackups, restoreDbBackup, assertDbBackupName,
   setEmitter, STAGES, resolveVersion, buildDeployArgs,
   getDataSync, validateDataSync, buildDataSyncCommand,
   getDataImport, renderImportCommand,

@@ -23,8 +23,8 @@
       </el-table-column>
       <el-table-column label="类型" width="70">
         <template #default="{ row }">
-          <el-tag size="small" :type="row.type === 'rollback' ? 'warning' : 'primary'" effect="plain">
-            {{ row.type === 'rollback' ? '回滚' : '发布' }}
+          <el-tag size="small" :type="{ rollback: 'warning', 'db-restore': 'danger' }[row.type] || 'primary'" effect="plain">
+            {{ { deploy: '发布', rollback: '回滚', 'db-restore': '数据恢复' }[row.type] || row.type }}
           </el-tag>
         </template>
       </el-table-column>

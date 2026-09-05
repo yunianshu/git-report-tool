@@ -40,6 +40,12 @@
         :loading="rollingBack"
         @click="doRollback(rollbackVersion)"
       >回滚到此版本</el-button>
+      <el-button
+        v-if="form.deploy && form.deploy.backupDatabase"
+        size="large"
+        plain
+        @click="openDbBackups"
+      ><el-icon style="margin-right: 4px"><DataBase /></el-icon>数据库备份</el-button>
     </div>
     <div v-if="!canPublish && !state.deploy.running" class="f-hint">
       发布前需：项目已保存、本地目录与 Compose 文件存在、已识别版本号、当前目标已配置服务器与部署目录
@@ -72,6 +78,26 @@
       </div>
     </div>
   </el-card>
+
+  <!-- 数据库备份恢复 -->
+  <el-dialog v-model="dbDialogVisible" title="数据库备份恢复（当前目标）" width="640px">
+    <el-alert type="warning" :closable="false" show-icon class="db-restore-alert">
+      恢复会先自动保底备份当前数据库，再清空并重建数据库、灌入选中备份，最后重启应用容器。属高危操作，请确认备份时间点。
+    </el-alert>
+    <el-table :data="dbBackups" size="small" max-height="360" v-loading="dbLoading">
+      <template #empty>
+        <div class="db-empty">暂无数据库备份。开启「发布前备份数据库」后，每次发布会自动生成一份备份。</div>
+      </template>
+      <el-table-column label="备份时间" prop="time" width="140" />
+      <el-table-column label="大小" prop="size" width="80" />
+      <el-table-column label="文件" prop="fileName" min-width="200" show-overflow-tooltip />
+      <el-table-column label="操作" width="90" fixed="right">
+        <template #default="{ row }">
+          <el-button text size="small" type="danger" :disabled="restoringDb" @click="doDbRestore(row)">恢复</el-button>
+        </template>
+      </el-table-column>
+    </el-table>
+  </el-dialog>
 </template>
 
 <script setup>
@@ -193,6 +219,56 @@ async function queryReleases() {
   }
 }
 
+// ─── 数据库备份（当前目标） ───
+const dbDialogVisible = ref(false)
+const dbLoading = ref(false)
+const dbBackups = ref([])
+const restoringDb = ref(false)
+
+async function openDbBackups() {
+  dbDialogVisible.value = true
+  dbLoading.value = true
+  try {
+    const r = await window.gitReport.deployDbBackups(props.form.id, props.activeTargetId)
+    if (r && r.ok) {
+      dbBackups.value = r.backups || []
+    } else {
+      dbBackups.value = []
+      ElMessage.error((r && r.error) || '查询备份失败')
+    }
+  } catch (e) {
+    ElMessage.error(e.message || String(e))
+  } finally {
+    dbLoading.value = false
+  }
+}
+
+async function doDbRestore(row) {
+  try {
+    await ElMessageBox.confirm(
+      `确认把数据库恢复到备份「${row.fileName}」（${row.time}）？\n\n当前数据会先自动保底备份，然后被该备份内容完全替换，应用容器将重启。`,
+      '确认恢复数据库',
+      { type: 'warning', confirmButtonText: '恢复', cancelButtonText: '取消' },
+    )
+  } catch { return }
+  restoringDb.value = true
+  state.deploy.logs = []
+  state.deploy.logs.push({ level: 'info', text: `开始恢复数据库备份 ${row.fileName}`, ts: new Date().toLocaleTimeString('zh-CN', { hour12: false }) })
+  try {
+    const r = await window.gitReport.deployDbRestore(props.form.id, props.activeTargetId, row.fileName)
+    if (r && r.ok) {
+      ElMessage.success(`数据库已恢复到 ${row.fileName}`)
+      await openDbBackups() // 刷新列表（保底备份会出现在最前）
+    } else {
+      ElMessage.error((r && r.error) || (r && r.record && r.record.message) || '恢复失败')
+    }
+  } catch (e) {
+    ElMessage.error(e.message || String(e))
+  } finally {
+    restoringDb.value = false
+  }
+}
+
 async function doRollback(version, targetId) {
   const tid = targetId || props.activeTargetId
   const tName = (props.form.targets.find((x) => x.id === tid) || {}).name || ''
@@ -284,4 +360,7 @@ defineExpose({ doRollback, resetSelection })
 .log-success { color: #7fd07f; }
 .log-warn { color: #e8b45e; }
 .log-error { color: #f08a8a; }
+
+.db-restore-alert { margin-bottom: 12px; }
+.db-empty { color: var(--brand-text-sub); font-size: 13px; padding: 20px 0; }
 </style>

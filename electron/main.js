@@ -377,6 +377,22 @@ function registerIpc() {
   ipcMain.handle('deploy:history:list', (_e, projectId) => deployHistory.list(projectId))
   ipcMain.handle('deploy:history:readLog', (_e, logFile) => deployHistory.readLog(logFile))
   ipcMain.handle('deploy:history:clear', (_e, projectId) => deployHistory.clear(projectId))
+  // 数据库备份：列出服务器 backups/ 下的 pg_dump 备份并支持一键恢复
+  ipcMain.handle('deploy:dbBackups', async (_e, { projectId, targetId }) => {
+    try {
+      return { ok: true, ...(await deployService.listDbBackups(projectId, targetId)) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:dbRestore', async (_e, { projectId, targetId, fileName }) => {
+    try {
+      const record = await deployService.restoreDbBackup(projectId, targetId, fileName)
+      return { ok: record.status === 'success', record }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
 }
 
 app.whenReady().then(() => {

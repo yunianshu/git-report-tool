@@ -108,7 +108,10 @@ onMounted(async () => {
     })
     window.gitReport.onDeployDone((result) => {
       state.deploy.running = false
-      if (result?.record?.status === 'success') state.deploy.currentVersion = result.record.version
+      // 仅发布成功才更新线上版本（回滚/数据恢复的 version 字段不是版本号）
+      if (result?.record?.type === 'deploy' && result?.record?.status === 'success') {
+        state.deploy.currentVersion = result.record.version
+      }
     })
 
     window.gitReport.warmup().then((repos) => {

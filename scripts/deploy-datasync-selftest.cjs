@@ -301,6 +301,63 @@ async function main() {
     passed += 1
     console.log('  ✓ 导入凭据：加密落盘、list 脱敏、掩码返回正确')
 
+    // ── 10. 数据库备份恢复：文件名防护 / 前置校验 / 保底备份 / 恢复链路 ──
+    {
+      // 文件名注入防护
+      assert.throws(() => deployService.assertDbBackupName('../evil.sql'), /非法/, '路径穿越应拒绝')
+      assert.throws(() => deployService.assertDbBackupName('db_x;rm.sh'), /非法/, '命令注入字符应拒绝')
+      assert.throws(() => deployService.assertDbBackupName('app_20260905.tar.gz'), /非法/, '非 db_ 前缀应拒绝')
+      deployService.assertDbBackupName('db_20260905-123401.sql') // 合法名不抛
+      // 前置校验：未启用备份配置时拒绝
+      const rErr = await deployService.restoreDbBackup(projectIdOff, 't1', 'db_20260905-123401.sql').catch((e) => ({ threw: e.message }))
+      assert.ok(rErr && rErr.threw && /未启用|未配置/.test(rErr.threw), '未配置数据库信息应拒绝: ' + JSON.stringify(rErr))
+      // 启用备份配置的项目：走恢复链路（exec 桩验证命令序列）
+      const dirR = path.join(tmpRoot, 'proj-restore2')
+      fs.mkdirSync(path.join(dirR, 'data'), { recursive: true })
+      fs.writeFileSync(path.join(dirR, 'VERSION'), '4.0.0\n', 'utf8')
+      fs.writeFileSync(path.join(dirR, 'docker-compose.yml'), 'services: {}\n', 'utf8')
+      const savedR = deployProjects.save(deployProjects.normalizeProject({
+        name: '恢复项目', localPath: dirR, version: { strategy: 'auto' },
+        deploy: { backupDatabase: true, dbType: 'postgres', dbContainer: 'pg-c', dbName: 'mydb', dbUser: 'u1' },
+        targets: [{ id: 't1', name: '生产', remotePath: '/srv/r',
+          server: { host: '203.0.113.10', port: 22, username: 'root', authType: 'password' }, health: { enabled: false },
+          dataSync: { enabled: false } }],
+      }))
+      serverState.execLog.length = 0
+      serverState.execScripts = [
+        { pattern: /test -f .*db_20260905/, stdout: 'Y\n' },
+        { pattern: /pg_dump .*db_guard_/, stdout: '__GUARD_OK__\n' },
+        { pattern: /DROP DATABASE/, stdout: '__DB_RESTORE_OK__\n' },
+      ]
+      const recR = await deployService.restoreDbBackup(savedR.id, 't1', 'db_20260905-123401.sql')
+      assert.strictEqual(recR.status, 'success', '恢复应成功: ' + recR.message)
+      const dropCmd = serverState.execLog.find((c) => c.includes('DROP DATABASE'))
+      assert.ok(dropCmd && dropCmd.includes('DROP DATABASE mydb WITH (FORCE)'), '应重建目标库')
+      assert.ok(serverState.execLog.some((c) => c.includes('db_guard_') && c.includes('pg_dump')), '应先做保底备份')
+      assert.ok(serverState.execLog.some((c) => c.includes('ON_ERROR_STOP=1')), '灌入应启用出错即停')
+      assert.ok(serverState.execLog.some((c) => c.includes('com.docker.compose.project')), '应重启同 compose 项目容器')
+      assert.strictEqual(recR.type, 'db-restore', '历史记录类型应为 db-restore')
+      // 保底备份失败 → 中止且不执行 DROP
+      serverState.execLog.length = 0
+      serverState.execScripts = [
+        { pattern: /test -f .*db_20260905/, stdout: 'Y\n' },
+        { pattern: /pg_dump .*db_guard_/, stdout: '', code: 1 },
+      ]
+      const recGuard = await deployService.restoreDbBackup(savedR.id, 't1', 'db_20260905-123401.sql')
+      assert.strictEqual(recGuard.status, 'failed', '保底失败应 failed')
+      assert.ok(recGuard.message.includes('保底备份失败'), '消息应含保底备份失败')
+      assert.ok(!serverState.execLog.some((c) => c.includes('DROP DATABASE')), '保底失败绝不重建库')
+      // 列表解析
+      serverState.execScripts = [
+        { pattern: /ls -lht .*db_\*\.sql/, stdout: '2.8M 2026-09-05 12:34 db_20260905-123401.sql\n1.1M 2026-09-04 10:00 db_20260904-100000.sql\n' },
+      ]
+      const lb = await deployService.listDbBackups(savedR.id, 't1')
+      assert.strictEqual(lb.backups.length, 2)
+      assert.deepStrictEqual(lb.backups[0], { size: '2.8M', time: '2026-09-05 12:34', fileName: 'db_20260905-123401.sql' })
+      passed += 1
+      console.log('  ✓ 数据库备份恢复：文件名防护/前置校验/保底备份中止/恢复链/列表解析全部正确')
+    }
+
     console.log(`\n数据同步专项自测通过（${passed} 组断言）`)
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true })

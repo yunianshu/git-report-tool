@@ -103,6 +103,11 @@ contextBridge.exposeInMainWorld('gitReport', {
   deployHistoryList: (projectId) => ipcRenderer.invoke('deploy:history:list', projectId),
   deployHistoryReadLog: (logFile) => ipcRenderer.invoke('deploy:history:readLog', logFile),
   deployHistoryClear: (projectId) => ipcRenderer.invoke('deploy:history:clear', projectId),
+  // 数据库备份（列表 / 一键恢复）
+  deployDbBackups: (projectId, targetId) =>
+    ipcRenderer.invoke('deploy:dbBackups', { projectId, targetId }),
+  deployDbRestore: (projectId, targetId, fileName) =>
+    ipcRenderer.invoke('deploy:dbRestore', { projectId, targetId, fileName }),
   onDeployLog: (cb) => subscribe('deploy:log', cb),
   onDeployStage: (cb) => subscribe('deploy:stage', cb),
   onDeployProgress: (cb) => subscribe('deploy:progress', cb),
