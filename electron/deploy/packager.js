@@ -183,20 +183,19 @@ function buildDataPackage(opts) {
     }))
     output.on('error', done(reject))
     archive.on('error', done(reject))
-    archive.on('entry', () => { fileCount += 1 })
     archive.pipe(output)
 
-    // 完整收集：数据目录内容所见即所得（空目录会被打包为目录条目，保留结构）
+    // 完整收集：数据目录内容所见即所得（空目录打包为目录条目，保留结构）
     const walk = (dir, rel) => {
       for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
         const abs = path.join(dir, ent.name)
         const relPath = rel ? `${rel}/${ent.name}` : ent.name
         if (ent.isDirectory()) {
-          archive.append(null, { name: `${relPath}/` }) // 空目录占位
+          archive.append(null, { name: `${relPath}/` })
           walk(abs, relPath)
         } else if (ent.isFile()) {
           archive.file(abs, { name: relPath })
-          fileCount += 1
+          fileCount += 1 // 只统计文件（目录条目不计数）
         }
       }
     }

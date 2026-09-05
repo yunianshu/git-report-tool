@@ -153,6 +153,7 @@ async function main() {
     assert.strictEqual(fs.readFileSync(path.join(roundDir, 'sub', 'b.txt'), 'utf8'), 'B')
     assert.ok(!fs.existsSync(path.join(roundDir, 'not-data.txt')), '数据包不得包含数据目录之外的文件')
     assert.strictEqual(dataPack.sha256, dataPack.sha256.toLowerCase())
+    assert.strictEqual(dataPack.fileCount, 2, 'fileCount 应只统计文件（目录条目不双计）')
     passed += 1
     console.log('  ✓ buildDataPackage 真实打包与解压往返内容一致')
 
