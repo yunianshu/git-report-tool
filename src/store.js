@@ -14,6 +14,14 @@ export const state = reactive({
   discoveredRepos: [],
   /** 表格勾选的仓库路径（切换视图后保留） */
   selectedRepoPaths: [],
+  /** Git 扫描全局状态（启动预热/手动扫描共用，工作台实时展示进度） */
+  scan: {
+    scanning: false,    // 目录扫描进行中（预热或设置页手动扫描）
+    scanned: 0,         // 已检查目录数
+    collecting: false,  // 启动预热：预收集今日提交进行中
+    collectDone: 0,
+    collectTotal: 0,
+  },
   /** 应用配置 */
   config: {
     roots: [],
@@ -51,6 +59,7 @@ export const state = reactive({
     logs: [], // [{ level, text, ts }]
     packageCount: 0,
     uploadPercent: 0,
+    datasyncPercent: 0, // 数据同步阶段上传进度
     currentVersion: '', // 服务器当前运行版本（查询 releases / 发布事件更新）
   },
 })

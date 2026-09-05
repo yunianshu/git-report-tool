@@ -15,7 +15,16 @@
       <div class="metric-item"><span>项目总数</span><strong>{{ state.projects.items.length }}</strong><small>{{ activeCount }} 个进行中</small></div>
       <div class="metric-item"><span>已关联目录</span><strong>{{ linkedCount }}</strong><small>可用于项目上下文</small></div>
       <button class="metric-item metric-item-action" type="button" aria-label="查看 Git 活动源列表" @click="$emit('navigate', 'activity-sources')">
-        <span>Git 活动源</span><strong>{{ state.discoveredRepos.length }}</strong><small>点击查看并转换为项目</small>
+        <span>Git 活动源</span><strong>{{ state.discoveredRepos.length }}</strong>
+        <small v-if="state.scan.scanning">正在扫描… 已检查 {{ state.scan.scanned }} 个目录</small>
+        <small v-else-if="state.scan.collecting">正在加载今日活动 {{ state.scan.collectDone }}/{{ state.scan.collectTotal }}</small>
+        <small v-else>点击查看并转换为项目</small>
+        <i
+          v-if="state.scan.scanning || state.scan.collecting"
+          class="scan-progress"
+          :class="{ indeterminate: state.scan.scanning }"
+          :style="!state.scan.scanning && state.scan.collectTotal ? { width: Math.min(100, Math.round((state.scan.collectDone / state.scan.collectTotal) * 100)) + '%' } : {}"
+        />
       </button>
       <div class="metric-item"><span>已配置部署</span><strong>{{ deployReadyCount }}</strong><small>可直接进入发布流程</small></div>
     </section>

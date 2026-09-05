@@ -93,8 +93,31 @@ onMounted(async () => {
       state.config = { ...state.config, ...cfg }
     }
 
-    window.gitReport.onScanProgress((progress) => { state.report.scanProgress = progress })
-    window.gitReport.onCollectProgress((progress) => { state.report.collectProgress = progress })
+    // ─── Git 扫描全局接线：预热与手动扫描的事件都实时反映到工作台 ───
+    const pathKey = (p) => String(p || '').replace(/\\/g, '/').toLowerCase()
+    window.gitReport.onScanProgress((progress) => {
+      state.report.scanProgress = progress
+      state.scan.scanning = true
+      if (progress && progress.scanned) state.scan.scanned = progress.scanned
+    })
+    window.gitReport.onScanRepoFound((repoPath) => {
+      // 发现即入列（按路径去重；设置页手动扫描同样监听，两边互不重复）
+      if (!repoPath || state.discoveredRepos.some((repo) => pathKey(repo.path) === pathKey(repoPath))) return
+      state.discoveredRepos.push({ path: repoPath, shortName: shortPath(repoPath), info: null })
+    })
+    window.gitReport.onScanDone(() => {
+      state.scan.scanning = false
+    })
+    let warmupActive = false
+    window.gitReport.onCollectProgress((progress) => {
+      state.report.collectProgress = progress
+      // 仅启动预热的收集才计入工作台进度（报告页生成报告的收集不属于预热）
+      if (warmupActive && progress && progress.total) {
+        state.scan.collecting = true
+        state.scan.collectDone = progress.done || 0
+        state.scan.collectTotal = progress.total
+      }
+    })
     window.gitReport.onDeployLog((log) => {
       state.deploy.logs.push(log)
       if (state.deploy.logs.length > 2000) state.deploy.logs.splice(0, state.deploy.logs.length - 2000)
@@ -105,6 +128,7 @@ onMounted(async () => {
     window.gitReport.onDeployProgress((progress) => {
       if (progress.kind === 'package') state.deploy.packageCount = progress.count || 0
       if (progress.kind === 'upload') state.deploy.uploadPercent = progress.percent || 0
+      if (progress.kind === 'datasync') state.deploy.datasyncPercent = progress.percent || 0
     })
     window.gitReport.onDeployDone((result) => {
       state.deploy.running = false
@@ -114,11 +138,19 @@ onMounted(async () => {
       }
     })
 
+    warmupActive = true
     window.gitReport.warmup().then((repos) => {
-      if (Array.isArray(repos) && repos.length && !state.discoveredRepos.length) {
-        state.discoveredRepos = repos.map((path) => ({ path, shortName: shortPath(path), info: null }))
+      warmupActive = false
+      state.scan.collecting = false
+      // 预热结果为权威列表：按路径合并（保留已有项的 info，补齐事件流可能漏掉的）
+      if (Array.isArray(repos) && repos.length) {
+        const known = new Map(state.discoveredRepos.map((row) => [pathKey(row.path), row]))
+        state.discoveredRepos = repos.map((path) => known.get(pathKey(path)) || { path, shortName: shortPath(path), info: null })
       }
-    }).catch(() => { /* 预热失败时由活动报告和设置页按需扫描。 */ })
+    }).catch(() => {
+      warmupActive = false
+      state.scan.collecting = false
+    })
   } catch (error) {
     console.error('初始化应用失败', error)
   }

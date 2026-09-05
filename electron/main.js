@@ -100,6 +100,8 @@ async function warmupPipeline() {
       onProgress: (p) => broadcast('git:scanProgress', p),
       onRepo: (r) => broadcast('git:scanRepoFound', r),
     })
+    // 预热路径同样广播 scanDone：渲染层扫描态复位不依赖用户手动扫描
+    broadcast('git:scanDone', { total: repos.length })
     if (!repos.length) return repos
     // 预收集「日报=今天」范围（与报告页默认参数一致，可精确命中缓存）
     await gitService.collectCommits(repos, {
@@ -110,7 +112,11 @@ async function warmupPipeline() {
     }, (p) => broadcast('git:collectProgress', p))
     return repos
   })()
-  warmupTask = task.catch(() => { warmupTask = null }) // 失败允许下次触发重试
+  warmupTask = task.catch(() => {
+    // 失败同样广播 scanDone，渲染层扫描态不得悬挂
+    broadcast('git:scanDone', { total: 0 })
+    warmupTask = null // 失败允许下次触发重试
+  })
   return warmupTask
 }
 
