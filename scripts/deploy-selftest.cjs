@@ -42,7 +42,9 @@ function mkProj(name, files) {
   const dir = path.join(tmpRoot, 'proj-' + name)
   fs.mkdirSync(dir, { recursive: true })
   for (const [f, content] of Object.entries(files)) {
-    fs.writeFileSync(path.join(dir, f), content)
+    const target = path.join(dir, f)
+    fs.mkdirSync(path.dirname(target), { recursive: true })
+    fs.writeFileSync(target, content)
   }
   return dir
 }
@@ -83,6 +85,52 @@ test('无版本文件返回空', () => {
 })
 test('目录不存在返回空（不抛异常）', () => {
   assert.strictEqual(detectVersion(path.join(tmpRoot, 'no-such-dir')).version, '')
+})
+test('CHANGELOG 跳过 Unreleased 取最新发布版本', () => {
+  const dir = mkProj('v8', {
+    'CHANGELOG.md': '# Changelog\n\n## [Unreleased]\n\n### Added\n- x\n\n## [0.2.0] - 2026-09-01\n\n### Changed\n- y\n',
+  })
+  assert.deepStrictEqual(detectVersion(dir), { version: '0.2.0', source: 'CHANGELOG.md' })
+})
+test('CHANGELOG 只有 Unreleased 不命中（继续向后探测）', () => {
+  const dir = mkProj('v9', { 'CHANGELOG.md': '# Changelog\n\n## [Unreleased]\n- x\n' })
+  assert.strictEqual(detectVersion(dir).version, '')
+})
+test('根目录标准文件优先于 CHANGELOG', () => {
+  const dir = mkProj('v10', {
+    'package.json': '{"version":"2.0.0"}',
+    'CHANGELOG.md': '## [1.0.0] - 2026-01-01\n',
+  })
+  assert.deepStrictEqual(detectVersion(dir), { version: '2.0.0', source: 'package.json' })
+})
+test('前后端分离项目探测一级子目录（source 带子目录前缀）', () => {
+  const dir = mkProj('v11', {
+    'readme.txt': 'hi',
+    'backend/pom.xml': '<project><version>0.2.0-SNAPSHOT</version></project>',
+    'frontend/package.json': '{"version":"0.1.0"}',
+  })
+  assert.deepStrictEqual(detectVersion(dir), { version: '0.2.0-SNAPSHOT', source: 'backend/pom.xml' })
+})
+test('子目录探测跳过 node_modules', () => {
+  const dir = mkProj('v12', {
+    'readme.txt': 'hi',
+    'node_modules/dep/package.json': '{"version":"9.9.9"}',
+  })
+  assert.strictEqual(detectVersion(dir).version, '')
+})
+test('根目录文件优先于子目录', () => {
+  const dir = mkProj('v13', {
+    'package.json': '{"version":"1.1.1"}',
+    'backend/pom.xml': '<project><version>5.0.0</version></project>',
+  })
+  assert.deepStrictEqual(detectVersion(dir), { version: '1.1.1', source: 'package.json' })
+})
+test('CHANGELOG 优先于子目录（项目级发布版本权威）', () => {
+  const dir = mkProj('v14', {
+    'CHANGELOG.md': '# Changelog\n\n## [Unreleased]\n\n## [0.3.0] - 2026-08-01\n',
+    'backend/pom.xml': '<project><version>0.3.0-SNAPSHOT</version></project>',
+  })
+  assert.deepStrictEqual(detectVersion(dir), { version: '0.3.0', source: 'CHANGELOG.md' })
 })
 
 // ═══════════ 忽略规则 ═══════════

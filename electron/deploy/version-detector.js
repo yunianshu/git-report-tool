@@ -1,7 +1,8 @@
 /**
- * 版本号自动识别 —— 按方案 §5.2 的优先级从项目根目录读取版本号：
- *   VERSION → 项目类型标准版本文件 → 手动指定（由调用方决定）
+ * 版本号自动识别 —— 按方案 §5.2 的优先级从项目目录读取版本号：
+ *   VERSION → 项目类型标准版本文件 → CHANGELOG → 手动指定（由调用方决定）
  * 支持：VERSION / package.json / pom.xml / build.gradle(.kts) / pubspec.yaml / *.csproj
+ *       / CHANGELOG.md（Keep a Changelog）；根目录均无时探测一级子目录（前后端分离项目）。
  * 纯 Node 实现，不依赖 Electron，可独立单测。
  */
 const fs = require('fs')
@@ -92,6 +93,58 @@ function fromCsproj(dir) {
   return ''
 }
 
+/** CHANGELOG.md / CHANGELOG（Keep a Changelog）：取最新非 Unreleased 的 [x.y.z] 版本段 */
+function fromChangelog(dir) {
+  for (const name of ['CHANGELOG.md', 'CHANGELOG']) {
+    const p = path.join(dir, name)
+    if (!fs.existsSync(p)) continue
+    try {
+      const text = fs.readFileSync(p, 'utf8')
+      const re = /^##\s*\[([^\]]+)\]/gm
+      let m
+      while ((m = re.exec(text))) {
+        const v = m[1].trim()
+        if (v && !/^unreleased$/i.test(v) && VERSION_RE.test(v)) return v
+      }
+    } catch { /* 尝试下一个文件名 */ }
+  }
+  return ''
+}
+
+/** 子目录探测时跳过的依赖/产物目录 */
+const SUBDIR_SKIP = new Set([
+  'node_modules', '.git', '.svn', 'dist', 'build', 'out', 'output', 'target',
+  'vendor', 'venv', '.venv', '__pycache__', '.idea', '.vscode', 'release', 'releases',
+  'coverage', 'tmp',
+])
+
+/** 一级子目录中的标准版本文件（前后端分离项目），source 带子目录前缀便于界面定位 */
+function fromSubdirs(dir) {
+  let names = []
+  try {
+    names = fs.readdirSync(dir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !SUBDIR_SKIP.has(e.name))
+      .map((e) => e.name)
+      .sort()
+  } catch {
+    return null
+  }
+  for (const sub of names) {
+    const subDir = path.join(dir, sub)
+    const attempts = [
+      { v: fromPackageJson(subDir), s: `${sub}/package.json` },
+      { v: fromPom(subDir), s: `${sub}/pom.xml` },
+      { v: fromGradle(subDir), s: `${sub}/build.gradle` },
+      { v: fromPubspec(subDir), s: `${sub}/pubspec.yaml` },
+      { v: fromCsproj(subDir), s: `${sub}/*.csproj` },
+    ]
+    for (const a of attempts) {
+      if (a.v && VERSION_RE.test(a.v)) return a
+    }
+  }
+  return null
+}
+
 /**
  * 检测项目版本号。
  * @returns {{ version: string, source: string }} source 标明来源，便于界面展示
@@ -114,10 +167,14 @@ function detectVersion(projectDir) {
     { v: fromGradle(dir), s: 'build.gradle' },
     { v: fromPubspec(dir), s: 'pubspec.yaml' },
     { v: fromCsproj(dir), s: '*.csproj' },
+    { v: fromChangelog(dir), s: 'CHANGELOG.md' },
   ]
   for (const a of attempts) {
     if (a.v && VERSION_RE.test(a.v)) return { version: a.v, source: a.s }
   }
+  // 根目录与 CHANGELOG 均无 → 前后端分离等项目，探测一级子目录
+  const sub = fromSubdirs(dir)
+  if (sub) return { version: sub.v, source: sub.s }
   return { version: '', source: '' }
 }
 
