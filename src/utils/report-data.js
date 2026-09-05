@@ -43,6 +43,7 @@ export async function collectReportData({ since, until, repoPaths } = {}) {
     const repos = state.discoveredRepos.map((r) => r.path).filter((path) => !allowed || allowed.has(path))
     if (!repos.length) {
       state.report.rawCommits = []
+      state.report.collectedRange = null
       state.report.phase = 'done'
       return []
     }
@@ -53,6 +54,7 @@ export async function collectReportData({ since, until, repoPaths } = {}) {
       includeMerges: false,
     })
     state.report.rawCommits = data
+    state.report.collectedRange = { since: since || '', until: until || '', repoPaths: repos.slice() }
     state.report.phase = 'done'
     return data
   } catch (e) {

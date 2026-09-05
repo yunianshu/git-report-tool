@@ -217,7 +217,7 @@
       <h2>个人项目管理</h2>
       <p>项目资料、报告记录和部署配置默认保存在本机。Git、AI 与部署都是按需启用的项目能力。</p>
       <dl class="project-facts">
-        <div><dt>版本</dt><dd>1.3.0</dd></div>
+        <div><dt>版本</dt><dd>{{ appVersion }}</dd></div>
         <div><dt>平台</dt><dd>Windows / macOS / Linux</dd></div>
         <div><dt>数据方式</dt><dd>本地优先</dd></div>
       </dl>
@@ -242,6 +242,9 @@ const props = defineProps({
   },
 })
 const { loadProjects } = useProjects()
+
+/** 由 vite define 从 package.json 注入（见 vite.config.js） */
+const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '—'
 
 const SETTING_SECTIONS = [
   { label: 'AI 服务', value: 'ai' },

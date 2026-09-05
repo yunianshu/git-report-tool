@@ -147,6 +147,12 @@ function registerIpc() {
     return r.canceled ? null : r.filePaths[0]
   })
 
+  // 文件选择（如 SSH 私钥）
+  ipcMain.handle('dialog:pickFile', async () => {
+    const r = await dialog.showOpenDialog(mainWindow, { properties: ['openFile'] })
+    return r.canceled ? null : r.filePaths[0]
+  })
+
   // git 服务
   // 扫描统一走 scanReposCached：同参数并发共享一次扫盘，预热完成后瞬时返回；
   // 进度/发现事件经 broadcast 推送，无论预热还是用户触发，渲染端都能收到进度流

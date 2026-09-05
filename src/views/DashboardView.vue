@@ -108,10 +108,16 @@ const linkedCount = computed(() => state.projects.items.filter((project) => proj
 const deployReadyCount = computed(() => state.projects.items.filter(deploymentConfigured).length)
 const aiConfigured = computed(() => !!(state.config.ai?.keyConfigured && state.config.ai?.model))
 const projectRepoCount = computed(() => currentProject.value ? reposForProject(currentProject.value, state.discoveredRepos).length : state.discoveredRepos.length)
+/** 时间归一化：报告历史为 "YYYY-MM-DD HH:mm:ss" 字符串，部署历史为数字时间戳，
+ *  混合类型直接字符串比较会因 "1xxx…" 与 "2xxx…" 前缀导致顺序错误，统一转毫秒比较 */
+function toTime(value) {
+  const t = new Date(value).getTime()
+  return Number.isNaN(t) ? 0 : t
+}
 const recentItems = computed(() => [
   ...reports.value.map((item) => ({ key: `r-${item.id}`, type: '报告', title: item.title, time: item.createdAt || '' })),
   ...deployments.value.map((item) => ({ key: `d-${item.id}`, type: item.type === 'rollback' ? '回滚' : '部署', title: `${item.projectName || '项目'} ${item.version || ''}`, time: item.startedAt || '' })),
-].sort((a, b) => String(b.time).localeCompare(String(a.time))).slice(0, 5))
+].sort((a, b) => toTime(b.time) - toTime(a.time)).slice(0, 5))
 
 function formatRecordTime(value) {
   if (!value) return '—'

@@ -30,6 +30,8 @@ contextBridge.exposeInMainWorld('gitReport', {
   configSave: (cfg) => ipcRenderer.invoke('config:save', toPlain(cfg)),
   // 目录
   pickDirectory: () => ipcRenderer.invoke('dialog:pickDirectory'),
+  // 文件（如 SSH 私钥）
+  pickFile: () => ipcRenderer.invoke('dialog:pickFile'),
   // git（参数经 toPlain 去除响应式代理）；force=true 强制重新扫盘（手动「重新扫描」用）
   scanRepos: (roots, excludes, force) =>
     ipcRenderer.invoke('git:scanRepos', { roots: toPlain(roots), excludes: toPlain(excludes), force: !!force }),

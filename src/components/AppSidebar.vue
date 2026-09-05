@@ -27,7 +27,7 @@
     <div class="sidebar-footer">
       <span class="status-dot" />
       <span>本地数据</span>
-      <span class="sidebar-version">v1.4.6</span>
+      <span class="sidebar-version">v{{ appVersion }}</span>
     </div>
   </aside>
 </template>
@@ -35,4 +35,7 @@
 <script setup>
 defineProps({ modelValue: { type: String, required: true } })
 defineEmits(['update:modelValue'])
+
+/** 由 vite define 从 package.json 注入（见 vite.config.js） */
+const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''
 </script>

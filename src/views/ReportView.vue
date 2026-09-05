@@ -91,13 +91,21 @@
     <!-- 结果 tabs：始终显示，明细/统计仅生成后可见 -->
     <el-tabs v-model="resultTab" class="result-tabs report-tabs">
       <el-tab-pane v-if="state.report.phase === 'done'" label="报告明细" name="detail">
+            <el-alert
+              v-if="stale"
+              type="warning"
+              :closable="false"
+              show-icon
+              class="stale-alert"
+              :title="`当前展示的是「${dataRangeLabel}」收集的数据，与所选周期（${rangeLabel || '未选择'}）不一致；点击「生成报告」刷新后才能复制或导出。`"
+            />
             <div class="detail-toolbar">
               <span class="detail-summary">{{ filteredCommits.length }} 条提交 · {{ filteredGroups.length }} 个项目</span>
               <div class="detail-actions">
-                <el-button size="small" :disabled="!filteredCommits.length" @click="copyReport">
+                <el-button size="small" :disabled="!filteredCommits.length || stale" @click="copyReport">
                   <el-icon style="margin-right: 4px"><CopyDocument /></el-icon>复制报告
                 </el-button>
-                <el-button type="success" size="small" :disabled="!filteredCommits.length" @click="exportReport">
+                <el-button type="success" size="small" :disabled="!filteredCommits.length || stale" @click="exportReport">
                   <el-icon style="margin-right: 4px"><Download /></el-icon>导出 Markdown
                 </el-button>
               </div>
@@ -160,7 +168,7 @@
                   <div class="kpi-icon"><el-icon><Calendar /></el-icon></div>
                   <div class="kpi-body">
                     <div class="kpi-label">时间范围</div>
-                    <div class="kpi-value kpi-range">{{ rangeLabel }}</div>
+                    <div class="kpi-value kpi-range">{{ dataRangeLabel }}</div>
                   </div>
                 </div>
               </el-col>
@@ -283,6 +291,25 @@ const rangeLabel = computed(() => {
   return r.since === end ? r.since : `${r.since} ~ ${end}`
 })
 
+/** 实际收集数据对应的范围标签（统计与导出口径以此为准） */
+const dataRangeLabel = computed(() => {
+  const c = state.report.collectedRange
+  if (c && c.since) {
+    const end = untilToEnd(c.until) || c.since
+    return c.since === end ? c.since : `${c.since} ~ ${end}`
+  }
+  return rangeLabel.value
+})
+
+/** 展示数据是否与当前所选周期/项目不一致（rawCommits 可能来自 AI 页刷新或其它周期/项目） */
+const stale = computed(() => {
+  if (state.report.phase !== 'done' || !state.report.collectedRange) return false
+  const r = range()
+  const c = state.report.collectedRange
+  const repoKey = (paths) => (paths || []).slice().sort().join('\n')
+  return c.since !== r.since || c.until !== r.until || repoKey(c.repoPaths) !== repoKey(scopedRepos.value.map((row) => row.path))
+})
+
 /** 一键生成：扫描（若有需要）→ 收集提交 → 展示，分阶段显示进度 */
 async function generate() {
   if (busy.value) return
@@ -313,6 +340,7 @@ async function generate() {
   if (!scopedRepos.value.length) {
     ElMessage.info(currentProject.value ? '当前项目没有可用的 Git 活动源' : '没有可用的 Git 活动源')
     state.report.rawCommits = []
+    state.report.collectedRange = null
     state.report.phase = 'done'
     return
   }
@@ -332,6 +360,7 @@ async function doCollect() {
       includeMerges: false,
     })
     state.report.rawCommits = data
+    state.report.collectedRange = { since: r.since, until: r.until, repoPaths: repos.slice() }
     state.report.openProjects = []
     state.report.phase = 'done'
     if (data.length) autoSave()
@@ -611,6 +640,7 @@ async function exportReport() {
 </script>
 
 <style scoped>
+.stale-alert { margin-bottom: 12px; }
 .collect-hint {
   padding: 26px 0;
   text-align: center;

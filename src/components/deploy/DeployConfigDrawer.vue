@@ -258,8 +258,9 @@ async function browseLocal() {
   if (dir) props.form.localPath = dir
 }
 async function browseKey() {
-  const dir = await window.gitReport.pickDirectory()
-  if (dir && activeTarget.value) activeTarget.value.server.keyPath = dir
+  // 私钥是文件（如 ~/.ssh/id_rsa），必须用文件选择器而非目录选择器
+  const file = await window.gitReport.pickFile()
+  if (file && activeTarget.value) activeTarget.value.server.keyPath = file
 }
 </script>
 

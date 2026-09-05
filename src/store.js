@@ -33,6 +33,9 @@ export const state = reactive({
     collectProgress: { done: 0, total: 0 },
     rawCommits: [],
     openProjects: [],
+    /** rawCommits 实际对应的收集范围（until 为排他上界）。报告页与 AI 页共用
+     *  rawCommits，展示、复制与导出必须以此范围为准，避免数据与标题错标 */
+    collectedRange: null, // { since, until, repoPaths: string[] }
   },
   /** AI 聊天状态（跨视图保留，切换 tab 不丢失对话） */
   chat: {

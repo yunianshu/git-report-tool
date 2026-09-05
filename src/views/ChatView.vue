@@ -81,13 +81,21 @@ const deployLabel = computed(() => deploymentConfigured(currentProject.value)
   : '尚未配置部署')
 const selectedCount = computed(() => Object.values(sources).filter(Boolean).length)
 const contextLabel = computed(() => `${currentProject.value?.name || '项目'} · ${selectedCount.value} 类上下文`)
+/** Git 活动实际收集范围（rawCommits 可能来自报告页其它周期，不能硬编码） */
+const gitRangeLabel = computed(() => {
+  const c = state.report.collectedRange
+  if (!c || !c.since) return '未收集'
+  const end = c.until ? addDays(c.until, -1) : ''
+  const endStr = end || c.since
+  return c.since === endStr ? c.since : `${c.since} ~ ${endStr}`
+})
 const contextText = computed(() => currentProject.value ? buildProjectContext({
   project: currentProject.value,
   sources,
   commits: projectCommits.value,
   reports: projectReports.value,
   deployments: projectDeployments.value,
-  rangeLabel: '最近 30 天',
+  rangeLabel: gitRangeLabel.value,
 }) : '')
 const quickPrompts = [
   { label: '总结项目', prompt: '请根据当前项目资料，简要总结项目目标、现状和需要关注的重点。' },
