@@ -229,12 +229,16 @@
             <div class="f-row">
               <span class="f-label">应用账号</span>
               <el-input v-model="activeTarget.dataSync.importUser" placeholder="应用登录用户名" style="width: 180px" />
+              <!-- 直绑 dataSync.importSecret（与 SSH 密码同一模式）：留空＝保持已保存凭据，输入新值＝保存时替换。
+                   不可用「闭包变量 + 可写 computed」做输入缓冲：getter 无响应式依赖，缓存永不失效，
+                   el-input 每次输入后会把输入框同步回旧值，表现为无法输入且只落盘最后一个字符 -->
               <el-input
-                v-model="importSecretInput"
+                v-model="activeTarget.dataSync.importSecret"
                 type="password"
                 show-password
                 :placeholder="activeTarget.dataSync.importSecretConfigured ? `${activeTarget.dataSync.importSecretMasked || '••••••'}（留空保持，输入新值替换）` : '应用登录密码'"
                 style="width: 220px"
+                @update:model-value="activeTarget.dataSync.clearImportSecret = false"
               />
             </div>
           </template>
@@ -278,22 +282,11 @@ const activeTarget = computed(() => {
   return t || props.form.targets[0] || null
 })
 
-// ─── 数据同步导入钩子：开关代理（写入 dataSync.importMode）+ 密码输入缓冲 ───
+// ─── 数据同步导入钩子：开关代理（写入 dataSync.importMode）───
 const importEnabled = computed({
   get: () => activeTarget.value?.dataSync?.importMode === 'command',
   set: (v) => {
     if (activeTarget.value?.dataSync) activeTarget.value.dataSync.importMode = v ? 'command' : 'none'
-  },
-})
-let importSecretBuffer = ''
-const importSecretInput = computed({
-  get: () => importSecretBuffer,
-  set: (v) => {
-    importSecretBuffer = v || ''
-    if (activeTarget.value?.dataSync) {
-      activeTarget.value.dataSync.importSecret = importSecretBuffer // 保存时由主进程加密
-      if (importSecretBuffer) activeTarget.value.dataSync.clearImportSecret = false
-    }
   },
 })
 
