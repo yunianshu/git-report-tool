@@ -17,6 +17,7 @@
  * 用法：node scripts/deploy-import-secret-e2e.cjs [phase1|phase2|both]
  *   phase1 = 预置沙箱 + 首启（输入并保存）；phase2 = 二启（掩码 + 留空保持）
  *   PM_E2E_SANDBOX=<目录> 可复用已有沙箱单独重跑 phase2
+ *   PM_E2E_TARGET_EXE=<release/<版本>/win-unpacked/*.exe> 改跑打包成品（发版冒烟）
  */
 const { spawnSync } = require('child_process')
 const fs = require('fs')
@@ -179,6 +180,14 @@ function launch(evalScript, shotName) {
     SMOKE_EVAL_MS: '6500',
     SMOKE_SCREENSHOT_PATH: path.join(SHOT_DIR, shotName),
     SMOKE_SHOT_MS: '5000',
+  }
+  // PM_E2E_TARGET_EXE 指向打包产物（release/<版本>/win-unpacked/*.exe）时直接运行成品，
+  // 用于发版冒烟；默认跑开发版（node_modules/electron）。注意：成品 stdout 中文经管道是
+  // GBK 乱码，eval 结果只依赖布尔字段，勿对成品输出 grep 中文
+  if (process.env.PM_E2E_TARGET_EXE) {
+    return spawnSync(process.env.PM_E2E_TARGET_EXE, [], {
+      cwd: ROOT, encoding: 'utf8', timeout: 90000, env,
+    })
   }
   return spawnSync(process.execPath, [path.join(ROOT, 'node_modules', 'electron', 'cli.js'), '.'], {
     cwd: ROOT, encoding: 'utf8', timeout: 90000, env,
