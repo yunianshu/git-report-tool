@@ -19,8 +19,9 @@ const hanprint = require('./hanprint-service')
 
 // ─── 工时计算（纯函数） ───
 // 语义：工时与 git 提交时刻无关——总工时 = 当天首条提交（实际上班的近似，迟到不计时）
-// → 终点（今天未下班为当前时刻，否则下班时间），扣午休后按 0.5 小时整体向下取整；
-// 各项目按提交条数占总数的比例分配总工时（0.5h 取整、总和守恒）。
+// → 终点（填报今天为点击生成报告的时刻，含加班时段；补填历史日期为下班时间），
+// 扣午休后按 0.5 小时整体向下取整；各项目按提交条数占总数的比例分配总工时
+//（0.5h 取整、总和守恒）。
 
 function hm(s) {
   const [h, m] = String(s).split(':').map(Number)
@@ -39,18 +40,17 @@ function workMinutes(start, end, lunchS, lunchE) {
 }
 
 /**
- * 尾段终点：填报今天且当前未到下班时间 → 当前时刻（当天实时核对）；
- * 其余（历史日期 / 今天已过下班时间）→ 下班时间。now 可注入以便自测。
+ * 尾段终点：填报今天 → 点击生成报告的当前时刻（含已过下班时间的加班时段，
+ * 不截断）；补填历史日期 → 下班时间（无「现在」概念）。now 可注入以便自测。
  */
 function resolveEndTime(date, workEnd, now = new Date()) {
-  const end = workEnd || '17:30'
   const p = (n) => String(n).padStart(2, '0')
   const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
   if (date === today) {
     const nowMin = now.getHours() * 60 + now.getMinutes()
-    if (nowMin < hm(end)) return `${p(Math.floor(nowMin / 60))}:${p(nowMin % 60)}`
+    return `${p(Math.floor(nowMin / 60))}:${p(nowMin % 60)}`
   }
-  return end
+  return workEnd || '17:30'
 }
 
 // ─── 按项目聚合（一个项目一条工时记录，内容为简洁编号列表） ───
@@ -341,7 +341,7 @@ async function plan(payload) {
   const identitiesMissing = !identities.length
   const commits = identitiesMissing ? [] : await collectTimedCommits(projects, { date, identities })
 
-  // 总工时区间 = 首条提交（迟到不计时）→ 终点（今天未下班为当前时刻，否则下班时间）；
+  // 总工时区间 = 首条提交（迟到不计时）→ 终点（今天为点击生成报告的时刻，历史日期为下班时间）；
   // 工时与提交时刻无关，按提交条数比例分配到项目
   const workEnd = (cfg.zentao && cfg.zentao.workEnd) || '17:30'
   const workCfg = {

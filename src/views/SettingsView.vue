@@ -320,7 +320,7 @@
           <div class="ai-row">
             <span class="ai-label">下班时间</span>
             <el-time-select v-model="state.config.zentao.workEnd" start="16:00" end="21:00" step="00:30" style="width: 130px" />
-            <span class="ai-hint">工时算到下班；填报今天且未到下班时间时算到当前时刻</span>
+            <span class="ai-hint">补填历史日期时工时算到下班；填报今天一律算到点击「生成报告」的时刻（含加班）</span>
           </div>
           <div class="ai-row">
             <span class="ai-label">午休时间</span>
@@ -336,7 +336,7 @@
           </el-button>
         </div>
         <div class="ai-hint ai-note">
-          总工时从当天首条提交开始计时（迟到不计时），到下班时间（填报今天且未到下班时算到当前时刻），扣午休后按 0.5 小时向下取整；各项目按当天提交条数占比分配总工时（与提交时刻无关），合计恒等于总工时。
+          总工时从当天首条提交开始计时（迟到不计时），到点击「生成报告」的时刻（补填历史日期则到下班时间），扣午休后按 0.5 小时向下取整；各项目按当天提交条数占比分配总工时（与提交时刻无关），合计恒等于总工时。
         </div>
       </div>
     </el-card>

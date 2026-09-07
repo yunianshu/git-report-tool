@@ -134,12 +134,12 @@ await test('用户场景复现：09:30 首条（迟到 1h）→ 17:05 当前 = 6
   assert.strictEqual(list[0].hours, 6.5) // 455−60 = 395min → 390 = 6.5h
 })
 
-await test('resolveEndTime：今天未到下班返回当前时刻', () => {
+await test('resolveEndTime：填报今天一律返回点击生成报告的时刻（含已过下班的加班时段）', () => {
   assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T16:05:00')), '16:05')
+  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T18:42:00')), '18:42')
 })
 
-await test('resolveEndTime：今天已过下班或历史日期返回下班时间', () => {
-  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T18:00:00')), '17:30')
+await test('resolveEndTime：补填历史日期返回下班时间', () => {
   assert.strictEqual(fill.resolveEndTime('2026-09-06', '17:30', new Date('2026-09-07T16:05:00')), '17:30')
 })
 
