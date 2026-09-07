@@ -117,6 +117,7 @@ contextBridge.exposeInMainWorld('gitReport', {
   fillSubmit: (payload) => ipcRenderer.invoke('fill:submit', toPlain(payload)),
   fillZtTasks: () => ipcRenderer.invoke('fill:ztTasks'),
   fillTestLogin: (opts) => ipcRenderer.invoke('fill:testLogin', toPlain(opts)),
+  fillHpTest: (opts) => ipcRenderer.invoke('fill:hpTest', toPlain(opts)),
   fillBindings: () => ipcRenderer.invoke('fill:bindings'),
   fillBind: (projectId, taskId, taskName) =>
     ipcRenderer.invoke('fill:bind', { projectId, taskId, taskName }),

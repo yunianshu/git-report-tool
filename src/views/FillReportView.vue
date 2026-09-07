@@ -66,11 +66,25 @@
         <el-button size="small" type="primary" plain @click="emit('navigate', 'fill-settings')">去设置</el-button>
       </el-alert>
       <el-alert
+        v-else-if="!hanprintConfigured"
+        type="info"
+        :closable="false"
+        class="warn"
+        title="汉印平台未配置：将只填报禅道工时（可到「设置 → 一键填报」配置汉印账号）。"
+      />
+      <el-alert
         v-else-if="plan && plan.ztError"
         type="error"
         :closable="false"
         class="warn"
         :title="`禅道任务获取失败：${plan.ztError}`"
+      />
+      <el-alert
+        v-else-if="hanprintConfigured && plan && plan.hpError"
+        type="error"
+        :closable="false"
+        class="warn"
+        :title="`汉印任务获取失败：${plan.hpError}`"
       />
       <el-alert
         v-if="identitiesMissing"
@@ -148,6 +162,17 @@
           </div>
         </div>
         <div v-else class="collect-hint">暂无可填报的任务：请先为有提交的项目绑定禅道任务</div>
+        <!-- 汉印条目预览（按工时占比，合计 100%） -->
+        <div v-if="plan.hpItems && plan.hpItems.length" class="hp-block">
+          <div class="hp-title">汉印工时填报（{{ plan.hpItems.length }} 条 · 占比合计 {{ hpPercentTotal }}%）</div>
+          <div v-for="(item, i) in plan.hpItems" :key="i" class="hpline">
+            <span class="sum-name">{{ item.ProjectName }} · {{ item.TaskName }}</span>
+            <span class="sum-right">{{ item.Percent }}%</span>
+          </div>
+        </div>
+        <div v-else-if="hanprintConfigured && plan.tasks.length && plan.hpUnmatched && plan.hpUnmatched.length" class="submit-hint">
+          汉印未匹配到这些禅道任务对应的报工任务，相关工时将只写入禅道：#{{ plan.hpUnmatched.join('、#') }}
+        </div>
         <div class="fill-actions">
           <el-button :disabled="!plan.planned.length" @click="copyReport">
             <el-icon style="margin-right: 4px"><CopyDocument /></el-icon>复制报告
@@ -243,6 +268,10 @@ const zentaoConfigured = computed(() => {
   const zt = state.config.zentao || {}
   return !!(zt.baseUrl && zt.account && zt.pwdConfigured)
 })
+const hanprintConfigured = computed(() => {
+  const hp = state.config.hanprint || {}
+  return !!(hp.baseUrl && hp.account && hp.pwdConfigured)
+})
 const identitiesMissing = computed(() => !(state.config.identities || []).length)
 
 /** 可填报项目：附带其覆盖的仓库数（0 时禁止选择） */
@@ -257,6 +286,11 @@ const canSubmit = computed(() => !!(plan.value && plan.value.tasks.length && !pl
 const unmatchedCount = computed(() => (plan.value ? plan.value.planned.filter((p) => !p.taskId).length : 0))
 const totalHours = computed(() =>
   plan.value ? (Math.round(plan.value.planned.reduce((s, p) => s + p.hours, 0) * 100) / 100).toFixed(2) : '0.00',
+)
+const hpPercentTotal = computed(() =>
+  plan.value && Array.isArray(plan.value.hpItems)
+    ? plan.value.hpItems.reduce((s, item) => s + (item.Percent || 0), 0)
+    : 0,
 )
 
 onMounted(async () => {
@@ -368,10 +402,12 @@ async function submitFill(preview) {
     return
   }
   const tasks = p.tasks.map((t) => ({ taskId: t.taskId, taskName: t.taskName, rows: t.rows }))
+  const hpItems = Array.isArray(p.hpItems) ? p.hpItems : []
   if (!preview) {
+    const hpText = hpItems.length ? `，同时向汉印提交 ${hpItems.length} 条占比记录` : ''
     try {
       await ElMessageBox.confirm(
-        `将向 ${tasks.length} 个禅道任务写入 ${p.date} 共 ${totalHours.value} 小时工时，是否继续？`,
+        `将向 ${tasks.length} 个禅道任务写入 ${p.date} 共 ${totalHours.value} 小时工时${hpText}，是否继续？`,
         '确认提交',
         { type: 'warning', confirmButtonText: '提交', cancelButtonText: '取消' },
       )
@@ -381,16 +417,22 @@ async function submitFill(preview) {
   }
   state.fillReport.submitting = true
   try {
-    const r = await window.gitReport.fillSubmit(toPlain({ tasks, dryRun: preview }))
+    const payload = { tasks, dryRun: preview }
+    if (hpItems.length) payload.hp = { items: hpItems }
+    const r = await window.gitReport.fillSubmit(toPlain(payload))
     if (!r.ok) {
       ElMessage.error(r.error || '提交失败')
       return
     }
     if (preview) {
-      previewDialog.value = { visible: true, content: JSON.stringify(r.results, null, 2) }
+      const hpPreview = r.hp && r.hp.json ? r.hp.json : hpItems
+      previewDialog.value = {
+        visible: true,
+        content: `【禅道 recordEstimate】\n${JSON.stringify(r.results, null, 2)}\n\n【汉印 workhour/add】\n${JSON.stringify(hpPreview, null, 2)}`,
+      }
     } else {
       state.fillReport.plan = { ...p, submittedAt: new Date().toTimeString().slice(0, 5) }
-      ElMessage.success(`已写入 ${r.results.length} 个任务的工时`)
+      ElMessage.success(`已写入禅道 ${r.results.length} 个任务的工时${r.hp ? `，汉印 ${hpItems.length} 条占比记录` : ''}`)
     }
   } catch (e) {
     ElMessage.error(`提交失败：${e?.message || e}`)
@@ -540,6 +582,26 @@ async function copyReport() {
   margin-top: 14px;
   padding-top: 14px;
   border-top: 1px solid var(--brand-card-border, #eef0f4);
+}
+.hp-block {
+  margin-top: 12px;
+  padding: 10px 12px;
+  background: #fafbfc;
+  border: 1px solid var(--brand-card-border, #eef0f4);
+  border-radius: 8px;
+}
+.hp-title {
+  font-size: 12.5px;
+  font-weight: 600;
+  color: #4a5160;
+  margin-bottom: 6px;
+}
+.hpline {
+  display: flex;
+  justify-content: space-between;
+  gap: 12px;
+  padding: 5px 0;
+  font-size: 12.5px;
 }
 .submit-hint {
   margin-top: 10px;

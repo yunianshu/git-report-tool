@@ -17,6 +17,7 @@ const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
 const fillService = require('./fill-service')
 const zentaoService = require('./zentao-service')
+const hanprintService = require('./hanprint-service')
 
 // 统一数据目录为 ASCII 固定值，与产品显示名（productName，可中文）解耦：
 // dev / 打包 GUI / 无头 CLI 三模式共用同一份配置，改名或换产品名不丢数据
@@ -428,6 +429,14 @@ function registerIpc() {
   ipcMain.handle('fill:testLogin', async (_e, opts) => {
     try {
       await zentaoService.ensureClient(zentaoService.normalizeOverrides(opts))
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('fill:hpTest', async (_e, opts) => {
+    try {
+      await hanprintService.ensureClient(hanprintService.normalizeOverrides(opts))
       return { ok: true }
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }

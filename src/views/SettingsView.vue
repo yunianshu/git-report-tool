@@ -256,6 +256,60 @@
       </div>
     </el-card>
 
+    <!-- 一键填报 · 汉印工时账号 -->
+    <el-card v-show="activeSection === 'fill'" shadow="never" class="card">
+      <template #header>
+        <div class="card-header"><span>一键填报 · 汉印工时账号</span></div>
+      </template>
+      <div class="ai-manager">
+        <div class="ai-form">
+          <div class="ai-row">
+            <span class="ai-label">平台地址</span>
+            <el-input v-model="state.config.hanprint.baseUrl" placeholder="如 http://10.10.21.2:5293" style="width: 320px" />
+            <span class="ai-hint">汉印工时填报平台（与禅道为两个独立账号）</span>
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">所属公司</span>
+            <el-select v-model="state.config.hanprint.clientId" style="width: 160px">
+              <el-option value="1" label="1 · 厦门汉印" />
+              <el-option value="2" label="2 · 江西外协" />
+            </el-select>
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">工号</span>
+            <el-input v-model="state.config.hanprint.account" placeholder="如 21290" style="width: 320px" autocomplete="off" />
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">密码</span>
+            <el-input
+              v-model="hpPwdInput"
+              type="password"
+              show-password
+              :placeholder="state.config.hanprint.pwdConfigured ? `${state.config.hanprint.pwdMasked}（留空保持不变，输入新密码替换）` : '汉印平台密码（未配置）'"
+              style="width: 320px"
+            />
+            <el-button v-if="state.config.hanprint.pwdConfigured" size="small" text type="danger" @click="clearHpPwd">
+              <el-icon><Delete /></el-icon>清除密码
+            </el-button>
+          </div>
+        </div>
+        <div class="ai-actions">
+          <el-button type="primary" plain @click="saveConfig">
+            <el-icon style="margin-right: 4px"><Check /></el-icon>保存配置
+          </el-button>
+          <el-button :loading="hpTesting" :disabled="!state.config.hanprint.baseUrl || !state.config.hanprint.account || (!state.config.hanprint.pwdConfigured && !hpPwdInput)" @click="testHanprint">
+            <el-icon style="margin-right: 4px"><Connection /></el-icon>测试连接
+          </el-button>
+          <span v-if="hpTestResult" :class="['ai-result', hpTestResult.ok ? 'ok' : 'err']">
+            {{ hpTestResult.ok ? '登录成功' : `登录失败：${hpTestResult.error}` }}
+          </span>
+        </div>
+        <div class="ai-hint ai-note">
+          汉印平台按工时占比填报（当日全部条目合计须为 100%）；「软件项目」任务与禅道任务同源，绑定禅道任务后自动匹配汉印任务。不配置汉印则只填报禅道工时。
+        </div>
+      </div>
+    </el-card>
+
     <!-- 一键填报 · 工时参数 -->
     <el-card v-show="activeSection === 'fill'" shadow="never" class="card">
       <template #header>
@@ -425,6 +479,15 @@ function saveConfig() {
   } else {
     delete state.config.zentao.password
   }
+  if (!state.config.hanprint) state.config.hanprint = {}
+  if (hpPwdInput.value) {
+    state.config.hanprint.password = hpPwdInput.value
+    state.config.hanprint.pwdConfigured = true
+    state.config.hanprint.pwdMasked = maskKey(hpPwdInput.value)
+    hpPwdInput.value = ''
+  } else {
+    delete state.config.hanprint.password
+  }
   try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
 }
 
@@ -484,6 +547,47 @@ async function clearZtPwd() {
   state.config.zentao.pwdMasked = ''
   ztPwdInput.value = ''
   ztTestResult.value = null
+}
+
+// ---------- 一键填报（汉印）配置 ----------
+const hpPwdInput = ref('')
+const hpTesting = ref(false)
+const hpTestResult = ref(null)
+
+async function testHanprint() {
+  hpTesting.value = true
+  hpTestResult.value = null
+  try {
+    const r = await window.gitReport.fillHpTest(toPlain({
+      baseUrl: state.config.hanprint.baseUrl,
+      clientId: state.config.hanprint.clientId,
+      account: state.config.hanprint.account,
+      password: hpPwdInput.value || '',
+    }))
+    hpTestResult.value = r
+    if (r?.ok) ElMessage.success('汉印平台登录成功')
+    else ElMessage.error(`汉印登录失败：${r?.error || '未知错误'}`)
+  } catch (e) {
+    hpTestResult.value = { ok: false, error: (e && e.message) || String(e) }
+    ElMessage.error(`汉印登录失败：${hpTestResult.value.error}`)
+  } finally {
+    hpTesting.value = false
+  }
+}
+
+async function clearHpPwd() {
+  try {
+    await ElMessageBox.confirm('确定清除已保存的汉印密码吗？', '清除密码', { type: 'warning' })
+  } catch {
+    return
+  }
+  state.config.hanprint.clearPwd = true
+  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
+  delete state.config.hanprint.clearPwd
+  state.config.hanprint.pwdConfigured = false
+  state.config.hanprint.pwdMasked = ''
+  hpPwdInput.value = ''
+  hpTestResult.value = null
 }
 
 async function testAi() {

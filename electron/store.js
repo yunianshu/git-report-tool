@@ -34,6 +34,12 @@ const DEFAULTS = {
     lunchStart: '12:00',  // 午休区间（自动从工作分钟数中扣除）
     lunchEnd: '13:30',
   },
+  // 一键填报（汉印工时平台）：密码经 safeStorage 加密后以 pwdEnc 落盘，明文不出主进程
+  hanprint: {
+    baseUrl: '',          // 如 http://10.10.21.2:5293
+    clientId: '1',        // 1=厦门汉印 2=江西外协
+    account: '',          // 工号
+  },
 }
 
 /** 从 AI 配置对象解密出明文 Key（keyEnc 优先，兼容旧版明文 apiKey） */
@@ -73,12 +79,18 @@ function load() {
     cfg.zentao.pwdConfigured = !!pwd
     cfg.zentao.pwdMasked = pwd ? maskKey(pwd) : ''
     delete cfg.zentao.pwdEnc
+    cfg.hanprint = { ...DEFAULTS.hanprint, ...(cfg.hanprint || {}) }
+    const hpPwd = decryptText(cfg.hanprint.pwdEnc)
+    cfg.hanprint.pwdConfigured = !!hpPwd
+    cfg.hanprint.pwdMasked = hpPwd ? maskKey(hpPwd) : ''
+    delete cfg.hanprint.pwdEnc
     return cfg
   } catch {
     return {
       ...DEFAULTS,
       ai: { ...DEFAULTS.ai, apiKey: '', keyConfigured: false, keyMasked: '' },
       zentao: { ...DEFAULTS.zentao, pwdConfigured: false, pwdMasked: '' },
+      hanprint: { ...DEFAULTS.hanprint, pwdConfigured: false, pwdMasked: '' },
     }
   }
 }
@@ -139,6 +151,23 @@ function save(cfg) {
       }
       // clearPwd → 不带 pwdEnc，即清除
     }
+    // 汉印密码同规则
+    if (c.hanprint) {
+      const newPwd = c.hanprint.password || ''
+      const clearPwd = !!c.hanprint.clearPwd
+      delete c.hanprint.clearPwd
+      delete c.hanprint.pwdConfigured
+      delete c.hanprint.pwdMasked
+      delete c.hanprint.password
+      if (!clearPwd && !newPwd) {
+        try {
+          const old = JSON.parse(fs.readFileSync(file(), 'utf8'))
+          if (old.hanprint && old.hanprint.pwdEnc) c.hanprint.pwdEnc = old.hanprint.pwdEnc
+        } catch { /* 无既有配置 */ }
+      } else if (newPwd) {
+        c.hanprint.pwdEnc = encryptText(newPwd)
+      }
+    }
     fs.writeFileSync(file(), JSON.stringify(c, null, 2), { encoding: 'utf8', mode: 0o600 })
     return true
   } catch {
@@ -160,6 +189,16 @@ function getZentaoPwd() {
   try {
     const zt = JSON.parse(fs.readFileSync(file(), 'utf8')).zentao
     return zt ? decryptText(zt.pwdEnc) : ''
+  } catch {
+    return ''
+  }
+}
+
+/** 主进程专用：返回汉印登录密码明文（绝不发往渲染层） */
+function getHanprintPwd() {
+  try {
+    const hp = JSON.parse(fs.readFileSync(file(), 'utf8')).hanprint
+    return hp ? decryptText(hp.pwdEnc) : ''
   } catch {
     return ''
   }
@@ -188,4 +227,4 @@ function decryptText(secret) {
   return secret.plain || ''
 }
 
-module.exports = { load, save, getApiKey, getZentaoPwd, encryptText, decryptText }
+module.exports = { load, save, getApiKey, getZentaoPwd, getHanprintPwd, encryptText, decryptText }

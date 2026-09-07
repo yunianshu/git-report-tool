@@ -37,6 +37,7 @@ require.cache[electronPath] = { id: electronPath, filename: electronPath, loaded
 
 const fill = require('../electron/fill-service')
 const { ZentaoClient, parseJsonPrefix, md5 } = require('../electron/zentao-service')
+const { HanprintClient } = require('../electron/hanprint-service')
 const store = require('../electron/store')
 
 // ── fake fetch 工具：把 handler 的静态返回包装成最小 Response ──
@@ -48,6 +49,7 @@ function makeResp({ status = 200, body = '', setCookies = [], location = null })
       getSetCookie: () => setCookies,
     },
     text: async () => body,
+    json: async () => JSON.parse(body),
   }
 }
 function fakeFetch(handler) {
@@ -320,6 +322,158 @@ await test('任务不在我的任务列表时 taskLeft=null 仍可构造', () =>
   const tasks = fill.buildSubmitTasks([{ taskId: 999, hours: 1, msg: 'x' }], [], '2026-09-07')
   assert.strictEqual(tasks[0].taskLeft, null)
   assert.strictEqual(tasks[0].left, 0)
+})
+
+// ═══════════ 汉印条目构造（百分比 Σ=100） ═══════════
+console.log('汉印条目构造:')
+const HP_GROUPS = [
+  { type: 1, typeName: '日常事务', projectId: '900', projectName: '日常', tasks: [{ Key: '66', Name: '同名干扰任务' }] },
+  { type: 3, typeName: '软件项目', projectId: '799', projectName: '电商决策支持系统', tasks: [
+    { Key: '66', Name: '电商决策支持系统开发', GlProjectGuid: '', GlprojectName: '', BigKey: 'b1', BigName: '大项目', ProductKey: 'p1', ProductName: '产品A', StartTime: '2026-01-01', EndTime: '2026-12-31', StartTime2: '2026-01-02', EndTime2: null, IsOp: 1, PlmTotalHour: 100, ProductTime: null, DivisionName: '软件部' },
+    { Key: '88', Name: '任务B', GlProjectGuid: '', GlprojectName: '', BigKey: '', BigName: '', ProductKey: '', ProductName: '', StartTime: null, EndTime: null, StartTime2: null, EndTime2: null, IsOp: 0, PlmTotalHour: 0, ProductTime: null, DivisionName: '' },
+  ] },
+]
+
+await test('按禅道任务在 type=3 分组匹配并换算百分比', () => {
+  const tasks = [
+    { taskId: 66, consumed: 2.5 },
+    { taskId: 88, consumed: 0.5 },
+  ]
+  const { items, unmatched } = fill.buildHpItems(tasks, HP_GROUPS, '2026-09-07')
+  assert.deepStrictEqual(unmatched, [])
+  assert.strictEqual(items.length, 2)
+  assert.strictEqual(items[0].ProjectType, 3)
+  assert.strictEqual(items[0].ProjectId, '799')
+  assert.strictEqual(items[0].TaskId, '66')
+  assert.strictEqual(items[0].BigProjectName, '大项目')
+  assert.strictEqual(items[0].IsOp, true)
+  assert.strictEqual(items[0].ActualStartTime, '2026-01-02')
+  assert.strictEqual(items[0].WorkDate, '2026-09-07')
+  assert.strictEqual(items[0].AddType, 0)
+  // ΣPercent 必须为 100（汉印硬约束）
+  const sum = items.reduce((s, x) => s + x.Percent, 0)
+  assert.strictEqual(sum, 100)
+})
+
+await test('未匹配任务的占比份额并入余数补给第一条，Σ 仍=100', () => {
+  const tasks = [
+    { taskId: 66, consumed: 2 },
+    { taskId: 999, consumed: 2 }, // 汉印无此任务
+  ]
+  const { items, unmatched } = fill.buildHpItems(tasks, HP_GROUPS, '2026-09-07')
+  assert.deepStrictEqual(unmatched, [999])
+  assert.strictEqual(items.length, 1)
+  assert.strictEqual(items[0].Percent, 100) // 50 + 余数 50
+})
+
+await test('四舍五入误差由第一条吸收（Σ 恒等 100）', () => {
+  const tasks = [
+    { taskId: 66, consumed: 1 },
+    { taskId: 88, consumed: 1 },
+    { taskId: 77, consumed: 1 },
+  ]
+  const { items, unmatched } = fill.buildHpItems(tasks, [
+    ...HP_GROUPS,
+    { type: 3, typeName: '软件项目', projectId: '800', projectName: 'P2', tasks: [{ Key: '77', Name: '任务C' }] },
+  ], '2026-09-07')
+  assert.deepStrictEqual(unmatched, [])
+  // 3 任务各 1/3 → 33/33/33=99，余数 1 补第一条
+  const sum = items.reduce((s, x) => s + x.Percent, 0)
+  assert.strictEqual(sum, 100)
+})
+
+await test('全部未匹配时返回空', () => {
+  const { items, unmatched } = fill.buildHpItems([{ taskId: 999, consumed: 1 }], HP_GROUPS, '2026-09-07')
+  assert.deepStrictEqual(items, [])
+  assert.deepStrictEqual(unmatched, [999])
+})
+
+// ═══════════ 汉印客户端（fake fetch） ═══════════
+console.log('汉印客户端请求构造:')
+function makeHpClient(handler) {
+  const ff = fakeFetch(handler)
+  const client = new HanprintClient({ baseUrl: 'http://hp.example', clientId: '1', account: '21290', password: 'secret', fetchImpl: ff.impl })
+  return { client, ff }
+}
+function jsonResp(obj, setCookies = []) {
+  return { body: JSON.stringify(obj), setCookies }
+}
+
+await test('登录：getToken 参数与 token 保存', async () => {
+  const { client, ff } = makeHpClient((url) => {
+    if (url.includes('/login/getToken')) {
+      assert.ok(url.includes('clientId=1') && url.includes('userName=21290') && url.includes('pwd=secret'))
+      return jsonResp({ code: 0, data: 'tok-1' })
+    }
+    return jsonResp({ code: 0, data: null })
+  })
+  await client.login()
+  assert.strictEqual(client.token, 'tok-1')
+})
+
+await test('登录失败抛出平台错误信息', async () => {
+  const { client } = makeHpClient(() => jsonResp({ code: -1, data: null, msg: '用户不存在' }))
+  await assert.rejects(() => client.login(), /用户不存在/)
+})
+
+await test('业务请求带 token 头 + code!=0 抛错', async () => {
+  const { client } = makeHpClient((url, opts) => {
+    if (url.includes('/com/workhour/GetDict')) {
+      assert.strictEqual(opts.headers.token, 'tok-x')
+      return jsonResp({ code: 0, data: [] })
+    }
+    if (url.includes('/com/workhour/GetProjectList')) {
+      return jsonResp({ code: -1, data: null, msg: '无权限' })
+    }
+    return jsonResp({ code: 0, data: 't' })
+  })
+  client.token = 'tok-x'
+  assert.deepStrictEqual(await client.getData('/com/workhour/GetDict', { dictType: 1 }), [])
+  client.token = 'tok-bad'
+  await assert.rejects(() => client.getData('/com/workhour/GetProjectList', { projecttype: 3 }), /汉印接口错误/)
+})
+
+await test('token 过期（code=-2）自动重登一次', async () => {
+  let hits = 0
+  let logins = 0
+  const { client } = makeHpClient((url) => {
+    if (url.includes('/login/getToken')) { logins += 1; return jsonResp({ code: 0, data: 'tok-new' }) }
+    if (url.includes('/com/workhour/GetDict')) {
+      hits += 1
+      return hits === 1 ? jsonResp({ code: -2, data: null, msg: 'token 过期' }) : jsonResp({ code: 0, data: [] })
+    }
+    return jsonResp({ code: 0, data: 't' })
+  })
+  client.token = 'tok-old'
+  assert.deepStrictEqual(await client.getData('/com/workhour/GetDict', { dictType: 1 }), [])
+  assert.strictEqual(logins, 1)
+  assert.strictEqual(client.token, 'tok-new')
+})
+
+await test('add：JSON 数组提交体 + token 头', async () => {
+  const { client, ff } = makeHpClient((url, opts) => {
+    if (url.includes('/com/workhour/add')) {
+      assert.strictEqual(opts.headers.token, 'tok-add')
+      assert.strictEqual(opts.headers['Content-Type'], 'application/json;charset=utf8')
+      const arr = JSON.parse(opts.body)
+      assert.ok(Array.isArray(arr) && arr.length === 1)
+      assert.strictEqual(arr[0].Percent, 100)
+      return jsonResp({ code: 0, data: null })
+    }
+    return jsonResp({ code: 0, data: 't' })
+  })
+  client.token = 'tok-add'
+  const r = await client.add([{ Percent: 100, WorkDate: '2026-09-07' }])
+  assert.strictEqual(r.status, 'ok')
+})
+
+await test('add dryRun 只回显不发', async () => {
+  const { client, ff } = makeHpClient(() => { throw new Error('不应发请求') })
+  client.token = 'tok'
+  const r = await client.add([{ Percent: 100 }], true)
+  assert.strictEqual(r.dryRun, true)
+  assert.ok(r.url.includes('/com/workhour/add'))
+  assert.strictEqual(ff.calls.length, 0)
 })
 
 // ═══════════ store 禅道配置（密码加密往返） ═══════════

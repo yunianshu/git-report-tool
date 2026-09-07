@@ -40,6 +40,11 @@ export const state = reactive({
       lunchStart: '12:00',
       lunchEnd: '13:30',
     },
+    hanprint: {
+      baseUrl: '',
+      clientId: '1',
+      account: '',
+    },
   },
   /** 报告生成过程（跨视图保留，切换 tab 不中断） */
   report: {

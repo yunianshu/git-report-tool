@@ -15,6 +15,7 @@ const { app } = require('electron')
 const store = require('./store')
 const { execGit } = require('./git-service')
 const zentao = require('./zentao-service')
+const hanprint = require('./hanprint-service')
 
 // ─── 工时计算（纯函数，与 KnowMore plan_hours 语义一致） ───
 
@@ -242,6 +243,71 @@ function buildSubmitTasks(planned, ztTasks, date) {
   return tasks
 }
 
+// ─── 汉印条目构造（移植 KnowMore buildHp/buildPayload：工时 → 百分比，Σ=100） ───
+
+/**
+ * 按禅道任务聚合工时换算为汉印百分比条目。只在「软件项目(type=3)」分组中按
+ * 「任务 Key === 禅道任务 ID」查找（两系统数据同源）；未匹配任务的工时占比
+ * 份额并入余数补给第一条，保证 ΣPercent = 100（汉印硬约束）。
+ * 返回 { items, unmatched: [taskId...] }。
+ */
+function buildHpItems(tasks, groups, date) {
+  const total = round2((tasks || []).reduce((s, t) => s + (t.consumed || 0), 0))
+  if (!total) return { items: [], unmatched: [] }
+  const list = []
+  const unmatched = []
+  let assigned = 0
+  for (const t of tasks || []) {
+    const group = (groups || []).find(
+      (g) => g.type === 3 && (g.tasks || []).some((x) => String(x.Key) === String(t.taskId)),
+    )
+    if (!group) {
+      unmatched.push(t.taskId)
+      continue // eslint-disable-line no-continue
+    }
+    const task = group.tasks.find((x) => String(x.Key) === String(t.taskId))
+    const pct = Math.round(((t.consumed || 0) / total) * 100)
+    assigned += pct
+    list.push({ group, task, pct })
+  }
+  if (!list.length) return { items: [], unmatched }
+  const rest = 100 - assigned
+  if (rest) list[0].pct += rest
+  const items = list.map(({ group, task, pct }) => ({
+    Id: 0,
+    ProjectType: group.type,
+    ProjectTypeName: group.typeName,
+    TaskTypeName: '',
+    ProjectId: String(group.projectId),
+    ProjectName: group.projectName,
+    TaskId: String(task.Key),
+    TaskName: task.Name,
+    GlProjectId: task.GlProjectGuid || '',
+    GlProjectName: task.GlprojectName || '',
+    BigProjectId: task.BigKey || '',
+    BigProjectName: task.BigName || '',
+    ProductId: task.ProductKey || '',
+    ProductName: task.ProductName || '',
+    Percent: pct,
+    PlanStartTime: task.StartTime || null,
+    PlanEndTime: task.EndTime || null,
+    ActualStartTime: task.StartTime2 || null,
+    ActualEndTime: task.EndTime2 || null,
+    UserNo: '',
+    IsOp: !!task.IsOp,
+    PlmTotalHour: task.PlmTotalHour || 0,
+    ProductTime: task.ProductTime || null,
+    Syqz: '',
+    Status: 0,
+    Remark: '',
+    TaskRemark: '',
+    DivisionName: task.DivisionName || '',
+    WorkDate: date,
+    AddType: 0,
+  }))
+  return { items, unmatched }
+}
+
 // ─── 编排：生成工时计划 / 提交禅道 ───
 
 /**
@@ -315,6 +381,24 @@ async function plan(payload) {
     .filter((p) => commits.some((c) => c.projectId === p.id) && !boundProjects[String(p.id)])
     .map((p) => ({ id: p.id, name: p.name }))
 
+  // 汉印条目（容错：未配置/接口失败不阻断禅道计划，仅提示）
+  let hpItems = []
+  let hpUnmatched = []
+  let hpError = ''
+  const hanprintConfigured = !!(cfg.hanprint && cfg.hanprint.baseUrl && cfg.hanprint.account && store.getHanprintPwd())
+  if (hanprintConfigured) {
+    try {
+      const groups = await hanprint.getGroups()
+      const built = buildHpItems(tasks, groups, date)
+      hpItems = built.items
+      hpUnmatched = built.unmatched
+    } catch (e) {
+      hpError = (e && e.message) || String(e)
+    }
+  } else {
+    hpError = '汉印未配置：将只填报禅道工时（可到「设置 → 一键填报」配置汉印账号）'
+  }
+
   return {
     date,
     workConfig: workCfg,
@@ -325,17 +409,21 @@ async function plan(payload) {
     suggested,
     ztTasks,
     ztError,
+    hpItems,
+    hpUnmatched,
+    hpError,
     identitiesMissing,
     commitCount: commits.length,
   }
 }
 
 /**
- * 提交禅道工时。payload: { tasks: [{ taskId, rows }], dryRun }
- * 逐任务调用 recordEstimate；dryRun=true 只回显表单不写入。
+ * 提交工时（双平台）。payload: { tasks: [{ taskId, rows }], dryRun, hp?: { items } }
+ * - 禅道：逐任务调用 recordEstimate；dryRun=true 只回显表单不写入
+ * - 汉印：传入 hp.items（plan 阶段构造的百分比条目）时调用 workhour/add
  */
 async function submit(payload) {
-  const { tasks, dryRun } = payload || {}
+  const { tasks, dryRun, hp } = payload || {}
   if (!Array.isArray(tasks) || !tasks.length) throw new Error('没有可提交的工时数据')
   for (const t of tasks) {
     if (!t.taskId || !Array.isArray(t.rows) || !t.rows.length) throw new Error('任务数据不完整（缺少 taskId 或工时行）')
@@ -347,7 +435,12 @@ async function submit(payload) {
     const r = await client.recordEfforts(t.taskId, t.rows, !!dryRun)
     results.push({ taskId: t.taskId, taskName: t.taskName || '', consumed: round2(t.rows.reduce((s, x) => s + x.consumed, 0)), ...r })
   }
-  return { dryRun: !!dryRun, results }
+  let hpResult = null
+  if (hp && Array.isArray(hp.items) && hp.items.length) {
+    const hpClient = await hanprint.ensureClient()
+    hpResult = await hpClient.add(hp.items, !!dryRun)
+  }
+  return { dryRun: !!dryRun, results, hp: hpResult }
 }
 
 module.exports = {
@@ -362,6 +455,7 @@ module.exports = {
   unbindProject,
   suggestTask,
   buildSubmitTasks,
+  buildHpItems,
   plan,
   submit,
 }
