@@ -36,11 +36,10 @@ function workMinutes(start, end, lunchS, lunchE) {
 }
 
 /**
- * 锚点累进法计算每条提交的工时。
- * commits: [{ time:'HH:MM', msg, projectId, projectName }] 按时间升序（内部会再排序）。
- * 跨项目合并段在工作说明中加 [项目名] 前缀，便于在禅道工时里区分来源。
+ * 时间切分（锚点累进法）：每条提交的工时段，0 段保留。
+ * commits: [{ time:'HH:MM', msg, projectId, projectName }] 内部按时间升序排序。
  */
-function planHours(commits, { workStart, lunchStart, lunchEnd, step = 30 } = {}) {
+function computeSegments(commits, { workStart, lunchStart, lunchEnd, step = 30 } = {}) {
   const lunchS = hm(lunchStart || '12:00')
   const lunchE = hm(lunchEnd || '13:00')
   let anchor = hm(workStart || '08:30')
@@ -53,6 +52,15 @@ function planHours(commits, { workStart, lunchStart, lunchEnd, step = 30 } = {})
     const seg = Math.floor(m / step) * step
     out.push({ ...c, minutes: seg, hours: round2(seg / 60), rawMinutes: m, rawHours: round2(m / 60) })
   }
+  return out
+}
+
+/**
+ * 锚点累进法计算每条提交的工时（0 段合并版）。
+ * 跨项目合并段在工作说明中加 [项目名] 前缀，便于在禅道工时里区分来源。
+ */
+function planHours(commits, opts = {}) {
+  const out = computeSegments(commits, opts)
   // 0 段并入下一条（尾部并入上一条），保证每条 hours > 0
   const merged = []
   let pending = []
@@ -86,6 +94,50 @@ function msgOf(item, target) {
     return `[${item.projectName || item.projectId}] ${item.msg}`
   }
   return item.msg
+}
+
+// ─── 按项目聚合（一个项目一条工时记录，内容为简洁编号列表） ───
+
+/** Conventional Commits 前缀剥离（与活动报告「复制」按钮的口径一致） */
+const PREFIX_RE = /^(feat|fix|refactor|docs|style|test|chore|perf|ci|build|revert|init|types?)(\([^)]*\))?\s*[:：]\s*/i
+
+function stripPrefix(subject) {
+  return String(subject || '').replace(PREFIX_RE, '').trim()
+}
+
+/**
+ * 把时间切分结果按项目聚合为一条工时记录：
+ * 工时 = 该项目全部提交段之和；说明 = 去类型前缀的编号列表（同活动报告复制格式）。
+ */
+function aggregateByProject(segments) {
+  const byProject = new Map()
+  for (const s of segments || []) {
+    const key = String(s.projectId === undefined ? '' : s.projectId)
+    if (!byProject.has(key)) {
+      byProject.set(key, {
+        projectId: s.projectId,
+        projectName: s.projectName || String(s.projectId || ''),
+        hours: 0,
+        rawHours: 0,
+        firstTime: s.time,
+        lastTime: s.time,
+        commits: [],
+      })
+    }
+    const acc = byProject.get(key)
+    acc.hours = round2(acc.hours + s.hours)
+    acc.rawHours = round2(acc.rawHours + s.rawHours)
+    acc.lastTime = s.time
+    acc.commits.push(s)
+  }
+  const list = []
+  for (const acc of byProject.values()) {
+    acc.commitCount = acc.commits.length
+    acc.work = acc.commits.map((c, i) => `${i + 1}. ${stripPrefix(c.msg)}`).join('\n')
+    delete acc.commits
+    list.push(acc)
+  }
+  return list
 }
 
 // ─── 提交收集（带 HH:MM） ───
@@ -223,7 +275,7 @@ function buildSubmitTasks(planned, ztTasks, date) {
     if (!p.taskId) continue
     const key = String(p.taskId)
     if (!byTask.has(key)) byTask.set(key, [])
-    byTask.get(key).push({ date, work: p.msg, consumed: p.hours })
+    byTask.get(key).push({ date, work: p.work, consumed: p.hours })
   }
   const tasks = []
   for (const [key, rows] of byTask) {
@@ -333,16 +385,7 @@ async function plan(payload) {
     lunchStart: (cfg.zentao && cfg.zentao.lunchStart) || '12:00',
     lunchEnd: (cfg.zentao && cfg.zentao.lunchEnd) || '13:00',
   }
-  const planned = planHours(commits, workCfg).map((p) => ({
-    time: p.time,
-    hours: p.hours,
-    rawHours: p.rawHours,
-    msg: p.msg,
-    hash: p.hash,
-    projectId: p.projectId,
-    projectName: p.projectName,
-    mergedFrom: p.mergedFrom || [],
-  }))
+  const planned = aggregateByProject(computeSegments(commits, workCfg))
 
   const bindings = listBindings()
   const zentaoConfigured = !!(cfg.zentao && cfg.zentao.baseUrl && cfg.zentao.account && store.getZentaoPwd())
@@ -447,6 +490,9 @@ module.exports = {
   hm,
   workMinutes,
   planHours,
+  computeSegments,
+  stripPrefix,
+  aggregateByProject,
   parseTimedLines,
   isMine,
   collectTimedCommits,

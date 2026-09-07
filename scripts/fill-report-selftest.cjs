@@ -158,6 +158,45 @@ await test('提交乱序输入时按时间升序计算', () => {
   assert.strictEqual(out[1].msg, 'late')
 })
 
+// ═══════════ 按项目聚合（一个项目一条记录 + 简洁编号内容） ═══════════
+console.log('按项目聚合:')
+await test('stripPrefix 去掉 Conventional Commits 前缀', () => {
+  assert.strictEqual(fill.stripPrefix('feat: 完成订单模块'), '完成订单模块')
+  assert.strictEqual(fill.stripPrefix('fix(parser): 修复解析'), '修复解析')
+  assert.strictEqual(fill.stripPrefix('chore：中文冒号'), '中文冒号')
+  assert.strictEqual(fill.stripPrefix('无前缀提交'), '无前缀提交')
+})
+
+await test('同项目多条提交聚合为一条：工时合计 + 编号列表内容', () => {
+  const segments = fill.computeSegments([
+    { time: '09:12', msg: 'feat: 完成订单模块', projectId: 'p1', projectName: 'P1' },
+    { time: '11:40', msg: 'fix: 修复库存同步', projectId: 'p1', projectName: 'P1' },
+  ], { workStart: '08:30' })
+  const agg = fill.aggregateByProject(segments)
+  assert.strictEqual(agg.length, 1)
+  assert.strictEqual(agg[0].hours, 2.5) // 0.5 + 2
+  assert.strictEqual(agg[0].commitCount, 2)
+  assert.strictEqual(agg[0].firstTime, '09:12')
+  assert.strictEqual(agg[0].lastTime, '11:40')
+  assert.strictEqual(agg[0].work, '1. 完成订单模块\n2. 修复库存同步')
+})
+
+await test('多项目穿插提交各自聚合，工时段归属不变', () => {
+  const segments = fill.computeSegments([
+    { time: '09:00', msg: 'feat: A1', projectId: 'pA', projectName: 'ProjA' },
+    { time: '10:00', msg: 'feat: B1', projectId: 'pB', projectName: 'ProjB' },
+    { time: '11:00', msg: 'feat: A2', projectId: 'pA', projectName: 'ProjA' },
+  ], { workStart: '08:30' })
+  const agg = fill.aggregateByProject(segments)
+  assert.strictEqual(agg.length, 2)
+  const a = agg.find((x) => x.projectId === 'pA')
+  const b = agg.find((x) => x.projectId === 'pB')
+  assert.strictEqual(a.hours, 1.5) // 0.5 + 1（10:00→11:00 段归 B 之后的 A2）
+  assert.strictEqual(b.hours, 1) // 09:00→10:00 段归 B1
+  assert.strictEqual(a.work, '1. A1\n2. A2')
+  assert.strictEqual(a.lastTime, '11:00')
+})
+
 // ═══════════ JSON 容错解析 ═══════════
 console.log('禅道 JSON 容错解析:')
 await test('parseJsonPrefix 正常解析', () => {
@@ -304,10 +343,10 @@ await test('suggestTask 名称互相包含', () => {
 console.log('提交汇总（left 扣减）:')
 await test('按任务聚合 + left = 原剩余 − 本次总消耗', () => {
   const planned = [
-    { taskId: 66, hours: 0.5, msg: 'a' },
-    { taskId: 66, hours: 2, msg: 'b' },
-    { taskId: 88, hours: 1, msg: 'c' },
-    { taskId: null, hours: 3, msg: '未绑定' },
+    { taskId: 66, hours: 0.5, work: '1. a' },
+    { taskId: 66, hours: 2, work: '1. b' },
+    { taskId: 88, hours: 1, work: '1. c' },
+    { taskId: null, hours: 3, work: '1. 未绑定' },
   ]
   const ztTasks = [
     { id: 66, name: '任务A', left: 3.5 },
@@ -325,7 +364,7 @@ await test('按任务聚合 + left = 原剩余 − 本次总消耗', () => {
   assert.strictEqual(t88.left, 0) // 0.5 - 1 → 最低为 0
 })
 await test('任务不在我的任务列表时 taskLeft=null 仍可构造', () => {
-  const tasks = fill.buildSubmitTasks([{ taskId: 999, hours: 1, msg: 'x' }], [], '2026-09-07')
+  const tasks = fill.buildSubmitTasks([{ taskId: 999, hours: 1, work: '1. x' }], [], '2026-09-07')
   assert.strictEqual(tasks[0].taskLeft, null)
   assert.strictEqual(tasks[0].left, 0)
 })
@@ -552,7 +591,7 @@ if (gitOk()) {
     assert.strictEqual(commits.length, 0)
   })
 
-  await test('plan 端到端：真实提交 → 工时 → 汇总（不依赖禅道）', async () => {
+  await test('plan 端到端：真实提交 → 按项目聚合 → 汇总（不依赖禅道）', async () => {
     // 不配置禅道：plan 应容错返回 ztError 而不抛异常
     store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
     const r = await fill.plan({
@@ -560,10 +599,12 @@ if (gitOk()) {
       projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
     })
     assert.ok(r.ztError)
-    assert.strictEqual(r.planned.length, 2)
-    // 09:12 距 08:30 = 42min → 0.5h；09:12→11:40 = 148min → 120min → 2h
-    assert.strictEqual(r.planned[0].hours, 0.5)
-    assert.strictEqual(r.planned[1].hours, 2)
+    assert.strictEqual(r.planned.length, 1) // 一个项目一条记录
+    // 09:12 距 08:30 = 42min → 0.5h；09:12→11:40 = 148min → 2h；合计 2.5h
+    assert.strictEqual(r.planned[0].hours, 2.5)
+    assert.strictEqual(r.planned[0].firstTime, '09:12')
+    assert.strictEqual(r.planned[0].lastTime, '11:40')
+    assert.strictEqual(r.planned[0].work, '1. 完成订单模块\n2. 修复库存同步') // feat:/fix: 前缀已剥离
     assert.strictEqual(r.unmatchedProjects.length, 1) // 有提交但未绑定
   })
 } else {

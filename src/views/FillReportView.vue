@@ -110,19 +110,17 @@
         <template #header>
           <div class="card-header">
             <span>提交明细 · {{ plan.date }}（{{ plan.workConfig.workStart }} 上班，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}）</span>
-            <span class="header-meta">{{ plan.planned.length }} 条提交 · 合计 {{ totalHours }}h</span>
+            <span class="header-meta">{{ plan.planned.length }} 个项目 · {{ plan.commitCount }} 条提交 · 合计 {{ totalHours }}h</span>
           </div>
         </template>
         <div v-if="plan.planned.length" class="plan-list">
           <div v-for="(p, i) in plan.planned" :key="i" class="prow" :class="{ unbound: !p.taskId }">
             <div class="pline">
-              <span class="ptime">{{ p.time }}</span>
+              <span class="ptime">{{ p.firstTime }}–{{ p.lastTime }}</span>
               <span class="phours">{{ p.hours }}h</span>
               <span class="pmsg">
-                <span class="pmsg-text">{{ p.msg }}</span>
-                <span class="pproj">
-                  {{ p.projectName }}<template v-if="p.mergedFrom && p.mergedFrom.length"> · 合并 {{ p.mergedFrom.length }} 条零头提交</template>
-                </span>
+                <pre class="pwork">{{ p.work }}</pre>
+                <span class="pproj">{{ p.projectName }} · {{ p.commitCount }} 条提交</span>
               </span>
             </div>
             <div class="pmatch">
@@ -443,11 +441,13 @@ async function submitFill(preview) {
 
 function buildReportText() {
   const p = plan.value
-  const lines = [`一键填报 · ${p.date}`, `共 ${p.planned.length} 条提交 · 合计 ${totalHours.value}h`, '']
+  const lines = [`一键填报 · ${p.date}`, `共 ${p.commitCount} 条提交 · ${p.planned.length} 个项目 · 合计 ${totalHours.value}h`, '']
   for (const item of p.planned) {
-    lines.push(`${item.time}  ${item.hours}h  [${item.projectName}] ${item.msg}`)
+    lines.push(`${item.firstTime}–${item.lastTime}  ${item.hours}h  [${item.projectName}]`)
+    lines.push(item.work)
+    lines.push('')
   }
-  lines.push('', '按禅道任务汇总：')
+  lines.push('按禅道任务汇总：')
   for (const t of p.tasks) {
     lines.push(`#${t.taskId} ${t.taskName}  ${t.consumed}h${t.taskLeft !== null ? `（剩余 ${t.taskLeft}h → ${t.left}h）` : ''}`)
   }
@@ -517,10 +517,10 @@ async function copyReport() {
 }
 .ptime {
   font-family: var(--brand-mono, monospace);
-  font-size: 13px;
+  font-size: 12.5px;
   font-weight: 700;
   color: #0e7a6d;
-  width: 44px;
+  width: 108px;
   flex-shrink: 0;
 }
 .phours {
@@ -531,10 +531,12 @@ async function copyReport() {
   flex-shrink: 0;
 }
 .pmsg { flex: 1; min-width: 0; }
-.pmsg-text {
-  display: block;
+.pwork {
+  margin: 0;
+  font-family: inherit;
   font-size: 13px;
-  line-height: 1.5;
+  line-height: 1.6;
+  white-space: pre-wrap;
   word-break: break-all;
   color: #2a303c;
 }
@@ -542,7 +544,7 @@ async function copyReport() {
   display: block;
   font-size: 11.5px;
   color: #9ca1af;
-  margin-top: 2px;
+  margin-top: 4px;
 }
 .pmatch {
   margin-top: 6px;
@@ -550,7 +552,7 @@ async function copyReport() {
   gap: 8px;
   align-items: center;
 }
-.prow.unbound .pmatch { padding-left: 56px; }
+.prow.unbound .pmatch { padding-left: 120px; }
 .sum-list .sumline {
   display: flex;
   justify-content: space-between;
