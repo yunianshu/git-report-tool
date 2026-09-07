@@ -155,6 +155,9 @@
           <div v-for="t in plan.tasks" :key="t.taskId" class="sumline">
             <span class="sum-name">
               #{{ t.taskId }} {{ t.taskName || '（任务已不在「我的任务」列表）' }}
+              <el-tag v-if="t.existingToday && t.existingToday.count" size="small" type="warning" class="exist-tag">
+                当日已有 {{ t.existingToday.count }} 条（{{ t.existingToday.consumed }}h）· 将更新
+              </el-tag>
             </span>
             <span class="sum-right">
               <template v-if="t.taskLeft !== null">剩余 {{ t.taskLeft }}h → {{ t.left }}h · </template>{{ t.consumed }}h
@@ -168,9 +171,14 @@
         <div v-else class="collect-hint">暂无可填报的任务：请先为有提交的项目绑定禅道任务</div>
         <!-- 汉印条目预览（按工时占比，合计 100%） -->
         <div v-if="plan.hpItems && plan.hpItems.length" class="hp-block">
-          <div class="hp-title">汉印工时填报（{{ plan.hpItems.length }} 条 · 占比合计 {{ hpPercentTotal }}%）</div>
+          <div class="hp-title">
+            汉印工时填报（{{ plan.hpItems.length }} 条 · 占比合计 {{ hpPercentTotal }}%<template v-if="hpExistingCount">，其中 {{ hpExistingCount }} 条当日已有将更新</template>）
+          </div>
           <div v-for="(item, i) in plan.hpItems" :key="i" class="hpline">
-            <span class="sum-name">{{ item.ProjectName }} · {{ item.TaskName }}</span>
+            <span class="sum-name">
+              {{ item.ProjectName }} · {{ item.TaskName }}
+              <el-tag v-if="isHpExisting(item)" size="small" type="warning" class="exist-tag">已填 · 将更新</el-tag>
+            </span>
             <span class="sum-right">{{ item.Percent }}%</span>
           </div>
         </div>
@@ -301,6 +309,20 @@ const hpPercentTotal = computed(() =>
     ? plan.value.hpItems.reduce((s, item) => s + (item.Percent || 0), 0)
     : 0,
 )
+const hpExistingCount = computed(() => {
+  const p = plan.value
+  if (!p || !Array.isArray(p.hpExisting) || !Array.isArray(p.hpItems)) return 0
+  return p.hpItems.filter((item) => p.hpExisting.some((e) => e.taskId === String(item.TaskId))).length
+})
+const ztExistingCount = computed(() =>
+  plan.value ? (plan.value.tasks || []).filter((t) => t.existingToday && t.existingToday.count).length : 0,
+)
+
+function isHpExisting(item) {
+  const p = plan.value
+  if (!p || !Array.isArray(p.hpExisting)) return false
+  return p.hpExisting.some((e) => e.taskId === String(item.TaskId))
+}
 
 onMounted(async () => {
   loadProjects()
@@ -415,9 +437,12 @@ async function submitFill(preview) {
   const hpItems = Array.isArray(p.hpItems) ? p.hpItems : []
   if (!preview) {
     const hpText = hpItems.length ? `，同时向汉印提交 ${hpItems.length} 条占比记录` : ''
+    const existText = ztExistingCount.value || hpExistingCount.value
+      ? `；当日已有记录将更新覆盖（禅道 ${ztExistingCount.value} 个任务、汉印 ${hpExistingCount.value} 条）`
+      : ''
     try {
       await ElMessageBox.confirm(
-        `将向 ${tasks.length} 个禅道任务写入 ${p.date} 共 ${totalHours.value} 小时工时${hpText}，是否继续？`,
+        `将向 ${tasks.length} 个禅道任务写入 ${p.date} 共 ${totalHours.value} 小时工时${hpText}${existText}，是否继续？`,
         '确认提交',
         { type: 'warning', confirmButtonText: '提交', cancelButtonText: '取消' },
       )
@@ -442,7 +467,11 @@ async function submitFill(preview) {
       }
     } else {
       state.fillReport.plan = { ...p, submittedAt: new Date().toTimeString().slice(0, 5) }
-      ElMessage.success(`已写入禅道 ${r.results.length} 个任务的工时${r.hp ? `，汉印 ${hpItems.length} 条占比记录` : ''}`)
+      const updated = r.results.reduce((s, x) => s + (x.updated || 0), 0)
+      const appended = r.results.reduce((s, x) => s + (x.appended || 0), 0)
+      const ztText = `禅道 ${r.results.length} 个任务（更新 ${updated} 行 / 新增 ${appended} 行）`
+      const hpText = r.hp ? `，汉印 ${hpItems.length} 条（更新 ${r.hp.updated || 0} / 新增 ${r.hp.appended || 0}）` : ''
+      ElMessage.success(`已提交：${ztText}${hpText}`)
     }
   } catch (e) {
     ElMessage.error(`提交失败：${e?.message || e}`)
@@ -603,6 +632,7 @@ async function copyReport() {
   color: #4a5160;
   margin-bottom: 6px;
 }
+.exist-tag { margin-left: 6px; }
 .hpline {
   display: flex;
   justify-content: space-between;

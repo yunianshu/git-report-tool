@@ -391,10 +391,23 @@ async function plan(payload) {
     .filter((p) => commits.some((c) => c.projectId === p.id) && !boundProjects[String(p.id)])
     .map((p) => ({ id: p.id, name: p.name }))
 
+  // 当日已有工时（提示「已提交过，将更新覆盖」；查询失败不阻断计划）
+  if (zentaoConfigured) {
+    for (const t of tasks) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        const today = (await zentao.ensureClient().then((c) => c.getTaskEfforts(t.taskId)))
+          .filter((e) => e.date === date)
+        t.existingToday = { count: today.length, consumed: round2(today.reduce((s, e) => s + e.consumed, 0)) }
+      } catch { /* 查询失败按无已有处理 */ }
+    }
+  }
+
   // 汉印条目（容错：未配置/接口失败不阻断禅道计划，仅提示）
   let hpItems = []
   let hpUnmatched = []
   let hpError = ''
+  let hpExisting = []
   const hanprintConfigured = !!(cfg.hanprint && cfg.hanprint.baseUrl && cfg.hanprint.account && store.getHanprintPwd())
   if (hanprintConfigured) {
     try {
@@ -402,6 +415,9 @@ async function plan(payload) {
       const built = buildHpItems(tasks, groups, date)
       hpItems = built.items
       hpUnmatched = built.unmatched
+      hpExisting = (await hanprint.ensureClient().then((c) => c.getByDate(date)))
+        .filter((r) => r && r.ProjectType !== -2)
+        .map((r) => ({ id: r.Id, taskId: String(r.TaskId), taskName: String(r.TaskName || ''), percent: Number(r.Percent || 0) }))
     } catch (e) {
       hpError = (e && e.message) || String(e)
     }
@@ -423,6 +439,7 @@ async function plan(payload) {
     ztError,
     hpItems,
     hpUnmatched,
+    hpExisting,
     hpError,
     identitiesMissing,
     commitCount: commits.length,
@@ -430,12 +447,15 @@ async function plan(payload) {
 }
 
 /**
- * 提交工时（双平台）。payload: { tasks: [{ taskId, rows }], dryRun, hp?: { items } }
- * - 禅道：逐任务调用 recordEstimate；dryRun=true 只回显表单不写入
- * - 汉印：传入 hp.items（plan 阶段构造的百分比条目）时调用 workhour/add
+ * 提交工时（双平台，已提交过则更新覆盖）。payload: { date, tasks: [{ taskId, rows }], dryRun, hp?: { items } }
+ * - 禅道：逐任务查询当日已有工时记录，本次行依次复用已有记录 ID（表单键=effortID →
+ *   更新覆盖）；行数超过已有记录时，多出的行按行号键追加（同 KnowMore 行为）
+ * - 汉印：GetByDate 取当日已填记录，TaskId 匹配的条目带原 Id 提交（更新占比）；
+ *   当日已有但本次未涉及的任务不动（不删除）
+ * - dryRun=true 只回显将提交的表单/条目，不写入
  */
 async function submit(payload) {
-  const { tasks, dryRun, hp } = payload || {}
+  const { date, tasks, dryRun, hp } = payload || {}
   if (!Array.isArray(tasks) || !tasks.length) throw new Error('没有可提交的工时数据')
   for (const t of tasks) {
     if (!t.taskId || !Array.isArray(t.rows) || !t.rows.length) throw new Error('任务数据不完整（缺少 taskId 或工时行）')
@@ -443,14 +463,46 @@ async function submit(payload) {
   const client = await zentao.ensureClient()
   const results = []
   for (const t of tasks) {
+    let updated = 0
+    let appended = 0
+    try {
+      // eslint-disable-next-line no-await-in-loop
+      const today = (await client.getTaskEfforts(t.taskId)).filter((e) => !date || e.date === date)
+      t.rows.forEach((row, i) => {
+        if (today[i]) { row.effortId = today[i].id; updated += 1 } else { appended += 1 }
+      })
+    } catch { /* 查询失败按纯追加（同 KnowMore 键格式） */ appended = t.rows.length }
     // eslint-disable-next-line no-await-in-loop
     const r = await client.recordEfforts(t.taskId, t.rows, !!dryRun)
-    results.push({ taskId: t.taskId, taskName: t.taskName || '', consumed: round2(t.rows.reduce((s, x) => s + x.consumed, 0)), ...r })
+    results.push({
+      taskId: t.taskId,
+      taskName: t.taskName || '',
+      consumed: round2(t.rows.reduce((s, x) => s + x.consumed, 0)),
+      updated,
+      appended,
+      ...r,
+    })
   }
   let hpResult = null
   if (hp && Array.isArray(hp.items) && hp.items.length) {
     const hpClient = await hanprint.ensureClient()
+    // 当日已填的记录按 TaskId 匹配：带原 Id 提交即更新占比（同 workhour-h5 语义）
+    let saved = []
+    const workDate = hp.items[0] && hp.items[0].WorkDate
+    if (workDate) {
+      try {
+        // eslint-disable-next-line no-await-in-loop
+        saved = (await hpClient.getByDate(workDate)).filter((r) => r && r.ProjectType !== -2)
+      } catch { /* 查询失败按全新增 */ }
+    }
+    let hpUpdated = 0
+    for (const item of hp.items) {
+      const hit = saved.find((s) => String(s.TaskId) === String(item.TaskId))
+      if (hit) { item.Id = hit.Id; hpUpdated += 1 }
+    }
     hpResult = await hpClient.add(hp.items, !!dryRun)
+    hpResult.updated = hpUpdated
+    hpResult.appended = hp.items.length - hpUpdated
   }
   return { dryRun: !!dryRun, results, hp: hpResult }
 }

@@ -97,7 +97,13 @@ class HanprintClient {
     return out
   }
 
-  /** 提交工时条目数组；dryRun=true 只回显不发 */
+  /** 当日已填记录（协议同 workhour-h5：ProjectType=-2 为删除标记行，需调用方跳过） */
+  async getByDate(workDate) {
+    await this.ensureLogin()
+    return (await this.getData('/com/workhour/GetByDate', { workDate })) || []
+  }
+
+  /** 提交工时条目数组；dryRun=true 只回显不发；条目带非零 Id 时为更新（同 workhour-h5 语义） */
   async add(items, dryRun = false) {
     await this.ensureLogin()
     if (dryRun) return { dryRun: true, url: `${this.base}/com/workhour/add`, json: items }

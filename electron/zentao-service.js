@@ -163,20 +163,54 @@ class ZentaoClient {
   }
 
   /**
-   * 工时填报。rows: [{ date:'YYYY-MM-DD', work, consumed, left }]
+   * 查询任务已有工时记录（recordEstimate 页面数据，魔改版返回结构不定，容错解析）。
+   * 返回 [{ id, date:'YYYY-MM-DD', work, consumed, left }]；解析失败返回 []。
+   */
+  async getTaskEfforts(taskId) {
+    let d
+    try {
+      d = await this.getJson(`/index.php?m=task&f=recordEstimate&taskID=${taskId}&t=json`)
+    } catch {
+      return []
+    }
+    let inner = d && d.data
+    if (typeof inner === 'string') {
+      try { inner = parseJsonPrefix(inner) } catch { return [] }
+    }
+    const candidates = [inner && inner.efforts, inner && inner.records, inner && inner.list, d && d.efforts]
+    let list = null
+    for (const c of candidates) {
+      if (c) { list = Array.isArray(c) ? c : Object.values(c); break }
+    }
+    if (!list) return []
+    return list
+      .filter((x) => x && x.id !== undefined)
+      .map((x) => ({
+        id: Number(x.id),
+        date: String(x.date || '').slice(0, 10),
+        work: String(x.work || x.workDesc || ''),
+        consumed: Number(x.consumed || 0),
+        left: Number(x.left || 0),
+      }))
+  }
+
+  /**
+   * 工时填报。rows: [{ date:'YYYY-MM-DD', work, consumed, left, effortId? }]
+   * 表单键使用 effortId（任务已有记录的 ID → 更新覆盖）；未提供时退回行号（追加，同 KnowMore）。
    * dryRun=true 只构造表单不发请求（预览用）。
    */
   async recordEfforts(taskId, rows, dryRun = false) {
     const form = {}
     const list = rows || []
     for (let i = 0; i < list.length; i += 1) {
-      const n = i + 1
       const row = list[i]
-      form[`dates[${n}]`] = row.date
-      form[`id[${n}]`] = n
-      form[`work[${n}]`] = row.work
-      form[`consumed[${n}]`] = row.consumed
-      form[`left[${n}]`] = row.left
+      // eslint-disable-next-line no-nested-ternary
+      const key = row.effortId !== undefined && row.effortId !== null ? row.effortId : i + 1
+      form[`dates[${key}]`] = row.date
+      form[`id[${key}]`] = key
+      form[`work[${key}]`] = row.work
+      form[`consumed[${key}]`] = row.consumed
+      form[`left[${key}]`] = row.left
     }
     const path = `/index.php?m=task&f=recordEstimate&taskID=${taskId}&onlybody=yes`
     if (dryRun) return { dryRun: true, url: this.base + path, form }

@@ -247,7 +247,7 @@ await test('myTasks 会话失效自动重登一次', async () => {
   assert.strictEqual(logins, 2)
 })
 
-await test('recordEstimates dryRun：表单数组语法构造', async () => {
+await test('recordEstimates dryRun：表单数组语法构造（无 effortId 时键为行号，追加）', async () => {
   const { client } = makeClient((url, opts) => {
     if (url.includes('refreshRandom')) return { body: 'r1' }
     if (opts.method === 'POST' && url.includes('user&f=login')) return { body: '{"result":"success"}' }
@@ -265,6 +265,51 @@ await test('recordEstimates dryRun：表单数组语法构造', async () => {
   assert.strictEqual(r.form['consumed[1]'], 0.5)
   assert.strictEqual(r.form['left[2]'], 3)
   assert.strictEqual(r.form['id[1]'], 1)
+})
+
+await test('recordEstimates 带 effortId 时键用已有记录 ID（更新覆盖）', async () => {
+  const { client } = makeClient((url, opts) => {
+    if (url.includes('refreshRandom')) return { body: 'r1' }
+    if (opts.method === 'POST' && url.includes('user&f=login')) return { body: '{"result":"success"}' }
+    return { body: '' }
+  })
+  await client.login()
+  const r = await client.recordEfforts(66, [
+    { date: '2026-09-07', work: '更新内容', consumed: 3, left: 1, effortId: 502 },
+  ], true)
+  assert.strictEqual(r.form['dates[502]'], '2026-09-07')
+  assert.strictEqual(r.form['id[502]'], 502)
+  assert.strictEqual(r.form['consumed[502]'], 3)
+  assert.ok(!r.form['dates[1]'])
+})
+
+await test('getTaskEfforts：容错解析（data 字符串 + efforts dict + 尾部脏数据）', async () => {
+  const inner = JSON.stringify({ efforts: { '501': { id: '501', date: '2026-09-07 00:00:00', work: '旧内容', consumed: '2', left: '1' } } })
+  const { client } = makeClient((url, opts) => {
+    if (url.includes('refreshRandom')) return { body: 'r1' }
+    if (opts.method === 'POST' && url.includes('user&f=login')) return { body: '{"result":"success"}' }
+    if (url.includes('recordEstimate') && opts.method !== 'POST') {
+      return { body: `{"status":"200","data":${JSON.stringify(inner)}}<!--dirty-->` }
+    }
+    return { body: '' }
+  })
+  await client.login()
+  const list = await client.getTaskEfforts(66)
+  assert.strictEqual(list.length, 1)
+  assert.strictEqual(list[0].id, 501)
+  assert.strictEqual(list[0].date, '2026-09-07')
+  assert.strictEqual(list[0].consumed, 2)
+})
+
+await test('getTaskEfforts：结构不可识别时返回空数组', async () => {
+  const { client } = makeClient((url, opts) => {
+    if (url.includes('refreshRandom')) return { body: 'r1' }
+    if (opts.method === 'POST') return { body: '{"result":"success"}' }
+    if (url.includes('recordEstimate') && opts.method !== 'POST') return { body: '登录已超时' }
+    return { body: '' }
+  })
+  await client.login()
+  assert.deepStrictEqual(await client.getTaskEfforts(66), [])
 })
 
 await test('POST 重定向（302）按浏览器语义降级为 GET 且不再提交表单', async () => {
@@ -483,6 +528,24 @@ await test('add dryRun 只回显不发', async () => {
   assert.strictEqual(r.dryRun, true)
   assert.ok(r.url.includes('/com/workhour/add'))
   assert.strictEqual(ff.calls.length, 0)
+})
+
+await test('getByDate：携带 token 查询当日已填', async () => {
+  const { client } = makeHpClient((url, opts) => {
+    if (url.includes('/com/workhour/GetByDate')) {
+      assert.strictEqual(opts.headers.token, 'tok-q')
+      assert.ok(url.includes('workDate=2026-09-07'))
+      return jsonResp({ code: 0, data: [
+        { Id: 11, TaskId: '66', Percent: 60, ProjectType: 3 },
+        { Id: 12, TaskId: '99', Percent: 0, ProjectType: -2 }, // 删除标记行（调用方负责跳过）
+      ] })
+    }
+    return jsonResp({ code: 0, data: null })
+  })
+  client.token = 'tok-q'
+  const rows = await client.getByDate('2026-09-07')
+  assert.strictEqual(rows.length, 2) // 原样返回，跳过 ProjectType=-2 由调用方处理
+  assert.strictEqual(rows[0].Id, 11)
 })
 
 // ═══════════ store 禅道配置（密码加密往返） ═══════════
