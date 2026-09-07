@@ -15,6 +15,8 @@ const localDebugService = require('./local-debug-service')
 const deployService = require('./deploy/deploy-service')
 const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
+const fillService = require('./fill-service')
+const zentaoService = require('./zentao-service')
 
 // 统一数据目录为 ASCII 固定值，与产品显示名（productName，可中文）解耦：
 // dev / 打包 GUI / 无头 CLI 三模式共用同一份配置，改名或换产品名不丢数据
@@ -399,6 +401,47 @@ function registerIpc() {
       return { ok: false, error: (err && err.message) || String(err) }
     }
   })
+
+  // ─── 一键填报模块（Git 提交 → 工时计划 → 禅道任务工时） ───
+  ipcMain.handle('fill:plan', async (_e, payload) => {
+    try {
+      return { ok: true, ...(await fillService.plan(payload)) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('fill:submit', async (_e, payload) => {
+    try {
+      return { ok: true, ...(await fillService.submit(payload)) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('fill:ztTasks', async () => {
+    try {
+      const tasks = await zentaoService.ensureClient().then((c) => c.myTasks())
+      return { ok: true, tasks }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('fill:testLogin', async (_e, opts) => {
+    try {
+      await zentaoService.ensureClient(zentaoService.normalizeOverrides(opts))
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('fill:bindings', () => fillService.listBindings())
+  ipcMain.handle('fill:bind', (_e, { projectId, taskId, taskName }) => {
+    try {
+      return { ok: true, binding: fillService.bindProject(projectId, taskId, taskName) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('fill:unbind', (_e, projectId) => ({ ok: fillService.unbindProject(projectId) }))
 }
 
 app.whenReady().then(() => {

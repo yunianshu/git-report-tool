@@ -7,7 +7,7 @@
 侧栏导航分三组、七个入口：
 
 - **工作区**：工作台、项目
-- **项目能力**：AI 助手、活动报告、部署
+- **项目能力**：AI 助手、活动报告、一键填报、部署
 - **系统**：扩展管理、设置
 
 应用顶部提供统一的当前项目选择器，切换项目后 AI、报告和部署自动使用同一项目上下文。
@@ -48,6 +48,16 @@
 - 统计卡片 + ECharts 图表（项目提交分布、每日提交趋势）、提交明细按项目折叠
 - 报告历史、复制与 Markdown 导出
 - 提交统计基于 `git log --all`，默认排除 merge 提交；「本人」身份默认为本机全局 git 身份，可在设置中调整
+
+## 一键填报（禅道工时）
+
+基于 Git 提交时间自动计算工时，并一键写入禅道任务的工时记录：
+
+- 选择日期与项目后点「生成报告」：自动收集所选项目当天**本人**的提交（带提交时刻），按锚点累进法计算每条工时（首条距上班时间、扣午休、0.5 小时向下取整、不足半小时的尾数并入下一条说明），生成提交明细与按任务汇总
+- **项目绑定禅道任务**：未绑定项目在明细中点「绑定」从禅道「我的任务」列表选择（支持按名称自动建议），绑定一次长期保存在本地（`userData/fill-bindings.json`），之后填报自动关联，无需重复绑定
+- 提交前可「预览提交」查看将写入禅道的完整表单；「一键提交」调用禅道 `recordEstimate` 接口写入工时，任务剩余工时自动扣减（最低为 0）
+- 禅道地址 / 账号 / 密码在「设置 → 一键填报」配置，密码经系统安全存储加密落盘；上班时间与午休区间可按需调整
+- 支持复制填报报告（明细 + 按任务汇总）到剪贴板留档
 
 ## 部署（OneDeploy）
 
@@ -135,6 +145,8 @@ npm run build:linux     # Linux（AppImage + deb）
 │   ├── git-service.js     #   Git 扫描/收集/仓库信息（纯 Node）
 │   ├── ai-service.js      #   AI 对话（流式）
 │   ├── report-history.js  #   报告历史
+│   ├── zentao-service.js  #   禅道客户端（登录/我的任务/工时写入）
+│   ├── fill-service.js    #   一键填报（提交收集/工时计算/项目绑定）
 │   ├── store.js           #   userData 配置持久化 + safeStorage 加密
 │   └── deploy/            #   OneDeploy 一键部署模块
 │       ├── deploy-service.js    #   发布编排（8 阶段 + 日志流 + 取消）
@@ -145,7 +157,7 @@ npm run build:linux     # Linux（AppImage + deb）
 │       ├── history.js           #   发布历史
 │       └── scripts/deploy.sh    #   服务器端部署脚本
 ├── src/                   # 渲染进程（Vue 3）
-│   ├── views/             #   工作台 / 项目 / AI 助手 / 活动报告 / 部署 / 扩展管理 / 设置
+│   ├── views/             #   工作台 / 项目 / AI 助手 / 活动报告 / 一键填报 / 部署 / 扩展管理 / 设置
 │   ├── components/        #   导航、页头、项目编辑、对话面板、图表等
 │   ├── composables/       #   项目加载与当前项目选择
 │   └── utils/             #   项目上下文 / AI 上下文 / 报告生成 / 日期
@@ -155,8 +167,9 @@ npm run build:linux     # Linux（AppImage + deb）
 ## 数据存储
 
 - 项目数据与配置保存在 `userData/config.json`、`userData/deploy-projects.json`（兼容旧部署项目数据）
+- 一键填报的项目-禅道任务绑定保存在 `userData/fill-bindings.json`
 - 发布历史保存在 `userData/deploy-history.json`（完整日志在 `userData/deploy-logs/`）
-- API Key 与 SSH 凭据经 safeStorage 加密落盘
+- API Key、SSH 凭据与禅道密码经 safeStorage 加密落盘
 
 ## 说明
 

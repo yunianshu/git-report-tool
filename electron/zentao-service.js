@@ -1,0 +1,235 @@
+/**
+ * 禅道客户端 —— 魔改版禅道（t=json 传统路由 + session cookie）
+ * 协议与 wenxu/KnowMore worktime-sync/server.py 的 ZenTao 类保持一致：
+ * - 登录：GET refreshRandom 取随机数 → md5(md5(pwd)+rand) 加密 → POST 登录（keepLogin）
+ * - 我的任务：GET /index.php?m=my&f=work&mode=task&t=json
+ * - 工时填报：POST /index.php?m=task&f=recordEstimate&taskID=<id>&onlybody=yes（表单数组 dates[i]/work[i]/consumed[i]/left[i]）
+ * 凭据：地址/账号在 config.json 的 zentao 节，密码经 safeStorage 加密落盘，明文只存在于主进程内存。
+ * fetch 可注入（fetchImpl）以便自测；cookie 手工管理（全局 fetch 无 cookie jar）。
+ */
+const crypto = require('crypto')
+const store = require('./store')
+
+function md5(text) {
+  return crypto.createHash('md5').update(String(text), 'utf8').digest('hex')
+}
+
+/** 解析响应文本中的首个合法 JSON（等价 Python raw_decode：禅道响应尾部可能带脏数据） */
+function parseJsonPrefix(text) {
+  const s = String(text || '').trim()
+  try {
+    return JSON.parse(s)
+  } catch { /* 尾部脏数据，继续截断尝试 */ }
+  for (let end = s.length; end > 1; end--) {
+    if (s[end - 1] !== '}') continue // eslint-disable-line no-continue
+    try {
+      return JSON.parse(s.slice(0, end))
+    } catch { /* 缩短前缀重试 */ }
+  }
+  throw new Error(`禅道响应解析失败: ${s.slice(0, 120)}`)
+}
+
+class ZentaoClient {
+  constructor({ baseUrl, account, password, fetchImpl }) {
+    this.base = String(baseUrl || '').replace(/\/+$/, '')
+    this.account = account
+    this.password = password
+    this.fetchImpl = fetchImpl || ((url, opts) => fetch(url, opts))
+    this.cookies = new Map()
+    this.loginPromise = null
+  }
+
+  cookieHeader() {
+    return [...this.cookies.entries()].map(([k, v]) => `${k}=${v}`).join('; ')
+  }
+
+  /** 吸收响应 Set-Cookie 到手工 cookie jar（同名覆盖，模拟 requests.Session） */
+  absorbCookies(resp) {
+    const headers = resp && resp.headers
+    if (!headers || typeof headers.getSetCookie !== 'function') return
+    for (const raw of headers.getSetCookie() || []) {
+      const pair = String(raw).split(';')[0]
+      const idx = pair.indexOf('=')
+      if (idx > 0) this.cookies.set(pair.slice(0, idx).trim(), pair.slice(idx + 1).trim())
+    }
+  }
+
+  /**
+   * 单次请求 + 手工重定向跟随（每跳都携带最新 cookie）。
+   * 301/302/303 的 POST 重定向按浏览器语义降级为 GET（登录表单只提交一次）。
+   * 返回响应对象，并挂 finalUrl 供会话失效判断（等价 requests 的 r.url）。
+   */
+  async request(path, { method = 'GET', form, headers = {}, maxRedirects = 6 } = {}) {
+    let url = this.base + path
+    let curMethod = method
+    let curForm = form
+    for (let hop = 0; hop <= maxRedirects; hop += 1) {
+      const h = { ...headers, 'User-Agent': 'Mozilla/5.0 project-tool' }
+      const cookie = this.cookieHeader()
+      if (cookie) h.Cookie = cookie
+      const opts = { method: curMethod, headers: h, redirect: 'manual', signal: AbortSignal.timeout(15000) }
+      if (curForm) {
+        opts.body = new URLSearchParams(curForm).toString()
+        opts.headers['Content-Type'] = 'application/x-www-form-urlencoded'
+      }
+      const resp = await this.fetchImpl(url, opts) // eslint-disable-line no-await-in-loop
+      this.absorbCookies(resp)
+      resp.finalUrl = url
+      if (resp.status >= 300 && resp.status < 400) {
+        const location = resp.headers.get('location')
+        if (!location) return resp
+        url = new URL(location, url).toString()
+        if (resp.status === 301 || resp.status === 302 || resp.status === 303) {
+          curMethod = 'GET'
+          curForm = undefined
+        }
+        continue // eslint-disable-line no-continue
+      }
+      return resp
+    }
+    throw new Error('禅道响应重定向次数过多')
+  }
+
+  /** 登录（并发调用共享同一次登录）；成功后 session cookie 保活 */
+  async login() {
+    if (this.loginPromise) return this.loginPromise
+    this.loginPromise = (async () => {
+      // 取初始 cookie（zentaosid），与 KnowMore 登录序列一致
+      await this.request('/index.php')
+      await this.request('/index.php?m=user&f=login')
+      const loginReferer = `${this.base}/index.php?m=user&f=login`
+      const randResp = await this.request('/index.php?m=user&f=refreshRandom', {
+        headers: { 'X-Requested-With': 'XMLHttpRequest', Referer: loginReferer },
+      })
+      const rand = (await randResp.text()).trim().replace(/^"+|"+$/g, '')
+      if (!rand) throw new Error('禅道未返回登录随机数（refreshRandom 为空）')
+      const encoded = md5(md5(this.password) + rand)
+      const resp = await this.request('/index.php?m=user&f=login', {
+        method: 'POST',
+        form: {
+          account: this.account,
+          password: encoded,
+          passwordStrength: 1,
+          referer: '/',
+          verifyRand: rand,
+          keepLogin: 1,
+          captcha: '',
+        },
+        headers: { 'X-Requested-With': 'XMLHttpRequest', Referer: loginReferer },
+      })
+      const text = await resp.text()
+      if (!/result['"]?\s*:\s*['"]success/.test(text)) {
+        throw new Error(`禅道登录失败: ${text.slice(0, 120)}`)
+      }
+      return true
+    })()
+    try {
+      return await this.loginPromise
+    } finally {
+      this.loginPromise = null
+    }
+  }
+
+  /** GET t=json 接口；会话失效（登录已超时 / 被重定向到登录页）自动重登一次重试 */
+  async getJson(path, retried = false) {
+    const resp = await this.request(path, { headers: { 'X-Requested-With': 'XMLHttpRequest' } })
+    const text = await resp.text()
+    if (text.includes('登录已超时') || /user-login/.test(resp.finalUrl || '')) {
+      if (!retried) {
+        await this.login()
+        return this.getJson(path, true)
+      }
+      throw new Error('禅道会话失效且重登失败')
+    }
+    return parseJsonPrefix(text)
+  }
+
+  /** 我的地盘-任务（含 doing）；兼容 data 为 JSON 字符串、tasks 为 dict 的魔改返回 */
+  async myTasks() {
+    const d = await this.getJson('/index.php?m=my&f=work&mode=task&t=json')
+    let inner = d && d.data
+    if (typeof inner === 'string') inner = parseJsonPrefix(inner)
+    let tasks = (inner && inner.tasks) || []
+    if (!Array.isArray(tasks)) tasks = Object.values(tasks)
+    return tasks
+      .filter((t) => t && t.id !== undefined)
+      .map((t) => ({
+        id: Number(t.id),
+        name: String(t.name || ''),
+        status: t.status || '',
+        consumed: Number(t.consumed || 0),
+        left: Number(t.left || 0),
+      }))
+  }
+
+  /**
+   * 工时填报。rows: [{ date:'YYYY-MM-DD', work, consumed, left }]
+   * dryRun=true 只构造表单不发请求（预览用）。
+   */
+  async recordEfforts(taskId, rows, dryRun = false) {
+    const form = {}
+    const list = rows || []
+    for (let i = 0; i < list.length; i += 1) {
+      const n = i + 1
+      const row = list[i]
+      form[`dates[${n}]`] = row.date
+      form[`id[${n}]`] = n
+      form[`work[${n}]`] = row.work
+      form[`consumed[${n}]`] = row.consumed
+      form[`left[${n}]`] = row.left
+    }
+    const path = `/index.php?m=task&f=recordEstimate&taskID=${taskId}&onlybody=yes`
+    if (dryRun) return { dryRun: true, url: this.base + path, form }
+    const resp = await this.request(path, {
+      method: 'POST',
+      form,
+      headers: {
+        'X-Requested-With': 'XMLHttpRequest',
+        Referer: `${this.base}/index.php?m=task&f=view&taskID=${taskId}`,
+      },
+    })
+    const body = await resp.text()
+    if (body.includes('登录已超时') || /user-login/.test(resp.finalUrl || '')) {
+      throw new Error('禅道会话已失效，请重新提交')
+    }
+    return { status: resp.status, body: body.slice(0, 200) }
+  }
+}
+
+// ─── 模块级共享客户端：凭据变化时重建（等价 KnowMore 的 zt_client） ───
+let shared = null
+let sharedKey = ''
+
+/**
+ * 取已登录的共享客户端。overrides 用于「测试连接」（临时输入的地址/账号/密码，
+ * 密码为空则使用已保存密文解密值）。
+ */
+async function ensureClient(overrides = {}) {
+  const cfg = store.load()
+  const baseUrl = overrides.baseUrl || (cfg.zentao && cfg.zentao.baseUrl) || ''
+  const account = overrides.account || (cfg.zentao && cfg.zentao.account) || ''
+  const password = overrides.password !== undefined && overrides.password !== ''
+    ? overrides.password
+    : store.getZentaoPwd()
+  if (!baseUrl || !account || !password) {
+    throw new Error('禅道未配置：请到「设置 → 一键填报」填写禅道地址、账号与密码')
+  }
+  const key = JSON.stringify([baseUrl, account, password])
+  if (!shared || sharedKey !== key) {
+    shared = new ZentaoClient({ baseUrl, account, password })
+    sharedKey = key
+    await shared.login()
+  }
+  return shared
+}
+
+/** 渲染层传参规范化：空字符串密码表示「使用已保存密码」 */
+function normalizeOverrides(o = {}) {
+  return {
+    baseUrl: String(o.baseUrl || '').trim(),
+    account: String(o.account || '').trim(),
+    password: o.password === undefined ? '' : String(o.password),
+  }
+}
+
+module.exports = { ZentaoClient, parseJsonPrefix, ensureClient, normalizeOverrides, md5 }

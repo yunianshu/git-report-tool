@@ -33,6 +33,13 @@ export const state = reactive({
       model: '',
       temperature: 0.7,
     },
+    zentao: {
+      baseUrl: '',
+      account: '',
+      workStart: '08:30',
+      lunchStart: '12:00',
+      lunchEnd: '13:30',
+    },
   },
   /** 报告生成过程（跨视图保留，切换 tab 不中断） */
   report: {
@@ -61,5 +68,12 @@ export const state = reactive({
     uploadPercent: 0,
     datasyncPercent: 0, // 数据同步阶段上传进度
     currentVersion: '', // 服务器当前运行版本（查询 releases / 发布事件更新）
+  },
+  /** 一键填报（禅道工时）状态（跨视图保留，切换 tab 不丢计划） */
+  fillReport: {
+    plan: null, // 最近一次 fill:plan 结果（planned/tasks/bindings 等）
+    date: '', // 填报日期 YYYY-MM-DD
+    running: false, // 生成/提交进行中
+    submitting: false,
   },
 })

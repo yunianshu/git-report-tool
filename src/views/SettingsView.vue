@@ -212,6 +212,81 @@
       </div>
     </el-card>
 
+    <!-- 一键填报（禅道工时） -->
+    <el-card v-show="activeSection === 'fill'" shadow="never" class="card">
+      <template #header>
+        <div class="card-header"><span>一键填报 · 禅道账号</span></div>
+      </template>
+      <div class="ai-manager">
+        <div class="ai-form">
+          <div class="ai-row">
+            <span class="ai-label">禅道地址</span>
+            <el-input v-model="state.config.zentao.baseUrl" placeholder="如 http://10.11.34.2" style="width: 320px" />
+            <span class="ai-hint">内网禅道地址，登录与工时写入均在本机完成</span>
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">账号</span>
+            <el-input v-model="state.config.zentao.account" placeholder="禅道登录账号" style="width: 320px" autocomplete="off" />
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">密码</span>
+            <el-input
+              v-model="ztPwdInput"
+              type="password"
+              show-password
+              :placeholder="state.config.zentao.pwdConfigured ? `${state.config.zentao.pwdMasked}（留空保持不变，输入新密码替换）` : '禅道登录密码（未配置）'"
+              style="width: 320px"
+            />
+            <el-button v-if="state.config.zentao.pwdConfigured" size="small" text type="danger" @click="clearZtPwd">
+              <el-icon><Delete /></el-icon>清除密码
+            </el-button>
+          </div>
+        </div>
+        <div class="ai-actions">
+          <el-button type="primary" plain @click="saveConfig">
+            <el-icon style="margin-right: 4px"><Check /></el-icon>保存配置
+          </el-button>
+          <el-button :loading="ztTesting" :disabled="!state.config.zentao.baseUrl || !state.config.zentao.account || (!state.config.zentao.pwdConfigured && !ztPwdInput)" @click="testZentao">
+            <el-icon style="margin-right: 4px"><Connection /></el-icon>测试连接
+          </el-button>
+          <span v-if="ztTestResult" :class="['ai-result', ztTestResult.ok ? 'ok' : 'err']">
+            {{ ztTestResult.ok ? '登录成功' : `登录失败：${ztTestResult.error}` }}
+          </span>
+        </div>
+      </div>
+    </el-card>
+
+    <!-- 一键填报 · 工时参数 -->
+    <el-card v-show="activeSection === 'fill'" shadow="never" class="card">
+      <template #header>
+        <div class="card-header"><span>一键填报 · 工时计算参数</span></div>
+      </template>
+      <div class="ai-manager">
+        <div class="ai-form">
+          <div class="ai-row">
+            <span class="ai-label">上班时间</span>
+            <el-time-select v-model="state.config.zentao.workStart" start="07:00" end="10:00" step="00:30" style="width: 130px" />
+            <span class="ai-hint">首条提交距上班时间的间隔计入其工时</span>
+          </div>
+          <div class="ai-row">
+            <span class="ai-label">午休时间</span>
+            <el-time-select v-model="state.config.zentao.lunchStart" start="11:00" end="14:00" step="00:30" style="width: 130px" />
+            <span class="ai-hint">至</span>
+            <el-time-select v-model="state.config.zentao.lunchEnd" start="11:30" end="14:30" step="00:30" style="width: 130px" />
+            <span class="ai-hint">与午休重叠的分钟数自动从工时中扣除</span>
+          </div>
+        </div>
+        <div class="ai-actions">
+          <el-button type="primary" plain @click="saveConfig">
+            <el-icon style="margin-right: 4px"><Check /></el-icon>保存配置
+          </el-button>
+        </div>
+        <div class="ai-hint ai-note">
+          每条提交的工时 = 距上一条提交（首条距上班时间）的工作分钟数，扣除午休后按 0.5 小时向下取整；不足半小时的尾数并入下一条提交。
+        </div>
+      </div>
+    </el-card>
+
     <section v-show="activeSection === 'about'" class="workspace-panel settings-about">
       <span class="section-kicker">LOCAL FIRST</span>
       <h2>个人项目管理</h2>
@@ -238,7 +313,7 @@ const props = defineProps({
   initialSection: {
     type: String,
     default: 'ai',
-    validator: (value) => ['ai', 'git', 'identity', 'about'].includes(value),
+    validator: (value) => ['ai', 'git', 'identity', 'fill', 'about'].includes(value),
   },
 })
 const { loadProjects } = useProjects()
@@ -250,6 +325,7 @@ const SETTING_SECTIONS = [
   { label: 'AI 服务', value: 'ai' },
   { label: 'Git 活动', value: 'git' },
   { label: '个人身份', value: 'identity' },
+  { label: '一键填报', value: 'fill' },
   { label: '应用信息', value: 'about' },
 ]
 const activeSection = ref(props.initialSection)
@@ -330,7 +406,7 @@ async function fetchModels(showSuccess = true) {
 
 const canFetchModels = computed(() => !!(state.config.ai.baseUrl && (state.config.ai.keyConfigured || apiKeyInput.value)))
 
-/** 保存全部配置；AI 密钥：输入了新 Key 则替换，留空则主进程保留既有 */
+/** 保存全部配置；AI 密钥：输入了新 Key 则替换，留空则主进程保留既有；禅道密码同规则 */
 function saveConfig() {
   if (apiKeyInput.value) {
     state.config.ai.apiKey = apiKeyInput.value
@@ -339,6 +415,15 @@ function saveConfig() {
     apiKeyInput.value = ''
   } else {
     delete state.config.ai.apiKey
+  }
+  if (!state.config.zentao) state.config.zentao = {}
+  if (ztPwdInput.value) {
+    state.config.zentao.password = ztPwdInput.value
+    state.config.zentao.pwdConfigured = true
+    state.config.zentao.pwdMasked = maskKey(ztPwdInput.value)
+    ztPwdInput.value = ''
+  } else {
+    delete state.config.zentao.password
   }
   try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
 }
@@ -359,6 +444,47 @@ async function clearKey() {
 }
 
 const canTest = computed(() => !!(state.config.ai.model && (state.config.ai.keyConfigured || apiKeyInput.value)))
+
+// ---------- 一键填报（禅道）配置 ----------
+/** 禅道密码输入框（明文密码只存主进程，与 AI Key 同约定） */
+const ztPwdInput = ref('')
+const ztTesting = ref(false)
+const ztTestResult = ref(null)
+
+async function testZentao() {
+  ztTesting.value = true
+  ztTestResult.value = null
+  try {
+    const r = await window.gitReport.fillTestLogin(toPlain({
+      baseUrl: state.config.zentao.baseUrl,
+      account: state.config.zentao.account,
+      password: ztPwdInput.value || '', // 空则主进程使用已保存密码
+    }))
+    ztTestResult.value = r
+    if (r?.ok) ElMessage.success('禅道登录成功')
+    else ElMessage.error(`禅道登录失败：${r?.error || '未知错误'}`)
+  } catch (e) {
+    ztTestResult.value = { ok: false, error: (e && e.message) || String(e) }
+    ElMessage.error(`禅道登录失败：${ztTestResult.value.error}`)
+  } finally {
+    ztTesting.value = false
+  }
+}
+
+async function clearZtPwd() {
+  try {
+    await ElMessageBox.confirm('确定清除已保存的禅道密码吗？', '清除密码', { type: 'warning' })
+  } catch {
+    return
+  }
+  state.config.zentao.clearPwd = true
+  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
+  delete state.config.zentao.clearPwd
+  state.config.zentao.pwdConfigured = false
+  state.config.zentao.pwdMasked = ''
+  ztPwdInput.value = ''
+  ztTestResult.value = null
+}
 
 async function testAi() {
   testing.value = true

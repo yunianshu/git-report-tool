@@ -16,6 +16,7 @@
       <el-menu-item-group title="项目能力">
         <el-menu-item index="chat"><el-icon><ChatDotRound /></el-icon><span>AI 助手</span></el-menu-item>
         <el-menu-item index="report"><el-icon><DataAnalysis /></el-icon><span>活动报告</span></el-menu-item>
+        <el-menu-item index="fillreport"><el-icon><Timer /></el-icon><span>一键填报</span></el-menu-item>
         <el-menu-item index="deploy"><el-icon><Promotion /></el-icon><span>部署</span></el-menu-item>
       </el-menu-item-group>
       <el-menu-item-group title="系统">

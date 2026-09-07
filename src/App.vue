@@ -13,6 +13,7 @@
           <ProjectsView v-else-if="view === 'projects'" key="projects" @navigate="navigate" @create-project="openProjectEditor()" @edit-project="openProjectEditor" />
           <ChatView v-else-if="view === 'chat'" key="chat" @navigate="navigate" />
           <ReportView v-else-if="view === 'report'" key="report" @navigate="navigate" />
+          <FillReportView v-else-if="view === 'fillreport'" key="fillreport" @navigate="navigate" />
           <DeployView v-else-if="view === 'deploy'" key="deploy" @navigate="navigate" />
           <ExtensionsView v-else-if="view === 'extensions'" key="extensions" />
           <SettingsView v-else key="settings" :initial-section="settingsSection" />
@@ -34,6 +35,7 @@ import DashboardView from './views/DashboardView.vue'
 import ProjectsView from './views/ProjectsView.vue'
 import ChatView from './views/ChatView.vue'
 import ReportView from './views/ReportView.vue'
+import FillReportView from './views/FillReportView.vue'
 import DeployView from './views/DeployView.vue'
 import ExtensionsView from './views/ExtensionsView.vue'
 import SettingsView from './views/SettingsView.vue'
@@ -52,6 +54,11 @@ const { loadProjects, selectProject, saveProject } = useProjects()
 function navigate(target) {
   if (target === 'activity-sources') {
     settingsSection.value = 'git'
+    view.value = 'settings'
+    return
+  }
+  if (target === 'fill-settings') {
+    settingsSection.value = 'fill'
     view.value = 'settings'
     return
   }

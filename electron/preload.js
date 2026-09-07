@@ -112,4 +112,13 @@ contextBridge.exposeInMainWorld('gitReport', {
   onDeployStage: (cb) => subscribe('deploy:stage', cb),
   onDeployProgress: (cb) => subscribe('deploy:progress', cb),
   onDeployDone: (cb) => subscribe('deploy:done', cb),
+  // ─── 一键填报模块（Git 提交 → 工时计划 → 禅道任务工时） ───
+  fillPlan: (payload) => ipcRenderer.invoke('fill:plan', toPlain(payload)),
+  fillSubmit: (payload) => ipcRenderer.invoke('fill:submit', toPlain(payload)),
+  fillZtTasks: () => ipcRenderer.invoke('fill:ztTasks'),
+  fillTestLogin: (opts) => ipcRenderer.invoke('fill:testLogin', toPlain(opts)),
+  fillBindings: () => ipcRenderer.invoke('fill:bindings'),
+  fillBind: (projectId, taskId, taskName) =>
+    ipcRenderer.invoke('fill:bind', { projectId, taskId, taskName }),
+  fillUnbind: (projectId) => ipcRenderer.invoke('fill:unbind', projectId),
 })

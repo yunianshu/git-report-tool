@@ -26,6 +26,14 @@ const DEFAULTS = {
     model: '',
     temperature: 0.7,
   },
+  // 一键填报（禅道工时）：密码经 safeStorage 加密后以 pwdEnc 落盘，明文不出主进程
+  zentao: {
+    baseUrl: '',          // 如 http://10.11.34.2
+    account: '',
+    workStart: '08:30',   // 工时锚点：首条提交距上班时间的间隔
+    lunchStart: '12:00',  // 午休区间（自动从工作分钟数中扣除）
+    lunchEnd: '13:30',
+  },
 }
 
 /** 从 AI 配置对象解密出明文 Key（keyEnc 优先，兼容旧版明文 apiKey） */
@@ -60,9 +68,18 @@ function load() {
     cfg.ai.keyMasked = key ? maskKey(key) : ''
     cfg.ai.apiKey = ''
     delete cfg.ai.keyEnc
+    cfg.zentao = { ...DEFAULTS.zentao, ...(cfg.zentao || {}) }
+    const pwd = decryptText(cfg.zentao.pwdEnc)
+    cfg.zentao.pwdConfigured = !!pwd
+    cfg.zentao.pwdMasked = pwd ? maskKey(pwd) : ''
+    delete cfg.zentao.pwdEnc
     return cfg
   } catch {
-    return { ...DEFAULTS, ai: { ...DEFAULTS.ai, apiKey: '', keyConfigured: false, keyMasked: '' } }
+    return {
+      ...DEFAULTS,
+      ai: { ...DEFAULTS.ai, apiKey: '', keyConfigured: false, keyMasked: '' },
+      zentao: { ...DEFAULTS.zentao, pwdConfigured: false, pwdMasked: '' },
+    }
   }
 }
 
@@ -104,6 +121,24 @@ function save(cfg) {
       }
       // clear → 不带 keyEnc / apiKey，即清除
     }
+    // 禅道密码与 AI Key 同规则：新值加密替换 / 留空保留磁盘旧密文 / clearPwd 显式清除
+    if (c.zentao) {
+      const newPwd = c.zentao.password || ''
+      const clearPwd = !!c.zentao.clearPwd
+      delete c.zentao.clearPwd
+      delete c.zentao.pwdConfigured
+      delete c.zentao.pwdMasked
+      delete c.zentao.password
+      if (!clearPwd && !newPwd) {
+        try {
+          const old = JSON.parse(fs.readFileSync(file(), 'utf8'))
+          if (old.zentao && old.zentao.pwdEnc) c.zentao.pwdEnc = old.zentao.pwdEnc
+        } catch { /* 无既有配置 */ }
+      } else if (newPwd) {
+        c.zentao.pwdEnc = encryptText(newPwd)
+      }
+      // clearPwd → 不带 pwdEnc，即清除
+    }
     fs.writeFileSync(file(), JSON.stringify(c, null, 2), { encoding: 'utf8', mode: 0o600 })
     return true
   } catch {
@@ -115,6 +150,16 @@ function save(cfg) {
 function getApiKey() {
   try {
     return decryptKey(JSON.parse(fs.readFileSync(file(), 'utf8')).ai || {})
+  } catch {
+    return ''
+  }
+}
+
+/** 主进程专用：返回禅道登录密码明文（绝不发往渲染层） */
+function getZentaoPwd() {
+  try {
+    const zt = JSON.parse(fs.readFileSync(file(), 'utf8')).zentao
+    return zt ? decryptText(zt.pwdEnc) : ''
   } catch {
     return ''
   }
@@ -143,4 +188,4 @@ function decryptText(secret) {
   return secret.plain || ''
 }
 
-module.exports = { load, save, getApiKey, encryptText, decryptText }
+module.exports = { load, save, getApiKey, getZentaoPwd, encryptText, decryptText }
