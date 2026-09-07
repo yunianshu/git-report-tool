@@ -92,6 +92,12 @@ await test('跨午休提交自动扣午休', () => {
   assert.strictEqual(out[0].hours, 4)
 })
 
+await test('未传午休参数时默认按 1 小时（12:00–13:00）扣除', () => {
+  const out = fill.planHours([{ time: '14:00', msg: 'a', projectId: 'p1', projectName: 'P1' }], { workStart: '08:30' })
+  // 08:30→14:00 = 330min，扣 60min 午休 = 270 → floor(270/30)*30 = 270 → 4.5h
+  assert.strictEqual(out[0].hours, 4.5)
+})
+
 await test('零段并入下一条：msg 合并且记录 mergedFrom', () => {
   const commits = [
     { time: '09:40', msg: 'a', projectId: 'p1', projectName: 'P1' }, // 70min → 1h

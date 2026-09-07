@@ -38,7 +38,7 @@ export const state = reactive({
       account: '',
       workStart: '08:30',
       lunchStart: '12:00',
-      lunchEnd: '13:30',
+      lunchEnd: '13:00',
     },
     hanprint: {
       baseUrl: '',

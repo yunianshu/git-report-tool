@@ -42,7 +42,7 @@ function workMinutes(start, end, lunchS, lunchE) {
  */
 function planHours(commits, { workStart, lunchStart, lunchEnd, step = 30 } = {}) {
   const lunchS = hm(lunchStart || '12:00')
-  const lunchE = hm(lunchEnd || '13:30')
+  const lunchE = hm(lunchEnd || '13:00')
   let anchor = hm(workStart || '08:30')
   const sorted = [...(commits || [])].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
   const out = []
@@ -331,7 +331,7 @@ async function plan(payload) {
   const workCfg = {
     workStart: (cfg.zentao && cfg.zentao.workStart) || '08:30',
     lunchStart: (cfg.zentao && cfg.zentao.lunchStart) || '12:00',
-    lunchEnd: (cfg.zentao && cfg.zentao.lunchEnd) || '13:30',
+    lunchEnd: (cfg.zentao && cfg.zentao.lunchEnd) || '13:00',
   }
   const planned = planHours(commits, workCfg).map((p) => ({
     time: p.time,

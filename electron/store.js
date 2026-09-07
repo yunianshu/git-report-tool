@@ -31,8 +31,8 @@ const DEFAULTS = {
     baseUrl: '',          // 如 http://10.11.34.2
     account: '',
     workStart: '08:30',   // 工时锚点：首条提交距上班时间的间隔
-    lunchStart: '12:00',  // 午休区间（自动从工作分钟数中扣除）
-    lunchEnd: '13:30',
+    lunchStart: '12:00',  // 午休区间（默认 1 小时，自动从工作分钟数中扣除）
+    lunchEnd: '13:00',
   },
   // 一键填报（汉印工时平台）：密码经 safeStorage 加密后以 pwdEnc 落盘，明文不出主进程
   hanprint: {
