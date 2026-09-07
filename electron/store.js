@@ -30,7 +30,7 @@ const DEFAULTS = {
   zentao: {
     baseUrl: '',          // 如 http://10.11.34.2
     account: '',
-    workStart: '08:30',   // 工时锚点：首条提交距上班时间的间隔
+    workEnd: '17:30',     // 下班时间：工时区间的终点（迟到不计时，首条提交才开始计时）
     lunchStart: '12:00',  // 午休区间（默认 1 小时，自动从工作分钟数中扣除）
     lunchEnd: '13:00',
   },

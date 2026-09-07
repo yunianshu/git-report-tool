@@ -109,7 +109,7 @@
       <el-card shadow="never" class="card">
         <template #header>
           <div class="card-header">
-            <span>提交明细 · {{ plan.date }}（{{ plan.workConfig.workStart }} 上班，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}）</span>
+            <span>提交明细 · {{ plan.date }}（首条提交开始计时，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}，{{ plan.workConfig.workEnd }} 下班）</span>
             <span class="header-meta">{{ plan.planned.length }} 个项目 · {{ plan.commitCount }} 条提交 · 合计 {{ totalHours }}h</span>
           </div>
         </template>

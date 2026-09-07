@@ -17,7 +17,9 @@ const { execGit } = require('./git-service')
 const zentao = require('./zentao-service')
 const hanprint = require('./hanprint-service')
 
-// ─── 工时计算（纯函数，与 KnowMore plan_hours 语义一致） ───
+// ─── 工时计算（纯函数） ───
+// 语义：工时区间 = 首条提交时刻 → 下班时间（迟到不计时；填报今天且未到下班则终点为当前时刻），
+// 区间内按提交时刻切分归属各项目，自动扣午休、0.5 小时向下取整，尾段归最后一条提交的项目。
 
 function hm(s) {
   const [h, m] = String(s).split(':').map(Number)
@@ -36,64 +38,46 @@ function workMinutes(start, end, lunchS, lunchE) {
 }
 
 /**
- * 时间切分（锚点累进法）：每条提交的工时段，0 段保留。
+ * 尾段终点：填报今天且当前未到下班时间 → 当前时刻（当天实时核对）；
+ * 其余（历史日期 / 今天已过下班时间）→ 下班时间。now 可注入以便自测。
+ */
+function resolveEndTime(date, workEnd, now = new Date()) {
+  const end = workEnd || '17:30'
+  const p = (n) => String(n).padStart(2, '0')
+  const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
+  if (date === today) {
+    const nowMin = now.getHours() * 60 + now.getMinutes()
+    if (nowMin < hm(end)) return `${p(Math.floor(nowMin / 60))}:${p(nowMin % 60)}`
+  }
+  return end
+}
+
+/**
+ * 时间切分（锚点累进）：每条提交的工时段（首条为 0 段——迟到不计时），0 段保留。
+ * endTime 提供时追加一条尾段（最后一条提交 → endTime），标记 virtual（计入工时与
+ * 时间范围，不进提交编号列表）。
  * commits: [{ time:'HH:MM', msg, projectId, projectName }] 内部按时间升序排序。
  */
-function computeSegments(commits, { workStart, lunchStart, lunchEnd, step = 30 } = {}) {
+function computeSegments(commits, { lunchStart, lunchEnd, endTime, step = 30 } = {}) {
   const lunchS = hm(lunchStart || '12:00')
   const lunchE = hm(lunchEnd || '13:00')
-  let anchor = hm(workStart || '08:30')
   const sorted = [...(commits || [])].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
   const out = []
+  let anchor = null // 首锚点 = 首条提交自身：上班迟到的时间不计入工时
   for (const c of sorted) {
     const t = hm(c.time)
-    const m = workMinutes(anchor, t, lunchS, lunchE)
+    const m = anchor === null ? 0 : workMinutes(anchor, t, lunchS, lunchE)
     anchor = t
     const seg = Math.floor(m / step) * step
     out.push({ ...c, minutes: seg, hours: round2(seg / 60), rawMinutes: m, rawHours: round2(m / 60) })
   }
+  if (endTime && sorted.length) {
+    const last = sorted[sorted.length - 1]
+    const m = workMinutes(anchor, hm(endTime), lunchS, lunchE)
+    const seg = Math.floor(m / step) * step
+    out.push({ ...last, time: endTime, minutes: seg, hours: round2(seg / 60), rawMinutes: m, rawHours: round2(m / 60), virtual: true })
+  }
   return out
-}
-
-/**
- * 锚点累进法计算每条提交的工时（0 段合并版）。
- * 跨项目合并段在工作说明中加 [项目名] 前缀，便于在禅道工时里区分来源。
- */
-function planHours(commits, opts = {}) {
-  const out = computeSegments(commits, opts)
-  // 0 段并入下一条（尾部并入上一条），保证每条 hours > 0
-  const merged = []
-  let pending = []
-  for (const item of out) {
-    if (item.minutes === 0) {
-      pending.push(item)
-      continue // eslint-disable-line no-continue
-    }
-    if (pending.length) {
-      item.msg = [...pending, item].map((p) => msgOf(p, item)).join('；')
-      item.mergedFrom = pending.map((p) => p.time)
-      pending = []
-    }
-    merged.push(item)
-  }
-  if (pending.length) {
-    if (merged.length) {
-      const last = merged[merged.length - 1]
-      last.msg = `${last.msg}；${pending.map((p) => msgOf(p, last)).join('；')}`
-      last.mergedFrom = [...(last.mergedFrom || []), ...pending.map((p) => p.time)]
-    } else {
-      merged.push(...pending) // 全部为 0 的极端情况，原样返回
-    }
-  }
-  return merged
-}
-
-/** 合并段说明：与目标项同项目则裸说明，跨项目带 [项目名] 前缀 */
-function msgOf(item, target) {
-  if (item.projectId && target.projectId && item.projectId !== target.projectId) {
-    return `[${item.projectName || item.projectId}] ${item.msg}`
-  }
-  return item.msg
 }
 
 // ─── 按项目聚合（一个项目一条工时记录，内容为简洁编号列表） ───
@@ -107,7 +91,8 @@ function stripPrefix(subject) {
 
 /**
  * 把时间切分结果按项目聚合为一条工时记录：
- * 工时 = 该项目全部提交段之和；说明 = 去类型前缀的编号列表（同活动报告复制格式）。
+ * 工时 = 该项目全部提交段之和（含尾段虚拟条目）；说明 = 去类型前缀的编号列表
+ * （同活动报告复制格式，virtual 尾段只计时不进列表）。
  */
 function aggregateByProject(segments) {
   const byProject = new Map()
@@ -128,7 +113,7 @@ function aggregateByProject(segments) {
     acc.hours = round2(acc.hours + s.hours)
     acc.rawHours = round2(acc.rawHours + s.rawHours)
     acc.lastTime = s.time
-    acc.commits.push(s)
+    if (!s.virtual) acc.commits.push(s)
   }
   const list = []
   for (const acc of byProject.values()) {
@@ -380,12 +365,14 @@ async function plan(payload) {
   const identitiesMissing = !identities.length
   const commits = identitiesMissing ? [] : await collectTimedCommits(projects, { date, identities })
 
+  // 工时区间 = 首条提交 → 终点（今天未下班为当前时刻，否则下班时间），迟到不计时
+  const workEnd = (cfg.zentao && cfg.zentao.workEnd) || '17:30'
   const workCfg = {
-    workStart: (cfg.zentao && cfg.zentao.workStart) || '08:30',
     lunchStart: (cfg.zentao && cfg.zentao.lunchStart) || '12:00',
     lunchEnd: (cfg.zentao && cfg.zentao.lunchEnd) || '13:00',
+    workEnd,
   }
-  const planned = aggregateByProject(computeSegments(commits, workCfg))
+  const planned = aggregateByProject(computeSegments(commits, { ...workCfg, endTime: resolveEndTime(date, workEnd) }))
 
   const bindings = listBindings()
   const zentaoConfigured = !!(cfg.zentao && cfg.zentao.baseUrl && cfg.zentao.account && store.getZentaoPwd())
@@ -489,8 +476,8 @@ async function submit(payload) {
 module.exports = {
   hm,
   workMinutes,
-  planHours,
   computeSegments,
+  resolveEndTime,
   stripPrefix,
   aggregateByProject,
   parseTimedLines,

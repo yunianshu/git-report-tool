@@ -36,7 +36,7 @@ export const state = reactive({
     zentao: {
       baseUrl: '',
       account: '',
-      workStart: '08:30',
+      workEnd: '17:30',
       lunchStart: '12:00',
       lunchEnd: '13:00',
     },

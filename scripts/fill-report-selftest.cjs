@@ -63,99 +63,96 @@ function fakeFetch(handler) {
 
 // ═══════════ 工时计算 ═══════════
 async function main() {
-console.log('工时计算（与 KnowMore plan_hours 对齐）:')
+console.log('工时计算（首条提交开始计时 + 尾段到下班/当前时刻）:')
 
 await test('workMinutes 扣除午休重叠', () => {
-  const lunchS = 12 * 60, lunchE = 13 * 60 + 30
-  assert.strictEqual(fill.workMinutes(10 * 60, 14 * 60, lunchS, lunchE), 150) // 240-90
+  const lunchS = 12 * 60, lunchE = 13 * 60
+  assert.strictEqual(fill.workMinutes(10 * 60, 14 * 60, lunchS, lunchE), 180) // 240−60(1h午休)
+  assert.strictEqual(fill.workMinutes(10 * 60, 14 * 60, lunchS, lunchE + 30), 150) // 1.5h 午休
   assert.strictEqual(fill.workMinutes(9 * 60, 11 * 60, lunchS, lunchE), 120) // 不重叠
   assert.strictEqual(fill.workMinutes(14 * 60, 13 * 60, lunchS, lunchE), 0) // 倒序
 })
 
-await test('首条提交距上班时间：42min 取整为 0.5h', () => {
-  const out = fill.planHours([{ time: '09:12', msg: 'a', projectId: 'p1', projectName: 'P1' }], { workStart: '08:30' })
-  assert.strictEqual(out.length, 1)
-  assert.strictEqual(out[0].minutes, 30)
-  assert.strictEqual(out[0].hours, 0.5)
-  assert.strictEqual(out[0].rawMinutes, 42)
+await test('首条提交为 0 段（迟到不计时）', () => {
+  const segs = fill.computeSegments([{ time: '09:12', msg: 'a', projectId: 'p1', projectName: 'P1' }])
+  assert.strictEqual(segs.length, 1)
+  assert.strictEqual(segs[0].hours, 0)
+  assert.strictEqual(segs[0].rawMinutes, 0)
 })
 
-await test('2.8h 记 2.5h（0.5h 向下取整舍弃尾数）', () => {
-  const out = fill.planHours([{ time: '11:18', msg: 'a', projectId: 'p1', projectName: 'P1' }], { workStart: '08:30' })
-  // 08:30→11:18 = 168min → floor(168/30)*30 = 150 = 2.5h
-  assert.strictEqual(out[0].hours, 2.5)
+await test('提交间隔扣午休并 0.5h 向下取整（2.3h 记 2h）', () => {
+  const segs = fill.computeSegments([
+    { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
+    { time: '11:18', msg: 'b', projectId: 'p1', projectName: 'P1' }, // 138min → 120
+  ])
+  assert.strictEqual(segs[1].hours, 2)
 })
 
-await test('跨午休提交自动扣午休', () => {
-  const out = fill.planHours([{ time: '14:00', msg: 'a', projectId: 'p1', projectName: 'P1' }], { workStart: '08:30', lunchStart: '12:00', lunchEnd: '13:30' })
-  // 08:30→14:00 = 330min，扣 90min 午休 = 240 → 4h
-  assert.strictEqual(out[0].hours, 4)
+await test('跨午休的提交间隔自动扣午休', () => {
+  const segs = fill.computeSegments([
+    { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
+    { time: '14:00', msg: 'b', projectId: 'p1', projectName: 'P1' },
+  ])
+  // 09:00→14:00 = 300min，扣 60min 午休 = 240 → 4h
+  assert.strictEqual(segs[1].hours, 4)
 })
 
 await test('未传午休参数时默认按 1 小时（12:00–13:00）扣除', () => {
-  const out = fill.planHours([{ time: '14:00', msg: 'a', projectId: 'p1', projectName: 'P1' }], { workStart: '08:30' })
-  // 08:30→14:00 = 330min，扣 60min 午休 = 270 → floor(270/30)*30 = 270 → 4.5h
-  assert.strictEqual(out[0].hours, 4.5)
+  const segs = fill.computeSegments([
+    { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
+    { time: '14:00', msg: 'b', projectId: 'p1', projectName: 'P1' },
+  ])
+  assert.strictEqual(segs[1].hours, 4)
 })
 
-await test('零段并入下一条：msg 合并且记录 mergedFrom', () => {
-  const commits = [
-    { time: '09:40', msg: 'a', projectId: 'p1', projectName: 'P1' }, // 70min → 1h
-    { time: '09:55', msg: 'b', projectId: 'p1', projectName: 'P1' }, // 距上条 15min → 0 段
-    { time: '10:30', msg: 'c', projectId: 'p1', projectName: 'P1' }, // 35min → 0.5h
-  ]
-  const out = fill.planHours(commits, { workStart: '08:30' })
-  assert.strictEqual(out.length, 2)
-  assert.strictEqual(out[0].msg, 'a')
-  assert.strictEqual(out[0].hours, 1)
-  assert.strictEqual(out[1].hours, 0.5)
-  assert.ok(out[1].msg.includes('b') && out[1].msg.includes('c'))
-  assert.deepStrictEqual(out[1].mergedFrom, ['09:55'])
+await test('尾段归最后一条提交的项目且标记 virtual', () => {
+  const segs = fill.computeSegments([
+    { time: '09:00', msg: 'a', projectId: 'pA', projectName: 'ProjA' },
+    { time: '10:00', msg: 'b', projectId: 'pB', projectName: 'ProjB' },
+  ], { endTime: '12:00' })
+  assert.strictEqual(segs.length, 3)
+  assert.strictEqual(segs[2].virtual, true)
+  assert.strictEqual(segs[2].projectId, 'pB')
+  assert.strictEqual(segs[2].hours, 2) // 10:00→12:00 无午休重叠
 })
 
-await test('跨项目零段合并带 [项目名] 前缀', () => {
-  const commits = [
-    { time: '09:40', msg: 'x', projectId: 'pA', projectName: 'ProjA' },
-    { time: '09:50', msg: 'y', projectId: 'pA', projectName: 'ProjA' }, // 0 段
-    { time: '10:30', msg: 'z', projectId: 'pB', projectName: 'ProjB' }, // 归属 B
-  ]
-  const out = fill.planHours(commits, { workStart: '08:30' })
-  assert.strictEqual(out.length, 2)
-  assert.ok(out[1].msg.includes('[ProjA] y'))
-  assert.ok(out[1].msg.includes('z'))
+await test('尾段跨午休自动扣除', () => {
+  const segs = fill.computeSegments([{ time: '11:00', msg: 'a', projectId: 'p1', projectName: 'P1' }], { endTime: '14:00' })
+  assert.strictEqual(segs[1].hours, 2) // 180min − 60min 午休
 })
 
-await test('尾部零段并入上一条', () => {
-  const commits = [
-    { time: '09:30', msg: 'a', projectId: 'p1', projectName: 'P1' },
-    { time: '09:40', msg: 'b', projectId: 'p1', projectName: 'P1' }, // 0 段（尾部）
-  ]
-  const out = fill.planHours(commits, { workStart: '08:30' })
-  assert.strictEqual(out.length, 1)
-  assert.strictEqual(out[0].hours, 1)
-  assert.ok(out[0].msg.includes('b'))
-  assert.deepStrictEqual(out[0].mergedFrom, ['09:40'])
+await test('用户场景复现：09:30 首条（迟到 1h）→ 17:05 当前 = 6.5h', () => {
+  const segs = fill.computeSegments([
+    { time: '09:30', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
+    { time: '15:00', msg: 'fix: B', projectId: 'p1', projectName: 'P1' },
+  ], { endTime: '17:05' })
+  const agg = fill.aggregateByProject(segs)
+  // 09:30→15:00 = 330−60 = 270 → 4.5h；15:00→17:05 = 125 → 120 = 2h；合计 6.5h
+  assert.strictEqual(agg[0].hours, 6.5)
+  assert.strictEqual(agg[0].firstTime, '09:30')
+  assert.strictEqual(agg[0].lastTime, '17:05')
+  assert.strictEqual(agg[0].commitCount, 2) // virtual 尾段不进编号列表
+  assert.strictEqual(agg[0].work, '1. A\n2. B')
 })
 
-await test('全部为零段的极端情况原样返回', () => {
-  const commits = [
-    { time: '08:31', msg: 'a', projectId: 'p1', projectName: 'P1' },
-    { time: '08:35', msg: 'b', projectId: 'p1', projectName: 'P1' },
-  ]
-  const out = fill.planHours(commits, { workStart: '08:30' })
-  assert.strictEqual(out.length, 2)
-  assert.strictEqual(out.every((o) => o.hours === 0), true)
+await test('resolveEndTime：今天未到下班返回当前时刻', () => {
+  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T16:05:00')), '16:05')
 })
 
-await test('提交乱序输入时按时间升序计算', () => {
-  const commits = [
+await test('resolveEndTime：今天已过下班或历史日期返回下班时间', () => {
+  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T18:00:00')), '17:30')
+  assert.strictEqual(fill.resolveEndTime('2026-09-06', '17:30', new Date('2026-09-07T16:05:00')), '17:30')
+})
+
+await test('提交乱序输入时按时间升序切分', () => {
+  const segs = fill.computeSegments([
     { time: '11:00', msg: 'late', projectId: 'p1', projectName: 'P1' },
     { time: '09:00', msg: 'early', projectId: 'p1', projectName: 'P1' },
-  ]
-  const out = fill.planHours(commits, { workStart: '08:30' })
-  assert.strictEqual(out[0].msg, 'early')
-  assert.strictEqual(out[0].hours, 0.5)
-  assert.strictEqual(out[1].msg, 'late')
+  ])
+  assert.strictEqual(segs[0].msg, 'early')
+  assert.strictEqual(segs[0].hours, 0)
+  assert.strictEqual(segs[1].msg, 'late')
+  assert.strictEqual(segs[1].hours, 2) // 09:00→11:00 = 120min
 })
 
 // ═══════════ 按项目聚合（一个项目一条记录 + 简洁编号内容） ═══════════
@@ -171,13 +168,14 @@ await test('同项目多条提交聚合为一条：工时合计 + 编号列表�
   const segments = fill.computeSegments([
     { time: '09:12', msg: 'feat: 完成订单模块', projectId: 'p1', projectName: 'P1' },
     { time: '11:40', msg: 'fix: 修复库存同步', projectId: 'p1', projectName: 'P1' },
-  ], { workStart: '08:30' })
+  ], { endTime: '14:00' })
   const agg = fill.aggregateByProject(segments)
   assert.strictEqual(agg.length, 1)
-  assert.strictEqual(agg[0].hours, 2.5) // 0.5 + 2
+  // 中段 09:12→11:40 = 148min → 2h；尾段 11:40→14:00 = 140−60 = 80 → 60 = 1h；合计 3h
+  assert.strictEqual(agg[0].hours, 3)
   assert.strictEqual(agg[0].commitCount, 2)
   assert.strictEqual(agg[0].firstTime, '09:12')
-  assert.strictEqual(agg[0].lastTime, '11:40')
+  assert.strictEqual(agg[0].lastTime, '14:00')
   assert.strictEqual(agg[0].work, '1. 完成订单模块\n2. 修复库存同步')
 })
 
@@ -186,12 +184,12 @@ await test('多项目穿插提交各自聚合，工时段归属不变', () => {
     { time: '09:00', msg: 'feat: A1', projectId: 'pA', projectName: 'ProjA' },
     { time: '10:00', msg: 'feat: B1', projectId: 'pB', projectName: 'ProjB' },
     { time: '11:00', msg: 'feat: A2', projectId: 'pA', projectName: 'ProjA' },
-  ], { workStart: '08:30' })
+  ])
   const agg = fill.aggregateByProject(segments)
   assert.strictEqual(agg.length, 2)
   const a = agg.find((x) => x.projectId === 'pA')
   const b = agg.find((x) => x.projectId === 'pB')
-  assert.strictEqual(a.hours, 1.5) // 0.5 + 1（10:00→11:00 段归 B 之后的 A2）
+  assert.strictEqual(a.hours, 1) // 首条 0（迟到不计时）+ 10:00→11:00 段 1h
   assert.strictEqual(b.hours, 1) // 09:00→10:00 段归 B1
   assert.strictEqual(a.work, '1. A1\n2. A2')
   assert.strictEqual(a.lastTime, '11:00')
@@ -552,7 +550,6 @@ function gitOk() {
 if (gitOk()) {
   const repoDir = path.join(tmpRoot, 'repo')
   fs.mkdirSync(repoDir, { recursive: true })
-  const gitEnv = { ...process.env, GIT_AUTHOR_DATE: '', GIT_COMMITTER_DATE: '' }
   function commitAt(date, time, msg, email = 'me@corp.com', name = 'Me') {
     execFileSync('git', ['commit', '--allow-empty', '-m', msg], {
       cwd: repoDir,
@@ -565,16 +562,22 @@ if (gitOk()) {
       },
     })
   }
+  // 动态历史日期（今天−3 天）：确保 resolveEndTime 返回下班时间而非「今天当前时刻」
+  const pastDay = new Date(Date.now() - 3 * 86400000)
+  const pd = (n) => String(n).padStart(2, '0')
+  const pastDayStr = `${pastDay.getFullYear()}-${pd(pastDay.getMonth() + 1)}-${pd(pastDay.getDate())}`
+  const dayBefore = new Date(pastDay.getTime() - 86400000)
+  const dayBeforeStr = `${dayBefore.getFullYear()}-${pd(dayBefore.getMonth() + 1)}-${pd(dayBefore.getDate())}`
   execFileSync('git', ['init', '-q'], { cwd: repoDir })
-  commitAt('2026-09-07', '09:12', 'feat: 完成订单模块')
-  commitAt('2026-09-07', '11:40', 'fix: 修复库存同步')
-  commitAt('2026-09-07', '14:05', 'refactor: 重构导出', 'other@corp.com', 'Other') // 他人提交，应被过滤
-  commitAt('2026-09-06', '10:00', 'chore: 昨天的提交') // 非当日，应被过滤
+  commitAt(pastDayStr, '09:12', 'feat: 完成订单模块')
+  commitAt(pastDayStr, '11:40', 'fix: 修复库存同步')
+  commitAt(pastDayStr, '14:05', 'refactor: 重构导出', 'other@corp.com', 'Other') // 他人提交，应被过滤
+  commitAt(dayBeforeStr, '10:00', 'chore: 更早一天的提交') // 非当日，应被过滤
 
   await test('按日过滤 + 本人过滤 + 带HH:MM + 时间升序', async () => {
     const commits = await fill.collectTimedCommits(
       [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
-      { date: '2026-09-07', identities: [{ name: 'Me', email: 'me@corp.com' }] },
+      { date: pastDayStr, identities: [{ name: 'Me', email: 'me@corp.com' }] },
     )
     assert.strictEqual(commits.length, 2)
     assert.strictEqual(commits[0].time, '09:12')
@@ -586,24 +589,24 @@ if (gitOk()) {
   await test('identities 为空时返回空列表（工时绝不误算他人提交）', async () => {
     const commits = await fill.collectTimedCommits(
       [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
-      { date: '2026-09-07', identities: [] },
+      { date: pastDayStr, identities: [] },
     )
     assert.strictEqual(commits.length, 0)
   })
 
   await test('plan 端到端：真实提交 → 按项目聚合 → 汇总（不依赖禅道）', async () => {
-    // 不配置禅道：plan 应容错返回 ztError 而不抛异常
+    // 不配置禅道：plan 应容错返回 ztError 而不抛异常；历史日期 → 尾段算到下班 17:30
     store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
     const r = await fill.plan({
-      date: '2026-09-07',
+      date: pastDayStr,
       projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
     })
     assert.ok(r.ztError)
     assert.strictEqual(r.planned.length, 1) // 一个项目一条记录
-    // 09:12 距 08:30 = 42min → 0.5h；09:12→11:40 = 148min → 2h；合计 2.5h
-    assert.strictEqual(r.planned[0].hours, 2.5)
+    // 中段 09:12→11:40 = 148min → 2h；尾段 11:40→17:30 = 350−60 = 290 → 4.5h；合计 6.5h
+    assert.strictEqual(r.planned[0].hours, 6.5)
     assert.strictEqual(r.planned[0].firstTime, '09:12')
-    assert.strictEqual(r.planned[0].lastTime, '11:40')
+    assert.strictEqual(r.planned[0].lastTime, '17:30')
     assert.strictEqual(r.planned[0].work, '1. 完成订单模块\n2. 修复库存同步') // feat:/fix: 前缀已剥离
     assert.strictEqual(r.unmatchedProjects.length, 1) // 有提交但未绑定
   })

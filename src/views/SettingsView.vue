@@ -318,9 +318,9 @@
       <div class="ai-manager">
         <div class="ai-form">
           <div class="ai-row">
-            <span class="ai-label">上班时间</span>
-            <el-time-select v-model="state.config.zentao.workStart" start="07:00" end="10:00" step="00:30" style="width: 130px" />
-            <span class="ai-hint">首条提交距上班时间的间隔计入其工时</span>
+            <span class="ai-label">下班时间</span>
+            <el-time-select v-model="state.config.zentao.workEnd" start="16:00" end="21:00" step="00:30" style="width: 130px" />
+            <span class="ai-hint">工时算到下班；填报今天且未到下班时间时算到当前时刻</span>
           </div>
           <div class="ai-row">
             <span class="ai-label">午休时间</span>
@@ -336,7 +336,7 @@
           </el-button>
         </div>
         <div class="ai-hint ai-note">
-          每条提交的工时 = 距上一条提交（首条距上班时间）的工作分钟数，扣除午休后按 0.5 小时向下取整；不足半小时的尾数并入下一条提交。
+          工时从当天首条提交开始计时（迟到不计时），到最后一条提交后的剩余时间一并计入；区间内按提交时刻切分归属项目，扣午休后按 0.5 小时向下取整。
         </div>
       </div>
     </el-card>
