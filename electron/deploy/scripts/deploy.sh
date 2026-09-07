@@ -33,7 +33,8 @@ fail_now() { # 前置检查失败（尚未改动任何服务器状态），直�
 
 # ───────────────────────── 参数解析 ─────────────────────────
 CMD="deploy"
-APP_NAME="" HOME_DIR="" PACKAGE="" SHA256="" VERSION="" COMPOSE_FILE="docker-compose.yml"
+MODE="docker" APP_NAME="" HOME_DIR="" PACKAGE="" SHA256="" VERSION="" COMPOSE_FILE="docker-compose.yml"
+UPGRADE_SCRIPT="upgrade.sh"
 BACKUP_CODE=1 BACKUP_DB=0 DB_TYPE="postgres" DB_CONTAINER="" DB_NAME="" DB_USER=""
 AUTO_ROLLBACK=1 HEALTH_URL="" HEALTH_TIMEOUT=90 HEALTH_INTERVAL=3
 KEEP_RELEASES=10 KEEP_BACKUPS=10 DELETE_UPLOAD=1
@@ -42,11 +43,13 @@ if [ $# -gt 0 ]; then CMD="$1"; shift; fi
 
 while [ $# -gt 0 ]; do
   case "$1" in
+    --mode)             MODE="$2"; shift 2 ;;
     --app)          APP_NAME="$2"; shift 2 ;;
     --home)         HOME_DIR="$2"; shift 2 ;;
     --package)      PACKAGE="$2"; shift 2 ;;
     --sha256)       SHA256="$2"; shift 2 ;;
     --compose)      COMPOSE_FILE="$2"; shift 2 ;;
+    --upgrade-script) UPGRADE_SCRIPT="$2"; shift 2 ;;
     --version)      VERSION="$2"; shift 2 ;;
     --backup-code)      BACKUP_CODE=1; shift ;;
     --no-backup-code)   BACKUP_CODE=0; shift ;;
@@ -80,6 +83,7 @@ CURRENT="$APP_HOME/current"
 LOCK_DIR="$APP_HOME/.deploy.lock"
 LOCK_ACQUIRED=0
 OLD_RELEASE=""
+OLD_CURRENT_NAME=""   # 脚本部署：升级前的 CURRENT 指向（回滚目标）
 NEW_RELEASE=""
 TS="$(date +%Y%m%d_%H%M%S)"
 
@@ -113,6 +117,20 @@ check_env() {
     command -v curl >/dev/null 2>&1 || fail_now "启用了健康检查但服务器未安装 curl"
   fi
   ok "服务器环境检查通过（docker/compose/unzip 可用）"
+}
+
+# 脚本部署环境：不需要 docker，按发布包类型要求 tar 或 unzip
+check_env_script() {
+  command -v sha256sum >/dev/null 2>&1 || fail_now "服务器未安装 sha256sum"
+  case "$PACKAGE" in
+    *.tar.gz|*.tgz) command -v tar >/dev/null 2>&1 || fail_now "服务器未安装 tar（.tar.gz 发布包需要）" ;;
+    *.zip)          command -v unzip >/dev/null 2>&1 || fail_now "服务器未安装 unzip（.zip 发布包需要）" ;;
+    *) fail_now "不支持的发布包类型: $PACKAGE（支持 .tar.gz / .tgz / .zip）" ;;
+  esac
+  if [ -n "$HEALTH_URL" ]; then
+    command -v curl >/dev/null 2>&1 || fail_now "启用了健康检查但服务器未安装 curl"
+  fi
+  ok "服务器环境检查通过（脚本部署，发布包: $PACKAGE）"
 }
 
 # ───────────────────────── 健康检查 ─────────────────────────
@@ -281,6 +299,156 @@ write_history() {
     >> "$APP_HOME/deploy-history.jsonl" 2>/dev/null
 }
 
+# ═════════════════════════ 脚本部署（script 形态） ═════════════════════════
+# 面向「项目自带运维脚本」的部署形态（如单 jar + upgrade.sh/start.sh/stop.sh）：
+#   版本管理由项目自身负责（releases/<dir> + CURRENT 指针文件，内容 = release 目录名），
+#   备份/停旧/切指针/启动/健康/回滚收敛在发布包内的升级脚本（默认 upgrade.sh）。
+# 本脚本职责收敛为：校验上传包 → 解压到 releases/ → 以 INSTALL_ROOT 调升级脚本 →
+#   （可选）HTTP 健康复查（失败回滚）→ 清理旧版本。
+
+# CURRENT 指针文件原子切换（写临时文件 + mv，与项目脚本同一约定）
+set_current() {
+  printf '%s\n' "$1" > "$APP_HOME/CURRENT.tmp.$$"
+  mv -f -- "$APP_HOME/CURRENT.tmp.$$" "$APP_HOME/CURRENT"
+}
+get_current() {
+  tr -d '[:space:]' 2>/dev/null < "$APP_HOME/CURRENT" || true
+}
+
+# 在指定 release 目录内执行脚本（存在才执行；返回实际退出码，缺文件返回 0）
+run_release_script() {
+  local dir="$1" script="$2"
+  [ -f "$dir/$script" ] || return 0
+  ( cd "$dir" && INSTALL_ROOT="$APP_HOME" bash "./$script" )
+}
+
+# 脚本部署回滚：停新版本 → CURRENT 切回旧版本并重启（旧版本缺失时尽力而为）
+do_rollback_script() {
+  local reason="$1" old="$OLD_CURRENT_NAME" new
+  new="$(get_current)"
+  stage rollback
+  warn "$reason"
+  write_history "failed"
+  if [ "$AUTO_ROLLBACK" != "1" ]; then
+    err "自动回滚未启用，新版本保持运行，请人工确认"
+    echo "__DEPLOY_FAIL__:${reason}（自动回滚未启用）"
+    exit 1
+  fi
+  if [ -n "$new" ] && [ -f "$RELEASES/$new/stop.sh" ]; then
+    ( cd "$RELEASES/$new" && INSTALL_ROOT="$APP_HOME" bash ./stop.sh ) >/dev/null 2>&1 || true
+  fi
+  if [ -n "$old" ] && [ -d "$RELEASES/$old" ]; then
+    set_current "$old"
+    log "CURRENT 切回旧版本: $old，正在重启…"
+    run_release_script "$RELEASES/$old" start.sh >/dev/null 2>&1 || true
+    echo "__DEPLOY_FAIL__:${reason}（已自动回滚到 $old）"
+  else
+    echo "__DEPLOY_FAIL__:${reason}（无旧版本可回滚，新版本已停止）"
+  fi
+  exit 1
+}
+
+# 脚本部署清理：按 mtime 保留最近 KEEP_RELEASES 个 release，CURRENT 指向的永不删除
+cleanup_releases_script() {
+  [ -d "$RELEASES" ] || return 0
+  local keep count=0 victim
+  keep="$(get_current)"
+  ls -1t "$RELEASES" 2>/dev/null | while read -r victim; do
+    count=$((count + 1))
+    [ "$count" -le "$KEEP_RELEASES" ] && continue
+    [ "$victim" = "$keep" ] && continue
+    rm -rf "$RELEASES/$victim"
+    log "清理旧版本: $victim"
+  done
+}
+
+do_deploy_script() {
+  [ -n "$APP_NAME" ] || fail_now "缺少 --app"
+  [ -n "$HOME_DIR" ] || fail_now "缺少 --home"
+  [ -n "$VERSION" ]  || fail_now "缺少 --version"
+  [ -n "$PACKAGE" ]  || fail_now "缺少 --package"
+
+  mkdir -p "$RELEASES" "$UPLOADS" "$BACKUPS"
+  [ -w "$APP_HOME" ] || fail_now "部署目录不可写: $APP_HOME"
+  acquire_lock
+  check_env_script
+
+  # 校验上传包
+  local pkg="$UPLOADS/$PACKAGE"
+  [ -f "$pkg" ] || fail_now "发布包不存在: $pkg"
+  if [ -n "$SHA256" ]; then
+    local remote_sha
+    remote_sha=$(sha256sum "$pkg" | awk '{print $1}')
+    [ "$remote_sha" = "$SHA256" ] || fail_now "发布包校验失败（期望 $SHA256 实际 $remote_sha）"
+    ok "发布包 SHA256 校验通过"
+  fi
+
+  OLD_CURRENT_NAME="$(get_current)"
+  [ -n "$OLD_CURRENT_NAME" ] && log "当前运行版本目录: $OLD_CURRENT_NAME" || log "首次部署，无旧版本"
+
+  # 解压到暂存目录，要求单一顶层目录（发布包结构约定）
+  stage extract
+  local incoming="$RELEASES/.incoming.$$" entries n
+  rm -rf -- "$incoming"
+  mkdir -p -- "$incoming"
+  case "$PACKAGE" in
+    *.tar.gz|*.tgz) tar -xzf "$pkg" -C "$incoming" || { rm -rf -- "$incoming"; fail_rollback "解压失败: $pkg"; } ;;
+    *.zip)          unzip -q -o "$pkg" -d "$incoming" || { rm -rf -- "$incoming"; fail_rollback "解压失败: $pkg"; } ;;
+  esac
+  entries=$(ls -A -- "$incoming")
+  n=$(printf '%s\n' "$entries" | grep -c . || true)
+  if [ "$n" != "1" ] || [ ! -d "$incoming/$entries" ]; then
+    rm -rf -- "$incoming"
+    fail_rollback "发布包必须只含一个顶层目录（实际 ${n} 项）"
+  fi
+  NEW_RELEASE="$RELEASES/$entries"
+  rm -rf -- "$NEW_RELEASE"
+  mv -f -- "$incoming/$entries" "$NEW_RELEASE"
+  rmdir -- "$incoming" 2>/dev/null || true
+  chmod +x "$NEW_RELEASE"/*.sh 2>/dev/null || true
+  ok "新版本已解压: releases/$entries"
+  [ -f "$NEW_RELEASE/$UPGRADE_SCRIPT" ] || fail_rollback "发布包缺少升级脚本: $UPGRADE_SCRIPT"
+  [ -f "$NEW_RELEASE/start.sh" ] || fail_rollback "发布包缺少 start.sh（回滚依赖）"
+
+  # 备份/停旧/切指针/启动/健康检查/失败回滚 均由项目升级脚本负责
+  stage start
+  log "执行升级脚本 $UPGRADE_SCRIPT（INSTALL_ROOT=$APP_HOME）…"
+  local uprc=0 cur
+  ( cd "$NEW_RELEASE" && INSTALL_ROOT="$APP_HOME" bash "./$UPGRADE_SCRIPT" ) || uprc=$?
+  if [ "$uprc" -ne 0 ]; then
+    err "升级脚本执行失败（退出码 $uprc）"
+    # 升级脚本可能已自行回滚；这里再按 CURRENT 幂等拉起一次当前版本兜底
+    cur="$(get_current)"
+    if [ -n "$cur" ] && [ -f "$RELEASES/$cur/start.sh" ]; then
+      log "尽力恢复当前版本 $cur ……"
+      run_release_script "$RELEASES/$cur" start.sh >/dev/null 2>&1 || true
+    fi
+    write_history "failed"
+    echo "__DEPLOY_FAIL__:升级脚本执行失败（详见日志；已尽力恢复 CURRENT 指向的版本）"
+    exit 1
+  fi
+  ok "升级脚本执行完成: releases/$entries"
+
+  # 可选 HTTP 健康复查（升级脚本内部已有健康检查；配置了地址时再确认一次）
+  if [ -n "$HEALTH_URL" ]; then
+    stage health
+    if health_http; then ok "健康检查通过: $HEALTH_URL"
+    else do_rollback_script "健康检查失败: $HEALTH_URL"; fi
+  fi
+
+  cleanup_releases_script
+  if [ "$DELETE_UPLOAD" = "1" ]; then
+    rm -f "$pkg"
+    log "已清理上传包: $PACKAGE"
+  fi
+  find "$UPLOADS" -maxdepth 1 -name '*.zip' -mmin +60 -delete 2>/dev/null
+  find "$UPLOADS" -maxdepth 1 -name '*.tar.gz' -mmin +60 -delete 2>/dev/null
+  write_history "success"
+
+  echo "__DEPLOY_OK__:$VERSION"
+  exit 0
+}
+
 # ═════════════════════════ 子命令: deploy ═════════════════════════
 do_deploy() {
   [ -n "$APP_NAME" ] || fail_now "缺少 --app"
@@ -413,8 +581,45 @@ do_rollback_cmd() {
   exit 0
 }
 
+# ═════════════════════════ 子命令: rollback（脚本部署） ═════════════════════════
+# --version 传 release 目录名；停当前版本 → CURRENT 切目标 → 启动目标并健康检查
+do_rollback_cmd_script() {
+  [ -n "$HOME_DIR" ] || fail_now "缺少 --home"
+  [ -n "$VERSION" ]  || fail_now "缺少 --version"
+  [ -d "$RELEASES/$VERSION" ] || fail_now "目标版本不存在: releases/$VERSION"
+  [ -f "$RELEASES/$VERSION/start.sh" ] || fail_now "目标版本缺少 start.sh"
+  acquire_lock
+
+  local target="$RELEASES/$VERSION" cur
+  cur="$(get_current)"
+
+  stage start
+  if [ -n "$cur" ] && [ "$cur" != "$VERSION" ] && [ -f "$RELEASES/$cur/stop.sh" ]; then
+    log "停止当前版本 $cur ……"
+    ( cd "$RELEASES/$cur" && INSTALL_ROOT="$APP_HOME" bash ./stop.sh ) || log "旧服务停止返回非零，继续"
+  fi
+  set_current "$VERSION"
+  log "CURRENT -> $VERSION，正在启动…"
+  if ! run_release_script "$target" start.sh; then
+    err "目标版本启动失败，CURRENT 切回 $cur"
+    [ -n "$cur" ] && set_current "$cur"
+    [ -n "$cur" ] && run_release_script "$RELEASES/$cur" start.sh >/dev/null 2>&1 || true
+    fail_now "回滚启动失败: releases/$VERSION（已恢复指向 $cur）"
+  fi
+
+  if [ -n "$HEALTH_URL" ]; then
+    stage health
+    health_http || fail_now "回滚后健康检查失败: $HEALTH_URL"
+  fi
+  ok "回滚完成，当前版本: $VERSION"
+  write_history "rollback"
+
+  echo "__DEPLOY_OK__:$VERSION"
+  exit 0
+}
+
 case "$CMD" in
-  deploy)   do_deploy ;;
-  rollback) do_rollback_cmd ;;
+  deploy)   if [ "$MODE" = "script" ]; then do_deploy_script; else do_deploy; fi ;;
+  rollback) if [ "$MODE" = "script" ]; then do_rollback_cmd_script; else do_rollback_cmd; fi ;;
   *) fail_now "未知子命令: $CMD（支持 deploy / rollback）" ;;
 esac

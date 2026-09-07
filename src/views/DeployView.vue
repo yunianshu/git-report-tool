@@ -34,8 +34,10 @@
       <el-alert v-if="connResult" :type="connResult.ok ? 'success' : 'error'" :closable="true" class="conn-alert" @close="connResult = null">
         <template #title>
           <span v-if="connResult.ok">
-            连接成功 · Docker: {{ connResult.docker || '未安装' }} · Compose: {{ connResult.compose || '未安装' }} ·
-            unzip: {{ connResult.unzip || '未安装' }} · 根分区已用 {{ connResult.disk || '未知' }}
+            连接成功 · {{ connResult.os || '未知系统' }} · Docker: {{ connResult.docker || '未安装' }} ·
+            Compose: {{ connResult.compose || '未安装' }} · unzip: {{ connResult.unzip || '未安装' }} ·
+            tar: {{ connResult.tar || '未安装' }} · java: {{ connResult.java || '未安装' }} ·
+            根分区已用 {{ connResult.disk || '未知' }}
           </span>
           <span v-else>连接失败：{{ connResult.error }}</span>
         </template>
@@ -152,6 +154,7 @@ function fillForm(p) {
   const merged = { ...base, ...JSON.parse(JSON.stringify(p || {})) }
   merged.version = { ...base.version, ...(p && p.version || {}) }
   merged.deploy = { ...base.deploy, ...(p && p.deploy || {}) }
+  merged.scriptMode = { ...base.scriptMode, ...(p && p.scriptMode || {}) }
   // 目标数组：至少一个；密钥输入框每次填充后清空（留空＝保持已保存的凭据）
   merged.targets = (p && Array.isArray(p.targets) && p.targets.length)
     ? p.targets.map((t) => {

@@ -30,7 +30,10 @@ export function emptyProject() {
     name: '',
     localPath: '',
     version: { strategy: 'auto', manual: '' },
+    // 部署形态：docker = Compose 编排；script = 项目自带脚本（发布包 + upgrade.sh）
+    deployMode: 'docker',
     composeFile: 'docker-compose.yml',
+    scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh' },
     deploy: {
       backupCode: true, backupDatabase: false, dbType: 'postgres', dbContainer: '',
       dbName: '', dbUser: '', autoRollback: true, deleteUploadAfterSuccess: true,

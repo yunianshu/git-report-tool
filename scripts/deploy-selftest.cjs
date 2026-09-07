@@ -34,7 +34,7 @@ require.cache[electronPath] = { id: electronPath, filename: electronPath, loaded
 const { detectVersion } = require('../electron/deploy/version-detector')
 const { createMatcher, buildPackage } = require('../electron/deploy/packager')
 const deployProjects = require('../electron/deploy/deploy-projects')
-const { buildDeployArgs } = require('../electron/deploy/deploy-service')
+const { buildDeployArgs, resolveCompose, resolveArtifact, sha256File, deployModeOf } = require('../electron/deploy/deploy-service')
 
 // ═══════════ 版本识别 ═══════════
 console.log('版本识别 version-detector:')
@@ -322,6 +322,129 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
     for (const req of ['--app', '--home', '--package', '--sha256', '--version', '--compose']) {
       assert.ok(args.includes(req), `发布参数缺少 ${req}`)
     }
+  })
+
+  // ═══════════ 部署形态：compose 文件名兼容 ═══════════
+  console.log('Compose 文件解析 resolveCompose:')
+  test('配置的 compose 文件存在则原样使用', () => {
+    const dir = mkProj('c1', { 'docker-compose.yml': 'x' })
+    assert.deepStrictEqual(resolveCompose({ localPath: dir, composeFile: 'docker-compose.yml' }), { file: 'docker-compose.yml', fallback: false })
+  })
+  test('配置缺失时回退到项目根的常见命名（compose.yaml）', () => {
+    const dir = mkProj('c2', { 'compose.yaml': 'x' })
+    assert.deepStrictEqual(resolveCompose({ localPath: dir, composeFile: 'docker-compose.yml' }), { file: 'compose.yaml', fallback: true })
+  })
+  test('docker-compose.yaml 同样命中回退', () => {
+    const dir = mkProj('c3', { 'docker-compose.yaml': 'x' })
+    assert.strictEqual(resolveCompose({ localPath: dir, composeFile: 'docker-compose.yml' }).file, 'docker-compose.yaml')
+  })
+  test('全都不存在时保留配置值（由前置检查报错）', () => {
+    const dir = mkProj('c4', { 'readme.txt': 'x' })
+    assert.deepStrictEqual(resolveCompose({ localPath: dir, composeFile: 'docker-compose.yml' }), { file: 'docker-compose.yml', fallback: false })
+  })
+  test('配置的是子目录路径时不做根目录回退', () => {
+    const dir = mkProj('c5', { 'compose.yaml': 'x', 'deploy/docker-compose.yml': 'x' })
+    assert.strictEqual(resolveCompose({ localPath: dir, composeFile: 'deploy/docker-compose.yml' }).file, 'deploy/docker-compose.yml')
+  })
+  test('docker 模式发布参数使用回退后的 compose 文件名', () => {
+    const dir = mkProj('c6', { 'compose.yaml': 'x' })
+    const project = { name: 'demo', localPath: dir, composeFile: 'docker-compose.yml', deploy: {}, targets: [{ id: 't1', name: '测试', remotePath: '/opt/apps/demo', health: {} }] }
+    const args = buildDeployArgs(project, project.targets[0], { fileName: 'a.zip', sha256: 'a'.repeat(64) }, '1.0.0')
+    const i = args.indexOf('--compose')
+    assert.strictEqual(args[i + 1], 'compose.yaml')
+  })
+
+  // ═══════════ 部署形态：脚本部署产物解析 ═══════════
+  console.log('脚本部署产物 resolveArtifact:')
+  function mkArtifact(name, files) {
+    const dir = mkProj(name, {})
+    const rel = path.join(dir, 'release')
+    fs.mkdirSync(rel, { recursive: true })
+    for (const [f, content] of Object.entries(files)) {
+      fs.writeFileSync(path.join(rel, f), content)
+      // mtime 递增，保证「最新」判定稳定
+      const t = new Date(Date.now() + Object.keys(files).indexOf(f) * 1000)
+      fs.utimesSync(path.join(rel, f), t, t)
+    }
+    return dir
+  }
+  test('选中文件名含当前版本的最新发布包', () => {
+    const dir = mkArtifact('a1', { 'app-v0.1.0-001.tar.gz': 'x', 'app-v0.1.0-002.tar.gz': 'y', 'app-v0.2.0-001.zip': 'z' })
+    const r = resolveArtifact({ localPath: dir, scriptMode: { artifactDir: 'release' } }, '0.1.0')
+    assert.ok(r.ok)
+    assert.strictEqual(r.fileName, 'app-v0.1.0-002.tar.gz')
+    assert.strictEqual(r.sizeBytes, 1)
+  })
+  test('版本不匹配时报错并提示最新包（不发布过期产物）', () => {
+    const dir = mkArtifact('a2', { 'app-v0.1.0-001.tar.gz': 'x' })
+    const r = resolveArtifact({ localPath: dir, scriptMode: { artifactDir: 'release' } }, '0.2.0')
+    assert.ok(!r.ok)
+    assert.match(r.problem, /0\.2\.0/)
+    assert.match(r.problem, /app-v0\.1\.0-001\.tar\.gz/)
+  })
+  test('产物目录为空 / 不存在 / 非目录 分别报错', () => {
+    const dir = mkArtifact('a3', {})
+    assert.ok(!resolveArtifact({ localPath: dir, scriptMode: { artifactDir: 'release' } }, '1.0.0').ok)
+    assert.match(resolveArtifact({ localPath: dir, scriptMode: { artifactDir: 'release' } }, '1.0.0').problem, /没有发布包/)
+    const missing = resolveArtifact({ localPath: dir, scriptMode: { artifactDir: 'nope' } }, '1.0.0')
+    assert.ok(!missing.ok && /不存在/.test(missing.problem))
+  })
+  test('sha256File 与 crypto 一次性计算一致', async () => {
+    const buf = Buffer.from('hello world'.repeat(1000))
+    const f = path.join(tmpRoot, 'sha.txt')
+    fs.writeFileSync(f, buf)
+    const h = require('crypto').createHash('sha256').update(buf).digest('hex')
+    assert.strictEqual(await sha256File(f), h)
+  })
+
+  // ═══════════ 部署形态：参数与配置归一化 ═══════════
+  console.log('脚本部署参数 buildDeployArgs / deploy-projects:')
+  test('script 模式传 --mode script 与 --upgrade-script，不传 --compose', () => {
+    const project = {
+      name: 'vantage', deployMode: 'script', localPath: 'D:/x',
+      scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh' },
+      deploy: {}, targets: [{ id: 't1', name: '测试', remotePath: '/opt/apps/v', health: {} }],
+    }
+    const args = buildDeployArgs(project, project.targets[0], { fileName: 'v.tar.gz', sha256: 'c'.repeat(64) }, '0.1.0')
+    const sh = fs.readFileSync(path.join(__dirname, '../electron/deploy/scripts/deploy.sh'), 'utf8')
+    const accepted = new Set([...sh.matchAll(/^\s+(--[a-z0-9-]+)\)/gm)].map((m) => m[1]))
+    assert.strictEqual(deployModeOf(project), 'script')
+    assert.strictEqual(args[args.indexOf('--mode') + 1], 'script')
+    assert.strictEqual(args[args.indexOf('--upgrade-script') + 1], 'upgrade.sh')
+    assert.ok(!args.includes('--compose'), '脚本部署不应传 --compose')
+    for (const a of args) if (a.startsWith('--')) assert.ok(accepted.has(a), `deploy.sh 不认识参数 ${a}`)
+  })
+  test('deploy.sh 语法检查（bash -n，含 script 分支）', () => {
+    try {
+      execFileSync('bash', ['-n', path.join(__dirname, '../electron/deploy/scripts/deploy.sh')])
+    } catch (e) {
+      assert.fail(`deploy.sh 语法错误: ${e.stderr || e.message}`)
+    }
+  })
+  test('deploy-projects 归一化：deployMode 默认 docker，scriptMode 兜底非法值', () => {
+    const r = deployProjects.save({
+      name: 'mode-demo', localPath: 'D:/x', composeFile: '',
+      scriptMode: { artifactDir: '../evil', upgradeScript: 'a b.sh' },
+      targets: [{ ...deployProjects.defaultTarget() }],
+    })
+    const p = deployProjects.list().find((x) => x.id === r.id)
+    assert.strictEqual(p.deployMode, 'docker')
+    assert.strictEqual(p.composeFile, 'docker-compose.yml')
+    assert.strictEqual(p.scriptMode.artifactDir, 'release')
+    assert.strictEqual(p.scriptMode.upgradeScript, 'upgrade.sh')
+    deployProjects.remove(r.id)
+  })
+  test('deploy-projects 保存 script 模式字段往返', () => {
+    const t = deployProjects.defaultTarget()
+    const r = deployProjects.save({
+      name: 'mode-demo2', localPath: 'D:/x', deployMode: 'script',
+      scriptMode: { artifactDir: 'dist/pkg', upgradeScript: 'upgrade.sh' },
+      targets: [t],
+    })
+    const p = deployProjects.list().find((x) => x.id === r.id)
+    assert.strictEqual(p.deployMode, 'script')
+    assert.deepStrictEqual(p.scriptMode, { artifactDir: 'dist/pkg', upgradeScript: 'upgrade.sh' })
+    deployProjects.remove(r.id)
   })
 
   console.log(`\n结果: ${passed} 通过, ${failed} 失败`)

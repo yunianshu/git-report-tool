@@ -19,9 +19,33 @@
           <el-button @click="browseLocal"><el-icon><Folder /></el-icon></el-button>
         </div>
         <div class="f-row">
-          <span class="f-label">Compose</span>
-          <el-input v-model="form.composeFile" placeholder="docker-compose.yml" style="flex: 1" />
+          <span class="f-label">部署形态</span>
+          <el-radio-group v-model="form.deployMode" size="small">
+            <el-radio-button value="docker">Docker Compose</el-radio-button>
+            <el-radio-button value="script">脚本部署</el-radio-button>
+          </el-radio-group>
         </div>
+        <div v-if="form.deployMode !== 'script'" class="f-row">
+          <span class="f-label">Compose</span>
+          <el-input v-model="form.composeFile" placeholder="docker-compose.yml（支持 compose.yaml 等常见命名自动回退）" style="flex: 1" />
+        </div>
+        <template v-else>
+          <div class="f-row">
+            <span class="f-label">产物目录</span>
+            <el-input v-model="form.scriptMode.artifactDir" placeholder="release" style="width: 200px" />
+            <span class="f-mini">相对项目根，存放 tar.gz / zip 发布包</span>
+          </div>
+          <div class="f-row">
+            <span class="f-label">升级脚本</span>
+            <el-input v-model="form.scriptMode.upgradeScript" placeholder="upgrade.sh" style="width: 200px" />
+            <span class="f-mini">发布包顶层目录内的升级入口</span>
+          </div>
+          <div class="f-hint">
+            脚本部署适合非 Docker 项目（如单 jar + 运维脚本）：发布时从产物目录选「文件名含当前版本」的最新发布包上传，
+            服务器端解压到 releases/ 后以 INSTALL_ROOT 执行包内升级脚本（需自带备份 / 停旧 / 切 CURRENT 指针 / 启动 / 健康检查 / 失败回滚，
+            并附带 start.sh、stop.sh 供回滚使用）。
+          </div>
+        </template>
         <div class="f-row">
           <span class="f-label">版本号</span>
           <el-radio-group v-model="form.version.strategy" size="small">

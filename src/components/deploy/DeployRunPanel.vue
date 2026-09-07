@@ -52,7 +52,7 @@
     </div>
     <div class="stages">
       <div
-        v-for="(s, i) in STAGE_LIST"
+        v-for="(s, i) in stageList"
         :key="s.id"
         class="stage-chip"
         :class="stageClass(s.id)"
@@ -119,7 +119,7 @@ const props = defineProps({
 })
 const emit = defineEmits(['history-changed'])
 
-/** 与主进程 deploy-service.STAGES 保持一致 */
+/** 与主进程 deploy-service.STAGES 保持一致；脚本部署形态下 build 阶段无对应动作 */
 const STAGE_LIST = [
   { id: 'check', label: '检查项目' },
   { id: 'package', label: '项目打包' },
@@ -131,6 +131,11 @@ const STAGE_LIST = [
   { id: 'health', label: '健康检查' },
   { id: 'datasync', label: '数据同步' },
 ]
+
+/** 渲染用阶段列表：脚本部署时「Docker构建」显示为「项目脚本」（由升级脚本完成，无需构建） */
+const stageList = computed(() => STAGE_LIST.map((s) => (
+  s.id === 'build' && props.form.deployMode === 'script' ? { ...s, label: '项目脚本' } : s
+)))
 
 const rollingBack = ref(false)
 const releases = ref([])

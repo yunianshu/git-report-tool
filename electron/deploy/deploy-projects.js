@@ -68,7 +68,11 @@ function defaultProject() {
     tags: [],
     notes: '',
     version: { strategy: 'auto', manual: '' },
+    // 部署形态：docker = Compose 编排（默认）；script = 项目自带脚本（发布包 + upgrade.sh/start.sh/stop.sh）
+    deployMode: 'docker',
     composeFile: 'docker-compose.yml',
+    // 脚本部署：产物目录（相对项目根，放 tar.gz/tgz/zip 发布包）与升级入口脚本名
+    scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh' },
     deploy: {
       backupCode: true,
       backupDatabase: false,
@@ -99,6 +103,19 @@ function normalizeProject(p) {
     ...source,
     version: { ...defaults.version, ...(source.version || {}) },
     deploy: { ...defaults.deploy, ...(source.deploy || {}) },
+    scriptMode: { ...defaults.scriptMode, ...(source.scriptMode || {}) },
+  }
+  // 部署形态：仅 docker / script，未知值回退 docker
+  c.deployMode = source.deployMode === 'script' ? 'script' : 'docker'
+  c.composeFile = String(c.composeFile || 'docker-compose.yml').trim()
+  // 产物目录/脚本名进入远端命令，仅放行安全字符（防注入/防越界）
+  c.scriptMode.artifactDir = String(c.scriptMode.artifactDir || 'release').trim()
+  c.scriptMode.upgradeScript = String(c.scriptMode.upgradeScript || 'upgrade.sh').trim()
+  if (!/^[\w./-]+$/.test(c.scriptMode.artifactDir) || c.scriptMode.artifactDir.includes('..')) {
+    c.scriptMode.artifactDir = 'release'
+  }
+  if (!/^[\w.-]+$/.test(c.scriptMode.upgradeScript)) {
+    c.scriptMode.upgradeScript = 'upgrade.sh'
   }
   c.name = String(c.name || '').trim()
   c.description = String(c.description || '')

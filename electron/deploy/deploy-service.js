@@ -137,15 +137,21 @@ function readDeployScript() {
 function buildDeployArgs(project, target, pack, version) {
   const d = project.deploy || {}
   const h = target.health || {}
+  const mode = deployModeOf(project)
   const args = [
     'deploy',
+    '--mode', mode,
     '--app', project.name,
     '--home', target.remotePath,
     '--package', pack.fileName,
     '--sha256', pack.sha256,
     '--version', version,
-    '--compose', project.composeFile || 'docker-compose.yml',
   ]
+  if (mode === 'docker') {
+    args.push('--compose', resolveCompose(project).file)
+  } else {
+    args.push('--upgrade-script', (project.scriptMode && project.scriptMode.upgradeScript) || 'upgrade.sh')
+  }
   args.push(d.backupCode ? '--backup-code' : '--no-backup-code')
   if (d.backupDatabase) {
     args.push('--backup-db', '--db-type', d.dbType || 'postgres',
@@ -180,13 +186,83 @@ function resolveVersion(project) {
   return { version: '', source: '' }
 }
 
-/** 发布前本地检查（方案 §23 的关键项） */
+/** Compose 常见命名（Docker Compose V2 官方首选 compose.yaml） */
+const COMPOSE_CANDIDATES = ['docker-compose.yml', 'docker-compose.yaml', 'compose.yml', 'compose.yaml']
+
+/**
+ * 解析实际使用的 compose 文件（docker 形态）：
+ * 配置的文件存在则原样使用；否则在项目根按常见命名自动回退（如项目用 compose.yaml）。
+ * 返回 { file, fallback }；都不存在时返回配置值（由前置检查报错）。
+ */
+function resolveCompose(project) {
+  const configured = String(project.composeFile || 'docker-compose.yml').trim() || 'docker-compose.yml'
+  const root = project.localPath
+  if (!root || !fs.existsSync(root)) return { file: configured, fallback: false }
+  if (fs.existsSync(path.join(root, configured))) return { file: configured, fallback: false }
+  // 配置的是子目录路径（如 deploy/xxx.yml）时不做根目录回退，避免解析到错误文件
+  if (configured.includes('/')) return { file: configured, fallback: false }
+  const hit = COMPOSE_CANDIDATES.find((c) => c !== configured && fs.existsSync(path.join(root, c)))
+  return hit ? { file: hit, fallback: true } : { file: configured, fallback: false }
+}
+
+/** 脚本部署支持的发布包扩展名（V2 tar.gz 优先） */
+const ARTIFACT_EXTS = ['.tar.gz', '.tgz', '.zip']
+
+/**
+ * 解析脚本部署产物（script 形态）：在 artifactDir 中选「文件名含当前版本」的最新发布包。
+ * 版本不匹配的旧包不自动选用——宁可失败也不发布过期产物。
+ * 返回 { ok, fileName, filePath, sizeBytes } 或 { ok: false, problem }。
+ */
+function resolveArtifact(project, version) {
+  const sm = project.scriptMode || {}
+  const dir = path.resolve(project.localPath, sm.artifactDir || 'release')
+  if (!fs.existsSync(dir)) return { ok: false, problem: `产物目录不存在: ${sm.artifactDir || 'release'}（请先执行项目打包）` }
+  if (!fs.statSync(dir).isDirectory()) return { ok: false, problem: `产物目录不是文件夹: ${sm.artifactDir || 'release'}` }
+  let files = []
+  try {
+    files = fs.readdirSync(dir)
+      .filter((f) => ARTIFACT_EXTS.some((e) => f.toLowerCase().endsWith(e)))
+      .map((f) => {
+        const fp = path.join(dir, f)
+        return { fileName: f, filePath: fp, mtime: fs.statSync(fp).mtimeMs }
+      })
+  } catch { /* 目录不可读，按空处理 */ }
+  if (!files.length) return { ok: false, problem: `产物目录 ${sm.artifactDir || 'release'} 中没有发布包（支持 ${ARTIFACT_EXTS.join(' / ')}）` }
+  const matched = files.filter((f) => version && f.fileName.includes(version)).sort((a, b) => b.mtime - a.mtime)
+  if (!matched.length) {
+    const newest = [...files].sort((a, b) => b.mtime - a.mtime)[0].fileName
+    return { ok: false, problem: `产物目录中没有文件名含版本 ${version} 的发布包（最新为 ${newest}），请先重新打包` }
+  }
+  const best = matched[0]
+  return { ok: true, fileName: best.fileName, filePath: best.filePath, sizeBytes: fs.statSync(best.filePath).size }
+}
+
+/** 文件 SHA256（流式读取，发布包可达数百 MB） */
+function sha256File(filePath) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256')
+    const s = fs.createReadStream(filePath)
+    s.on('error', reject)
+    s.on('data', (d) => h.update(d))
+    s.on('end', () => resolve(h.digest('hex')))
+  })
+}
+
+/** 项目部署形态（缺省 docker，向后兼容旧配置） */
+function deployModeOf(project) {
+  return project.deployMode === 'script' ? 'script' : 'docker'
+}
+
+/** 发布前本地检查（方案 §23 的关键项；按部署形态分别校验） */
 function preCheckLocal(project, target, version) {
   const problems = []
   if (!project.name) problems.push('缺少项目名称')
   if (!project.localPath || !fs.existsSync(project.localPath)) problems.push(`本地项目目录不存在: ${project.localPath}`)
-  else if (project.composeFile && !fs.existsSync(path.join(project.localPath, project.composeFile))) {
-    problems.push(`Docker Compose 文件不存在: ${project.composeFile}`)
+  else if (deployModeOf(project) === 'docker') {
+    const rc = resolveCompose(project)
+    if (!fs.existsSync(path.join(project.localPath, rc.file))) {
+      problems.push(`Docker Compose 文件不存在: ${rc.file}（已尝试 ${COMPOSE_CANDIDATES.join(' / ')}），可在部署设置改用脚本部署形态`)
+    }
   }
   if (!version) problems.push('未识别到版本号（可改用手动输入）')
   const s = target.server || {}
@@ -326,7 +402,17 @@ async function run(projectId, targetId) {
     const t0 = Date.now()
     const ver = resolveVersion(project)
     record.version = ver.version
+    const mode = deployModeOf(project)
     const problems = preCheckLocal(project, target, ver.version)
+    if (mode === 'docker') {
+      const rc = resolveCompose(project)
+      if (rc.fallback) log('warn', `配置的 Compose 文件不存在，自动改用项目根下的 ${rc.file}`)
+    }
+    let artifact = null
+    if (!problems.length && mode === 'script') {
+      artifact = resolveArtifact(project, ver.version)
+      if (!artifact.ok) problems.push(artifact.problem)
+    }
     if (problems.length) {
       for (const p of problems) log('error', p)
       tracker.end('check', 'failed', t0)
@@ -345,20 +431,34 @@ async function run(projectId, targetId) {
       log('info', `数据同步已启用：${dataSyncCfg.localDir} → ${dataSyncCfg.remoteDir}`)
     }
     log('info', `开始发布 ${project.name} ${ver.version} → ${target.name}（${target.server.host}）`)
-    log('success', `项目检查通过（版本来源: ${ver.source}）`)
+    log('success', `项目检查通过（版本来源: ${ver.source}${mode === 'script' ? '，脚本部署形态' : ''}）`)
     tracker.end('check', 'success', t0)
 
-    // ── 阶段 2：生成 ZIP ─────────────────────────────
+    // ── 阶段 2：生成 ZIP（docker 形态）/ 定位发布包（script 形态） ──
     tracker.begin('package')
     const t1 = Date.now()
-    log('info', '正在生成发布包……')
-    pack = await packager.buildPackage({
-      projectDir: project.localPath,
-      appName: project.name,
-      version: ver.version,
-      onProgress: (count) => emit('deploy:progress', { kind: 'package', count }),
-    })
-    log('success', `ZIP 生成完成：${pack.fileName}（${(pack.sizeBytes / 1024 / 1024).toFixed(1)} MB，${pack.fileCount} 个文件）`)
+    if (mode === 'script') {
+      const sizeMb = (artifact.sizeBytes / 1024 / 1024).toFixed(1)
+      log('info', `计算发布包校验和：${artifact.fileName} ……`)
+      pack = {
+        fileName: artifact.fileName,
+        zipPath: artifact.filePath,
+        sizeBytes: artifact.sizeBytes,
+        fileCount: 0,
+        sha256: await sha256File(artifact.filePath),
+        keepLocal: true, // 产物目录是用户的构建结果，发布后不删除
+      }
+      log('success', `发布包就绪：${artifact.fileName}（${sizeMb} MB）`)
+    } else {
+      log('info', '正在生成发布包……')
+      pack = await packager.buildPackage({
+        projectDir: project.localPath,
+        appName: project.name,
+        version: ver.version,
+        onProgress: (count) => emit('deploy:progress', { kind: 'package', count }),
+      })
+      log('success', `ZIP 生成完成：${pack.fileName}（${(pack.sizeBytes / 1024 / 1024).toFixed(1)} MB，${pack.fileCount} 个文件）`)
+    }
     tracker.end('package', 'success', t1)
 
     // ── 阶段 3：连接 + 上传 ─────────────────────────
@@ -387,8 +487,11 @@ async function run(projectId, targetId) {
     await uploadTextFile(conn, readDeployScript(), scriptRemote)
     log('success', '部署脚本已就绪')
 
-    // 查询当前线上版本（供历史记录与结果展示）
-    const cur = await ssh.exec(conn, `readlink ${quoteArg(ssh.remoteJoin(remoteHome, 'current'))} 2>/dev/null || true`)
+    // 查询当前线上版本（供历史记录与结果展示；docker=current 软链接，script=CURRENT 指针文件）
+    const curCmd = mode === 'script'
+      ? `cat ${quoteArg(ssh.remoteJoin(remoteHome, 'CURRENT'))} 2>/dev/null`
+      : `readlink ${quoteArg(ssh.remoteJoin(remoteHome, 'current'))} 2>/dev/null`
+    const cur = await ssh.exec(conn, `${curCmd} || true`)
     resultBox.oldVersion = cur.stdout.trim().split('/').pop() || ''
     record.oldVersion = resultBox.oldVersion
     if (resultBox.oldVersion) log('info', `线上当前版本: ${resultBox.oldVersion}`)
@@ -411,15 +514,21 @@ async function run(projectId, targetId) {
     const res = await ssh.exec(conn, cmd, (chunk) => pipeScriptOutput(chunk, tracker, resultBox))
 
     if (resultBox.ok && res.code === 0) {
-      // 补齐脚本未显式标记的阶段为成功（例如未启用健康检查）
-      for (const s of ['extract', 'build', 'start']) {
-        if (tracker.state[s].status === 'waiting') tracker.end(s, 'success')
+      // 补齐脚本未显式标记的阶段（backup/health 可能仍处于 running，统一收尾）
+      for (const s of ['backup', 'extract', 'build', 'start', 'health']) {
+        const st = tracker.state[s] ? tracker.state[s].status : ''
+        if (st === 'running') tracker.end(s, 'success')
+        else if (st === 'waiting') {
+          // 脚本模式：build（无 Docker 构建）与 backup（项目脚本自备份）显示跳过
+          const skipped = s === 'health' || (mode === 'script' && (s === 'build' || s === 'backup'))
+          tracker.end(s, skipped ? 'skipped' : 'success')
+        }
       }
-      if (tracker.state.health.status === 'waiting') tracker.end('health', 'skipped')
-      if (tracker.state.backup.status === 'waiting') tracker.end('backup', 'skipped')
       log('success', `发布成功：${ver.version}`)
-      // 成功后删除本地临时 zip
-      try { fs.unlinkSync(pack.zipPath) } catch { /* 清理失败不影响结果 */ }
+      // 成功后删除本地临时 zip（脚本形态的产物包保留）
+      if (!pack.keepLocal) {
+        try { fs.unlinkSync(pack.zipPath) } catch { /* 清理失败不影响结果 */ }
+      }
 
       // ── 阶段 9：数据同步（可选，发布成功后推送本地数据到服务器共享目录） ──
       if (dataSyncCfg.enabled && !resultBox.rolledBack) {
@@ -505,8 +614,8 @@ async function run(projectId, targetId) {
     ssh.close(conn)
     logSink = null
     if (activeRun && activeRun.id === runId) activeRun = null
-    // 清理本地残留 zip（失败场景；成功路径已在 finish 前删除）
-    try { if (pack && fs.existsSync(pack.zipPath)) fs.unlinkSync(pack.zipPath) } catch { /* noop */ }
+    // 清理本地残留 zip（失败场景；成功路径已在 finish 前删除；脚本形态产物包保留）
+    try { if (pack && !pack.keepLocal && fs.existsSync(pack.zipPath)) fs.unlinkSync(pack.zipPath) } catch { /* noop */ }
   }
 }
 
@@ -544,9 +653,9 @@ async function connectTarget(projectId, targetId) {
   return { project, target, conn }
 }
 
-/** 测试连接：返回服务器环境信息（Docker/Compose/unzip/磁盘） */
+/** 测试连接：返回服务器环境信息（Docker/Compose/unzip/tar/java/磁盘） */
 async function testConnection(projectId, targetId) {
-  const { target, conn } = await connectTarget(projectId, targetId)
+  const { project, target, conn } = await connectTarget(projectId, targetId)
   try {
     const cmd = [
       'echo __CONN_OK__',
@@ -554,6 +663,8 @@ async function testConnection(projectId, targetId) {
       'docker --version 2>&1 || echo DOCKER_MISSING',
       'docker compose version 2>&1 || echo COMPOSE_MISSING',
       'unzip -v 2>/dev/null | head -1 || echo UNZIP_MISSING',
+      'tar --version 2>/dev/null | head -1 || echo TAR_MISSING',
+      'java -version 2>&1 | head -1 || echo JAVA_MISSING',
       'df -h / | tail -1',
     ].join('; ')
     const res = await ssh.exec(conn, cmd)
@@ -565,6 +676,8 @@ async function testConnection(projectId, targetId) {
       docker: /DOCKER_MISSING/.test(out) ? '' : grab(/(Docker version [^\n]+)/),
       compose: /COMPOSE_MISSING/.test(out) ? '' : grab(/(Docker Compose version [^\n]+)/),
       unzip: /UNZIP_MISSING/.test(out) ? '' : '已安装',
+      tar: /TAR_MISSING/.test(out) ? '' : '已安装',
+      java: /JAVA_MISSING/.test(out) ? '' : (out.match(/(openjdk|java) version[^\n]*/i) || [''])[0],
       disk: grab(/(\d+%)\s+\/\s*$/m) || grab(/\/\s+(\d+%)$/m),
     }
   } finally {
@@ -572,13 +685,18 @@ async function testConnection(projectId, targetId) {
   }
 }
 
-/** 服务器 releases 目录列表 + 当前指向（方案 §19/§20 的版本管理基础） */
+/** 服务器 releases 目录列表 + 当前指向（方案 §19/§20 的版本管理基础）
+ *  docker 形态：current 软链接；script 形态：CURRENT 指针文件（内容 = release 目录名） */
 async function listReleases(projectId, targetId) {
-  const { target, conn } = await connectTarget(projectId, targetId)
+  const { project, target, conn } = await connectTarget(projectId, targetId)
   const home = target.remotePath
+  const mode = deployModeOf(project)
   try {
+    const curCmd = mode === 'script'
+      ? `cat ${quoteArg(ssh.remoteJoin(home, 'CURRENT'))} 2>/dev/null`
+      : `readlink ${quoteArg(ssh.remoteJoin(home, 'current'))} 2>/dev/null`
     const res = await ssh.exec(conn,
-      `ls -1 ${quoteArg(ssh.remoteJoin(home, 'releases'))} 2>/dev/null; echo __CUR__$(readlink ${quoteArg(ssh.remoteJoin(home, 'current'))} 2>/dev/null)`)
+      `ls -1 ${quoteArg(ssh.remoteJoin(home, 'releases'))} 2>/dev/null; echo __CUR__$(${curCmd})`)
     const lines = (res.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)
     const curIdx = lines.findIndex((l) => l.startsWith('__CUR__'))
     const current = curIdx >= 0 ? lines[curIdx].replace('__CUR__', '').split('/').pop() : ''
@@ -757,7 +875,13 @@ async function rollback(projectId, version, targetId) {
     if (!/Y/.test(has.stdout)) {
       await uploadTextFile(conn, readDeployScript(), scriptRemote)
     }
-    const args = ['rollback', '--app', project.name, '--home', home, '--version', version]
+    const args = [
+      'rollback', '--mode', deployModeOf(project),
+      '--app', project.name, '--home', home, '--version', version,
+    ]
+    if (deployModeOf(project) === 'docker') {
+      args.push('--compose', resolveCompose(project).file)
+    }
     if (h.enabled && h.url) {
       args.push('--health-url', h.url, '--health-timeout', String(h.timeout || 90), '--health-interval', String(h.interval || 3))
     } else {
@@ -788,6 +912,7 @@ module.exports = {
   run, cancel, isBusy, testConnection, listReleases, rollback,
   listDbBackups, restoreDbBackup, assertDbBackupName,
   setEmitter, STAGES, resolveVersion, buildDeployArgs,
+  resolveCompose, resolveArtifact, sha256File, deployModeOf,
   getDataSync, validateDataSync, buildDataSyncCommand,
   getDataImport, renderImportCommand,
 }
