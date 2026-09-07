@@ -318,8 +318,13 @@
       <div class="ai-manager">
         <div class="ai-form">
           <div class="ai-row">
+            <span class="ai-label">上班时间</span>
+            <el-time-select v-model="state.config.zentao.workStart" start="06:00" end="13:00" step="00:15" style="width: 120px" />
+            <span class="ai-hint">实际上班时间的默认值；一键填报页可按天临时调整</span>
+          </div>
+          <div class="ai-row">
             <span class="ai-label">下班时间</span>
-            <el-time-select v-model="state.config.zentao.workEnd" start="16:00" end="21:00" step="00:30" style="width: 130px" />
+            <el-time-select v-model="state.config.zentao.workEnd" start="16:00" end="21:00" step="00:30" style="width: 120px" />
             <span class="ai-hint">补填历史日期时工时算到下班；填报今天一律算到点击「生成报告」的时刻（含加班）</span>
           </div>
           <div class="ai-row">
@@ -336,7 +341,7 @@
           </el-button>
         </div>
         <div class="ai-hint ai-note">
-          总工时从当天首条提交开始计时（迟到不计时），到点击「生成报告」的时刻（补填历史日期则到下班时间），扣午休后按 0.5 小时向下取整；各项目按当天提交条数占比分配总工时（与提交时刻无关），合计恒等于总工时。
+          总工时 = 实际上班时间（页面填写）→ 点击「生成报告」的时刻（补填历史日期则到下班时间），扣午休后按 0.5 小时向下取整；git 提交时刻不参与工时，各项目按当天提交条数占比分配总工时，合计恒等于总工时。
         </div>
       </div>
     </el-card>

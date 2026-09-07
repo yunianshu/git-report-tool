@@ -36,6 +36,7 @@ export const state = reactive({
     zentao: {
       baseUrl: '',
       account: '',
+      workStart: '08:30',
       workEnd: '17:30',
       lunchStart: '12:00',
       lunchEnd: '13:00',
@@ -78,6 +79,7 @@ export const state = reactive({
   fillReport: {
     plan: null, // 最近一次 fill:plan 结果（planned/tasks/bindings 等）
     date: '', // 填报日期 YYYY-MM-DD
+    startTime: '', // 实际上班时间 HH:MM（空则用设置页默认）
     running: false, // 生成/提交进行中
     submitting: false,
   },

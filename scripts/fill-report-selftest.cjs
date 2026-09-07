@@ -79,7 +79,7 @@ await test('单项目：总工时 = 首条提交→终点 扣午休整体取整'
   const list = fill.distributeByProject([
     { time: '09:46', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
     { time: '10:31', msg: 'fix: B', projectId: 'p1', projectName: 'P1' },
-  ], { endTime: '12:02' })
+  ], { startTime: '09:46', endTime: '12:02' })
   assert.strictEqual(list.length, 1)
   assert.strictEqual(list[0].hours, 2) // 136−2(午休重叠) = 134min → 120 = 2h
   assert.strictEqual(list[0].commitCount, 2)
@@ -92,7 +92,7 @@ await test('多项目：按提交条数比例分配总工时，总和守恒', ()
     { time: '09:00', msg: 'feat: A1', projectId: 'pA', projectName: 'ProjA' },
     { time: '11:00', msg: 'feat: B1', projectId: 'pB', projectName: 'ProjB' },
     { time: '15:00', msg: 'feat: A2', projectId: 'pA', projectName: 'ProjA' },
-  ], { endTime: '17:30' })
+  ], { startTime: '09:00', endTime: '17:30' })
   assert.strictEqual(list.length, 2)
   const a = list.find((g) => g.projectId === 'pA')
   const b = list.find((g) => g.projectId === 'pB')
@@ -110,7 +110,7 @@ await test('取整余量补给提交最多的项目，Σ 恒等于总工时', ()
     { time: '10:00', msg: 'b', projectId: 'p2', projectName: 'P2' },
     { time: '10:30', msg: 'b', projectId: 'p2', projectName: 'P2' },
     { time: '11:00', msg: 'c', projectId: 'p3', projectName: 'P3' },
-  ], { endTime: '12:30' })
+  ], { startTime: '09:00', endTime: '12:30' })
   assert.strictEqual(round2of(list.reduce((s, g) => s + g.hours, 0)), 3)
   const p3 = list.find((g) => g.projectId === 'p3')
   assert.strictEqual(p3.hours, 0.5) // 3×1/5 = 0.6 → 0.5h
@@ -121,16 +121,25 @@ await test('取整余量补给提交最多的项目，Σ 恒等于总工时', ()
 await test('工时不足 0.5h 时记 0', () => {
   const list = fill.distributeByProject([
     { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
-  ], { endTime: '09:20' }) // 20min → 0
+  ], { startTime: '09:00', endTime: '09:20' }) // 20min → 0
   assert.strictEqual(list.length, 1)
   assert.strictEqual(list[0].hours, 0)
 })
 
-await test('用户场景复现：09:30 首条（迟到 1h）→ 17:05 当前 = 6.5h', () => {
+await test('用户场景复现：9:30 实际到岗 → 19:03 点击生成 = 8.5h（与提交时刻无关）', () => {
+  const list = fill.distributeByProject([
+    { time: '09:46', msg: 'feat: A', projectId: 'p1', projectName: 'P1' }, // 首条提交晚于到岗，不影响起点
+    { time: '15:00', msg: 'fix: B', projectId: 'p1', projectName: 'P1' },
+  ], { startTime: '09:30', endTime: '19:03' })
+  // 09:30→19:03 = 573min − 60min 午休 = 513 → 510 = 8.5h
+  assert.strictEqual(list[0].hours, 8.5)
+})
+
+await test('用户场景：09:30 起点 → 17:05 当前 = 6.5h', () => {
   const list = fill.distributeByProject([
     { time: '09:30', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
     { time: '15:00', msg: 'fix: B', projectId: 'p1', projectName: 'P1' },
-  ], { endTime: '17:05' })
+  ], { startTime: '09:30', endTime: '17:05' })
   assert.strictEqual(list[0].hours, 6.5) // 455−60 = 395min → 390 = 6.5h
 })
 
@@ -556,6 +565,7 @@ if (gitOk()) {
     store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
     const r = await fill.plan({
       date: pastDayStr,
+      startTime: '09:12', // 实际上班时间（与首条提交时刻恰好相同，仅作对照）
       projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
     })
     assert.ok(r.ztError)
@@ -566,6 +576,18 @@ if (gitOk()) {
     assert.strictEqual(r.rangeEnd, '17:30')
     assert.strictEqual(r.planned[0].work, '1. 完成订单模块\n2. 修复库存同步') // feat:/fix: 前缀已剥离
     assert.strictEqual(r.unmatchedProjects.length, 1) // 有提交但未绑定
+  })
+
+  await test('plan 起点与提交时刻无关：startTime 早于首条提交时多计时', async () => {
+    store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
+    const r = await fill.plan({
+      date: pastDayStr,
+      startTime: '08:30', // 早于首条提交 09:12
+      projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
+    })
+    // 08:30→17:30 = 540−60 = 480 = 8h
+    assert.strictEqual(r.planned[0].hours, 8)
+    assert.strictEqual(r.rangeStart, '08:30')
   })
 } else {
   console.log('  （git 不可用，跳过真实仓库集成用例）')

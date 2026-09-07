@@ -18,10 +18,9 @@ const zentao = require('./zentao-service')
 const hanprint = require('./hanprint-service')
 
 // ─── 工时计算（纯函数） ───
-// 语义：工时与 git 提交时刻无关——总工时 = 当天首条提交（实际上班的近似，迟到不计时）
-// → 终点（填报今天为点击生成报告的时刻，含加班时段；补填历史日期为下班时间），
-// 扣午休后按 0.5 小时整体向下取整；各项目按提交条数占总数的比例分配总工时
-//（0.5h 取整、总和守恒）。
+// 语义：工时与 git 提交时刻完全无关——总工时 = 页面填写的实际上班时间 → 终点
+//（填报今天为点击生成报告的时刻，含加班；补填历史日期为下班时间），扣午休后按
+// 0.5 小时整体向下取整；各项目按提交条数占总数的比例分配总工时（0.5h 取整、总和守恒）。
 
 function hm(s) {
   const [h, m] = String(s).split(':').map(Number)
@@ -64,15 +63,15 @@ function stripPrefix(subject) {
 
 /**
  * 工时分配（与提交时刻无关）：
- * - 总工时 = workMinutes(首条提交时刻, endTime) 扣午休后按 step 整体取整
+ * - 总工时 = workMinutes(实际上班时间, endTime) 扣午休后按 step 整体取整
  * - 各项目工时 = 总工时 × 该项目提交数 / 总提交数，0.5h 向下取整；
  *   余量补给提交最多的项目，保证 Σ = 总工时
  * - 说明 = 去类型前缀的编号列表（同活动报告复制格式）
  */
-function distributeByProject(commits, { endTime, lunchStart, lunchEnd, step = 30 } = {}) {
+function distributeByProject(commits, { startTime, endTime, lunchStart, lunchEnd, step = 30 } = {}) {
   const sorted = [...(commits || [])].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
   if (!sorted.length) return []
-  const totalMin = workMinutes(hm(sorted[0].time), hm(endTime || '17:30'), hm(lunchStart || '12:00'), hm(lunchEnd || '13:00'))
+  const totalMin = workMinutes(hm(startTime || '08:30'), hm(endTime || '17:30'), hm(lunchStart || '12:00'), hm(lunchEnd || '13:00'))
   const totalHours = round2(Math.floor(totalMin / step) * step / 60)
 
   const groups = new Map()
@@ -325,7 +324,7 @@ function buildHpItems(tasks, groups, date) {
 
 /**
  * 生成填报计划：收集提交 → 计算工时 → 匹配绑定 → 拉取禅道任务（容错）→ 汇总。
- * payload: { date: 'YYYY-MM-DD', projects: [{ id, name, repos: string[] }] }
+ * payload: { date: 'YYYY-MM-DD', startTime: 'HH:MM'（实际上班时间）, projects: [{ id, name, repos: string[] }] }
  */
 async function plan(payload) {
   const { date, projects } = payload || {}
@@ -341,8 +340,10 @@ async function plan(payload) {
   const identitiesMissing = !identities.length
   const commits = identitiesMissing ? [] : await collectTimedCommits(projects, { date, identities })
 
-  // 总工时区间 = 首条提交（迟到不计时）→ 终点（今天为点击生成报告的时刻，历史日期为下班时间）；
-  // 工时与提交时刻无关，按提交条数比例分配到项目
+  // 总工时区间 = 页面填写的实际上班时间 → 终点（今天为点击生成报告的时刻，历史日期为下班时间）；
+  // git 提交时刻只用于收集内容与计数，不参与工时
+  const workStart = String(payload.startTime || (cfg.zentao && cfg.zentao.workStart) || '08:30')
+  if (!/^\d{1,2}:\d{2}$/.test(workStart)) throw new Error('实际上班时间格式不正确（应为 HH:MM）')
   const workEnd = (cfg.zentao && cfg.zentao.workEnd) || '17:30'
   const workCfg = {
     lunchStart: (cfg.zentao && cfg.zentao.lunchStart) || '12:00',
@@ -350,8 +351,8 @@ async function plan(payload) {
     workEnd,
   }
   const endTime = resolveEndTime(date, workEnd)
-  const planned = distributeByProject(commits, { ...workCfg, endTime })
-  const rangeStart = commits.length ? commits[0].time : ''
+  const planned = distributeByProject(commits, { startTime: workStart, endTime, ...workCfg })
+  const rangeStart = workStart
 
   const bindings = listBindings()
   const zentaoConfigured = !!(cfg.zentao && cfg.zentao.baseUrl && cfg.zentao.account && store.getZentaoPwd())

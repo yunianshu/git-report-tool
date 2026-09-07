@@ -18,6 +18,13 @@
           :shortcuts="dateShortcuts"
           style="width: 150px"
         />
+        <el-time-select
+          v-model="startTime"
+          start="06:00" end="13:00" step="00:15"
+          :clearable="false"
+          placeholder="上班时间"
+          style="width: 108px"
+        />
         <el-select
           v-model="selectedProjectIds"
           multiple
@@ -109,7 +116,7 @@
       <el-card shadow="never" class="card">
         <template #header>
           <div class="card-header">
-            <span>提交明细 · {{ plan.date }}（{{ plan.rangeStart || '—' }}–{{ plan.rangeEnd }}，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}，{{ plan.workConfig.workEnd }} 下班）</span>
+            <span>提交明细 · {{ plan.date }}（{{ plan.rangeStart }}–{{ plan.rangeEnd }}，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}）</span>
             <span class="header-meta">{{ plan.planned.length }} 个项目 · {{ plan.commitCount }} 条提交 · 合计 {{ totalHours }}h</span>
           </div>
         </template>
@@ -259,6 +266,11 @@ const fillDate = computed({
   get: () => state.fillReport.date || todayStr(),
   set: (v) => { state.fillReport.date = v },
 })
+/** 实际上班时间（默认取设置页配置，可按天临时调整） */
+const startTime = computed({
+  get: () => state.fillReport.startTime || (state.config.zentao?.workStart || '08:30'),
+  set: (v) => { state.fillReport.startTime = v },
+})
 const plan = computed(() => state.fillReport.plan)
 
 const zentaoConfigured = computed(() => {
@@ -309,6 +321,7 @@ async function generate() {
   try {
     const payload = {
       date: fillDate.value,
+      startTime: startTime.value,
       projects: chosen.map((p) => ({
         id: p.id,
         name: p.name,
