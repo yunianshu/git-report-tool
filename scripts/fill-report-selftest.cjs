@@ -40,6 +40,8 @@ const { ZentaoClient, parseJsonPrefix, md5 } = require('../electron/zentao-servi
 const { HanprintClient } = require('../electron/hanprint-service')
 const store = require('../electron/store')
 
+function round2of(n) { return Math.round(n * 100) / 100 }
+
 // ── fake fetch 工具：把 handler 的静态返回包装成最小 Response ──
 function makeResp({ status = 200, body = '', setCookies = [], location = null }) {
   return {
@@ -63,7 +65,7 @@ function fakeFetch(handler) {
 
 // ═══════════ 工时计算 ═══════════
 async function main() {
-console.log('工时计算（首条提交开始计时 + 尾段到下班/当前时刻）:')
+console.log('工时计算（总工时 + 按提交数比例分配，与提交时刻无关）:')
 
 await test('workMinutes 扣除午休重叠', () => {
   const lunchS = 12 * 60, lunchE = 13 * 60
@@ -73,66 +75,63 @@ await test('workMinutes 扣除午休重叠', () => {
   assert.strictEqual(fill.workMinutes(14 * 60, 13 * 60, lunchS, lunchE), 0) // 倒序
 })
 
-await test('首条提交为 0 段（迟到不计时）', () => {
-  const segs = fill.computeSegments([{ time: '09:12', msg: 'a', projectId: 'p1', projectName: 'P1' }])
-  assert.strictEqual(segs.length, 1)
-  assert.strictEqual(segs[0].hours, 0)
-  assert.strictEqual(segs[0].rawMinutes, 0)
+await test('单项目：总工时 = 首条提交→终点 扣午休整体取整', () => {
+  const list = fill.distributeByProject([
+    { time: '09:46', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
+    { time: '10:31', msg: 'fix: B', projectId: 'p1', projectName: 'P1' },
+  ], { endTime: '12:02' })
+  assert.strictEqual(list.length, 1)
+  assert.strictEqual(list[0].hours, 2) // 136−2(午休重叠) = 134min → 120 = 2h
+  assert.strictEqual(list[0].commitCount, 2)
+  assert.strictEqual(list[0].work, '1. A\n2. B')
 })
 
-await test('提交间隔扣午休并 0.5h 向下取整（2.3h 记 2h）', () => {
-  const segs = fill.computeSegments([
+await test('多项目：按提交条数比例分配总工时，总和守恒', () => {
+  // 总工时 09:00→17:30 扣 1h 午休 = 7.5h；A 2 条、B 1 条 → A 5h、B 2.5h
+  const list = fill.distributeByProject([
+    { time: '09:00', msg: 'feat: A1', projectId: 'pA', projectName: 'ProjA' },
+    { time: '11:00', msg: 'feat: B1', projectId: 'pB', projectName: 'ProjB' },
+    { time: '15:00', msg: 'feat: A2', projectId: 'pA', projectName: 'ProjA' },
+  ], { endTime: '17:30' })
+  assert.strictEqual(list.length, 2)
+  const a = list.find((g) => g.projectId === 'pA')
+  const b = list.find((g) => g.projectId === 'pB')
+  assert.strictEqual(a.hours, 5)
+  assert.strictEqual(b.hours, 2.5)
+  assert.strictEqual(round2of(a.hours + b.hours), 7.5)
+})
+
+await test('取整余量补给提交最多的项目，Σ 恒等于总工时', () => {
+  // 总工时 09:00→12:30 扣午休重叠 30min = 180min → 3h；5 条提交分 2:2:1 →
+  // 1.2/1.2/0.6 → 取整 1/1/0.5，余 0.5 补给提交最多的（并列取其一）
+  const list = fill.distributeByProject([
     { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
-    { time: '11:18', msg: 'b', projectId: 'p1', projectName: 'P1' }, // 138min → 120
-  ])
-  assert.strictEqual(segs[1].hours, 2)
+    { time: '09:30', msg: 'a', projectId: 'p1', projectName: 'P1' },
+    { time: '10:00', msg: 'b', projectId: 'p2', projectName: 'P2' },
+    { time: '10:30', msg: 'b', projectId: 'p2', projectName: 'P2' },
+    { time: '11:00', msg: 'c', projectId: 'p3', projectName: 'P3' },
+  ], { endTime: '12:30' })
+  assert.strictEqual(round2of(list.reduce((s, g) => s + g.hours, 0)), 3)
+  const p3 = list.find((g) => g.projectId === 'p3')
+  assert.strictEqual(p3.hours, 0.5) // 3×1/5 = 0.6 → 0.5h
+  const big = list.filter((g) => g.projectId !== 'p3')
+  assert.strictEqual(round2of(big[0].hours + big[1].hours), 2.5) // 1.5 + 1（余量补给并列最多者其一）
 })
 
-await test('跨午休的提交间隔自动扣午休', () => {
-  const segs = fill.computeSegments([
+await test('工时不足 0.5h 时记 0', () => {
+  const list = fill.distributeByProject([
     { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
-    { time: '14:00', msg: 'b', projectId: 'p1', projectName: 'P1' },
-  ])
-  // 09:00→14:00 = 300min，扣 60min 午休 = 240 → 4h
-  assert.strictEqual(segs[1].hours, 4)
-})
-
-await test('未传午休参数时默认按 1 小时（12:00–13:00）扣除', () => {
-  const segs = fill.computeSegments([
-    { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
-    { time: '14:00', msg: 'b', projectId: 'p1', projectName: 'P1' },
-  ])
-  assert.strictEqual(segs[1].hours, 4)
-})
-
-await test('尾段归最后一条提交的项目且标记 virtual', () => {
-  const segs = fill.computeSegments([
-    { time: '09:00', msg: 'a', projectId: 'pA', projectName: 'ProjA' },
-    { time: '10:00', msg: 'b', projectId: 'pB', projectName: 'ProjB' },
-  ], { endTime: '12:00' })
-  assert.strictEqual(segs.length, 3)
-  assert.strictEqual(segs[2].virtual, true)
-  assert.strictEqual(segs[2].projectId, 'pB')
-  assert.strictEqual(segs[2].hours, 2) // 10:00→12:00 无午休重叠
-})
-
-await test('尾段跨午休自动扣除', () => {
-  const segs = fill.computeSegments([{ time: '11:00', msg: 'a', projectId: 'p1', projectName: 'P1' }], { endTime: '14:00' })
-  assert.strictEqual(segs[1].hours, 2) // 180min − 60min 午休
+  ], { endTime: '09:20' }) // 20min → 0
+  assert.strictEqual(list.length, 1)
+  assert.strictEqual(list[0].hours, 0)
 })
 
 await test('用户场景复现：09:30 首条（迟到 1h）→ 17:05 当前 = 6.5h', () => {
-  const segs = fill.computeSegments([
+  const list = fill.distributeByProject([
     { time: '09:30', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
     { time: '15:00', msg: 'fix: B', projectId: 'p1', projectName: 'P1' },
   ], { endTime: '17:05' })
-  const agg = fill.aggregateByProject(segs)
-  // 09:30→15:00 = 330−60 = 270 → 4.5h；15:00→17:05 = 125 → 120 = 2h；合计 6.5h
-  assert.strictEqual(agg[0].hours, 6.5)
-  assert.strictEqual(agg[0].firstTime, '09:30')
-  assert.strictEqual(agg[0].lastTime, '17:05')
-  assert.strictEqual(agg[0].commitCount, 2) // virtual 尾段不进编号列表
-  assert.strictEqual(agg[0].work, '1. A\n2. B')
+  assert.strictEqual(list[0].hours, 6.5) // 455−60 = 395min → 390 = 6.5h
 })
 
 await test('resolveEndTime：今天未到下班返回当前时刻', () => {
@@ -144,17 +143,6 @@ await test('resolveEndTime：今天已过下班或历史日期返回下班时间
   assert.strictEqual(fill.resolveEndTime('2026-09-06', '17:30', new Date('2026-09-07T16:05:00')), '17:30')
 })
 
-await test('提交乱序输入时按时间升序切分', () => {
-  const segs = fill.computeSegments([
-    { time: '11:00', msg: 'late', projectId: 'p1', projectName: 'P1' },
-    { time: '09:00', msg: 'early', projectId: 'p1', projectName: 'P1' },
-  ])
-  assert.strictEqual(segs[0].msg, 'early')
-  assert.strictEqual(segs[0].hours, 0)
-  assert.strictEqual(segs[1].msg, 'late')
-  assert.strictEqual(segs[1].hours, 2) // 09:00→11:00 = 120min
-})
-
 // ═══════════ 按项目聚合（一个项目一条记录 + 简洁编号内容） ═══════════
 console.log('按项目聚合:')
 await test('stripPrefix 去掉 Conventional Commits 前缀', () => {
@@ -162,37 +150,6 @@ await test('stripPrefix 去掉 Conventional Commits 前缀', () => {
   assert.strictEqual(fill.stripPrefix('fix(parser): 修复解析'), '修复解析')
   assert.strictEqual(fill.stripPrefix('chore：中文冒号'), '中文冒号')
   assert.strictEqual(fill.stripPrefix('无前缀提交'), '无前缀提交')
-})
-
-await test('同项目多条提交聚合为一条：工时合计 + 编号列表内容', () => {
-  const segments = fill.computeSegments([
-    { time: '09:12', msg: 'feat: 完成订单模块', projectId: 'p1', projectName: 'P1' },
-    { time: '11:40', msg: 'fix: 修复库存同步', projectId: 'p1', projectName: 'P1' },
-  ], { endTime: '14:00' })
-  const agg = fill.aggregateByProject(segments)
-  assert.strictEqual(agg.length, 1)
-  // 中段 09:12→11:40 = 148min → 2h；尾段 11:40→14:00 = 140−60 = 80 → 60 = 1h；合计 3h
-  assert.strictEqual(agg[0].hours, 3)
-  assert.strictEqual(agg[0].commitCount, 2)
-  assert.strictEqual(agg[0].firstTime, '09:12')
-  assert.strictEqual(agg[0].lastTime, '14:00')
-  assert.strictEqual(agg[0].work, '1. 完成订单模块\n2. 修复库存同步')
-})
-
-await test('多项目穿插提交各自聚合，工时段归属不变', () => {
-  const segments = fill.computeSegments([
-    { time: '09:00', msg: 'feat: A1', projectId: 'pA', projectName: 'ProjA' },
-    { time: '10:00', msg: 'feat: B1', projectId: 'pB', projectName: 'ProjB' },
-    { time: '11:00', msg: 'feat: A2', projectId: 'pA', projectName: 'ProjA' },
-  ])
-  const agg = fill.aggregateByProject(segments)
-  assert.strictEqual(agg.length, 2)
-  const a = agg.find((x) => x.projectId === 'pA')
-  const b = agg.find((x) => x.projectId === 'pB')
-  assert.strictEqual(a.hours, 1) // 首条 0（迟到不计时）+ 10:00→11:00 段 1h
-  assert.strictEqual(b.hours, 1) // 09:00→10:00 段归 B1
-  assert.strictEqual(a.work, '1. A1\n2. A2')
-  assert.strictEqual(a.lastTime, '11:00')
 })
 
 // ═══════════ JSON 容错解析 ═══════════
@@ -594,8 +551,8 @@ if (gitOk()) {
     assert.strictEqual(commits.length, 0)
   })
 
-  await test('plan 端到端：真实提交 → 按项目聚合 → 汇总（不依赖禅道）', async () => {
-    // 不配置禅道：plan 应容错返回 ztError 而不抛异常；历史日期 → 尾段算到下班 17:30
+  await test('plan 端到端：真实提交 → 按提交数分配 → 汇总（不依赖禅道）', async () => {
+    // 不配置禅道：plan 应容错返回 ztError 而不抛异常；历史日期 → 终点为下班 17:30
     store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
     const r = await fill.plan({
       date: pastDayStr,
@@ -603,10 +560,10 @@ if (gitOk()) {
     })
     assert.ok(r.ztError)
     assert.strictEqual(r.planned.length, 1) // 一个项目一条记录
-    // 中段 09:12→11:40 = 148min → 2h；尾段 11:40→17:30 = 350−60 = 290 → 4.5h；合计 6.5h
-    assert.strictEqual(r.planned[0].hours, 6.5)
-    assert.strictEqual(r.planned[0].firstTime, '09:12')
-    assert.strictEqual(r.planned[0].lastTime, '17:30')
+    // 总工时 09:12→17:30 = 498−60 = 438min → 420 = 7h（单项目全部分配）
+    assert.strictEqual(r.planned[0].hours, 7)
+    assert.strictEqual(r.rangeStart, '09:12')
+    assert.strictEqual(r.rangeEnd, '17:30')
     assert.strictEqual(r.planned[0].work, '1. 完成订单模块\n2. 修复库存同步') // feat:/fix: 前缀已剥离
     assert.strictEqual(r.unmatchedProjects.length, 1) // 有提交但未绑定
   })

@@ -109,14 +109,13 @@
       <el-card shadow="never" class="card">
         <template #header>
           <div class="card-header">
-            <span>提交明细 · {{ plan.date }}（首条提交开始计时，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}，{{ plan.workConfig.workEnd }} 下班）</span>
+            <span>提交明细 · {{ plan.date }}（{{ plan.rangeStart || '—' }}–{{ plan.rangeEnd }}，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}，{{ plan.workConfig.workEnd }} 下班）</span>
             <span class="header-meta">{{ plan.planned.length }} 个项目 · {{ plan.commitCount }} 条提交 · 合计 {{ totalHours }}h</span>
           </div>
         </template>
         <div v-if="plan.planned.length" class="plan-list">
           <div v-for="(p, i) in plan.planned" :key="i" class="prow" :class="{ unbound: !p.taskId }">
             <div class="pline">
-              <span class="ptime">{{ p.firstTime }}–{{ p.lastTime }}</span>
               <span class="phours">{{ p.hours }}h</span>
               <span class="pmsg">
                 <pre class="pwork">{{ p.work }}</pre>
@@ -441,9 +440,9 @@ async function submitFill(preview) {
 
 function buildReportText() {
   const p = plan.value
-  const lines = [`一键填报 · ${p.date}`, `共 ${p.commitCount} 条提交 · ${p.planned.length} 个项目 · 合计 ${totalHours.value}h`, '']
+  const lines = [`一键填报 · ${p.date}`, `${p.rangeStart}–${p.rangeEnd} · 共 ${p.commitCount} 条提交 · ${p.planned.length} 个项目 · 合计 ${totalHours.value}h`, '']
   for (const item of p.planned) {
-    lines.push(`${item.firstTime}–${item.lastTime}  ${item.hours}h  [${item.projectName}]`)
+    lines.push(`${item.hours}h  [${item.projectName}]（${item.commitCount} 条提交）`)
     lines.push(item.work)
     lines.push('')
   }
@@ -515,19 +514,12 @@ async function copyReport() {
   gap: 12px;
   align-items: baseline;
 }
-.ptime {
-  font-family: var(--brand-mono, monospace);
-  font-size: 12.5px;
-  font-weight: 700;
-  color: #0e7a6d;
-  width: 108px;
-  flex-shrink: 0;
-}
 .phours {
   font-family: var(--brand-mono, monospace);
-  font-size: 12px;
-  color: #4a5160;
-  width: 48px;
+  font-size: 13px;
+  font-weight: 700;
+  color: #0e7a6d;
+  width: 52px;
   flex-shrink: 0;
 }
 .pmsg { flex: 1; min-width: 0; }
@@ -552,7 +544,7 @@ async function copyReport() {
   gap: 8px;
   align-items: center;
 }
-.prow.unbound .pmatch { padding-left: 120px; }
+.prow.unbound .pmatch { padding-left: 64px; }
 .sum-list .sumline {
   display: flex;
   justify-content: space-between;
