@@ -13,7 +13,7 @@ const packager = require('./packager')
 const projects = require('./deploy-projects')
 const history = require('./history')
 const store = require('../store')
-const { detectVersion } = require('./version-detector')
+const { detectVersion, bumpVersionFiles } = require('./version-detector')
 
 /** 服务端脚本随应用分发（asar 内也可 readFileSync） */
 const DEPLOY_SCRIPT_PATH = path.join(__dirname, 'scripts', 'deploy.sh')
@@ -274,6 +274,26 @@ function killTree(child) {
 }
 
 /**
+ * 自动打包前同步项目版本号：手动指定的发布版本与项目版本文件不一致时，
+ * 把项目内解析值等于旧版本的版本声明改写为发布版本——package.sh 等打包脚本
+ * 读的是项目内版本号，不同步则产物永远落后于发布版本、匹配必然失败。
+ * 自动识别版本即来自项目文件，天然一致，无需同步。返回日志文本（无需同步时为空）。
+ */
+function syncProjectVersionForPackage(project, ver) {
+  if (ver.source !== '手动输入') return ''
+  const cur = detectVersion(project.localPath)
+  if (!cur.version || cur.version === ver.version) return ''
+  if ((project.scriptMode || {}).autoBumpVersion === false) {
+    return `项目版本文件为 ${cur.version}（${cur.source}），与发布版本 ${ver.version} 不一致且未开启自动同步，打包产物可能不含目标版本`
+  }
+  const changed = bumpVersionFiles(project.localPath, cur.version, ver.version)
+  if (!changed.length) {
+    return `项目版本文件为 ${cur.version}（${cur.source}），与发布版本 ${ver.version} 不一致，且未能自动同步版本文件；打包产物可能不含目标版本`
+  }
+  return `已将项目版本 ${cur.version} → ${ver.version}（同步 ${changed.join('、')}；改动在本地工作区，请随代码提交）`
+}
+
+/**
  * 执行项目打包命令（script 形态产物缺失时自动构建）：
  * 在项目根以 shell 运行 packageCommand，输出按行流到发布日志（[打包] 前缀）；
  * 超时杀整棵进程树；用户取消时同样终止。返回 { ok, problem? }。
@@ -523,6 +543,8 @@ async function run(projectId, targetId) {
     const t1 = Date.now()
     if (mode === 'script') {
       if (!artifact) {
+        const syncNote = syncProjectVersionForPackage(project, ver)
+        if (syncNote) log('warn', syncNote)
         const pc = await runPackageCommand(project)
         if (!pc.ok) {
           log('error', pc.problem)
@@ -531,7 +553,12 @@ async function run(projectId, targetId) {
         }
         artifact = resolveArtifact(project, ver.version)
         if (!artifact.ok) {
-          const msg = `打包后仍无匹配产物：${artifact.problem}`
+          // 打包成功但版本仍不匹配时，指出项目版本文件与发布版本的偏差，给出可操作方向
+          const cur = detectVersion(project.localPath)
+          let msg = `打包后仍无匹配产物：${artifact.problem}`
+          if (cur.version && cur.version !== ver.version) {
+            msg += `；项目版本文件仍为 ${cur.version}（${cur.source}），与发布版本 ${ver.version} 不一致`
+          }
           log('error', msg)
           tracker.end('package', 'failed', t1)
           return finish('failed', msg)

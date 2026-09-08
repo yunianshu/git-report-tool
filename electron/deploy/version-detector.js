@@ -49,28 +49,15 @@ function fromPom(dir) {
 /** build.gradle(.kts)：version 'x.y.z' / version = "x.y.z" */
 function fromGradle(dir) {
   for (const name of ['build.gradle', 'build.gradle.kts']) {
-    const p = path.join(dir, name)
-    if (!fs.existsSync(p)) continue
-    try {
-      const text = fs.readFileSync(p, 'utf8')
-      const m = text.match(/^\s*version\s*=?\s*['"]([^'"]+)['"]/m)
-      if (m) return m[1].trim()
-    } catch { /* 继续尝试下一个 */ }
+    const v = fromGradleFile(path.join(dir, name))
+    if (v) return v
   }
   return ''
 }
 
 /** pubspec.yaml（Flutter）：version: 1.2.3(+build) */
 function fromPubspec(dir) {
-  const p = path.join(dir, 'pubspec.yaml')
-  if (!fs.existsSync(p)) return ''
-  try {
-    const text = fs.readFileSync(p, 'utf8')
-    const m = text.match(/^version:\s*(['"]?)([^'"\s]+)\1\s*$/m)
-    return m ? m[2].trim() : ''
-  } catch {
-    return ''
-  }
+  return fromPubspecFile(path.join(dir, 'pubspec.yaml'))
 }
 
 /** *.csproj（.NET）：<Version> 优先，其次 <VersionPrefix> / <AssemblyVersion> */
@@ -149,6 +136,139 @@ function fromSubdirs(dir) {
  * 检测项目版本号。
  * @returns {{ version: string, source: string }} source 标明来源，便于界面展示
  */
+function escapeRe(s) {
+  return String(s).replace(/[.*+?^${}()|[\]\\]/g, '\\$&')
+}
+
+/**
+ * 各版本文件的单处版本声明改写器：rewrite 收到未转义的旧版本值，
+ * 定位「被 detect 解析为版本」的那一处值并替换；无匹配时返回原文（调用方比较后决定是否写回）。
+ */
+const FILE_REWRITERS = [
+  {
+    file: 'VERSION',
+    detect: (dir) => { const p = path.join(dir, 'VERSION'); return fs.existsSync(p) ? readFirstLine(p) : '' },
+    rewrite: (text, oldV, nv) => text.replace(oldV, nv),
+  },
+  {
+    file: 'package.json',
+    detect: fromPackageJson,
+    rewrite: (text, oldV, nv) => text.replace(new RegExp(`("version"\\s*:\\s*")${escapeRe(oldV)}(")`), `$1${nv}$2`),
+  },
+  {
+    file: 'pom.xml',
+    detect: fromPom,
+    // 只替换 parent 块之后的第一个直属 <version>（与 fromPom 的定位一致）
+    rewrite: (text, oldV, nv) => {
+      const o = escapeRe(oldV)
+      const pm = text.match(/<parent>[\s\S]*?<\/parent>/)
+      const start = pm ? pm.index + pm[0].length : 0
+      const out = text.slice(start).replace(new RegExp(`(<version>\\s*)${o}(\\s*</version>)`), `$1${nv}$2`)
+      return out === text.slice(start) ? text : text.slice(0, start) + out
+    },
+  },
+  {
+    file: 'build.gradle',
+    detect: (dir) => fromGradleFile(path.join(dir, 'build.gradle')),
+    rewrite: rewriteGradleVersion,
+  },
+  {
+    file: 'build.gradle.kts',
+    detect: (dir) => fromGradleFile(path.join(dir, 'build.gradle.kts')),
+    rewrite: rewriteGradleVersion,
+  },
+  {
+    file: 'pubspec.yaml',
+    detect: (dir) => fromPubspecFile(path.join(dir, 'pubspec.yaml')),
+    rewrite: (text, oldV, nv) => text.replace(new RegExp(`(^version:\\s*['"]?)${escapeRe(oldV)}(['"]?\\s*$)`, 'm'), `$1${nv}$2`),
+  },
+]
+
+/** build.gradle(.kts)：version 'x.y.z' / version = "x.y.z"（与 fromGradle 同一定位） */
+function rewriteGradleVersion(text, oldV, nv) {
+  return text.replace(new RegExp(`(^([\\t ]*)version\\s*=?\\s*['"])${escapeRe(oldV)}(['"])`, 'm'), `$1${nv}$3`)
+}
+
+function fromGradleFile(p) {
+  if (!fs.existsSync(p)) return ''
+  const m = fs.readFileSync(p, 'utf8').match(/^\s*version\s*=?\s*['"]([^'"]+)['"]/m)
+  return m ? m[1].trim() : ''
+}
+
+function fromPubspecFile(p) {
+  if (!fs.existsSync(p)) return ''
+  const m = fs.readFileSync(p, 'utf8').match(/^version:\s*(['"]?)([^'"\s]+)\1\s*$/m)
+  return m ? m[2].trim() : ''
+}
+
+/** csproj 版本标签（与 fromCsproj 的候选顺序一致），返回改写后文本或原文 */
+function rewriteCsprojVersion(text, oldV, nv) {
+  const o = escapeRe(oldV)
+  for (const tag of ['Version', 'VersionPrefix', 'AssemblyVersion']) {
+    const re = new RegExp(`(<${tag}>\\s*)${o}(\\s*</${tag}>)`, 'i')
+    if (re.test(text)) return text.replace(re, `$1${nv}$2`)
+  }
+  return text
+}
+
+/**
+ * 把项目内版本声明同步到新版本：根目录与一级子目录（跳过依赖/产物目录）中，
+ * 解析值恰好等于 oldVersion 的版本文件改写为 newVersion（如根 VERSION 与 server/pom.xml 联动）。
+ * 只动版本声明处，parent / 依赖等其他版本号不受影响；返回改动的文件相对路径列表。
+ */
+function bumpVersionFiles(projectDir, oldVersion, newVersion) {
+  const changed = []
+  if (!projectDir || !oldVersion || !newVersion || !VERSION_RE.test(newVersion) || oldVersion === newVersion) {
+    return changed
+  }
+
+  const bumpInDir = (dir, prefix) => {
+    for (const spec of FILE_REWRITERS) {
+      const p = path.join(dir, spec.file)
+      let text
+      try {
+        if (!fs.existsSync(p)) continue
+        if (spec.detect(dir) !== oldVersion) continue
+        text = fs.readFileSync(p, 'utf8')
+      } catch { continue }
+      const out = spec.rewrite(text, oldVersion, newVersion)
+      if (out !== text) {
+        try {
+          fs.writeFileSync(p, out, 'utf8')
+          changed.push(prefix + spec.file)
+        } catch { /* 只读/被占用则跳过该文件 */ }
+      }
+    }
+    // *.csproj 可能多个，逐个尝试（值等于旧版本的标签才被替换）
+    let names = []
+    try {
+      names = fs.readdirSync(dir).filter((f) => f.toLowerCase().endsWith('.csproj'))
+    } catch { return }
+    for (const name of names) {
+      const p = path.join(dir, name)
+      try {
+        const text = fs.readFileSync(p, 'utf8')
+        const out = rewriteCsprojVersion(text, oldVersion, newVersion)
+        if (out !== text) {
+          fs.writeFileSync(p, out, 'utf8')
+          changed.push(prefix + name)
+        }
+      } catch { /* 尝试下一个 */ }
+    }
+  }
+
+  bumpInDir(projectDir, '')
+  // 一级子目录：前后端分离 / jar 在子模块的项目（Vantage 形态 = 根 VERSION + server/pom.xml）
+  try {
+    const subs = fs.readdirSync(projectDir, { withFileTypes: true })
+      .filter((e) => e.isDirectory() && !SUBDIR_SKIP.has(e.name))
+      .map((e) => e.name)
+      .sort()
+    for (const sub of subs) bumpInDir(path.join(projectDir, sub), `${sub}/`)
+  } catch { /* 项目根不可读时只处理根目录 */ }
+  return changed
+}
+
 function detectVersion(projectDir) {
   const dir = projectDir
   if (!dir || !fs.existsSync(dir) || !fs.statSync(dir).isDirectory()) {
@@ -178,4 +298,4 @@ function detectVersion(projectDir) {
   return { version: '', source: '' }
 }
 
-module.exports = { detectVersion }
+module.exports = { detectVersion, bumpVersionFiles }

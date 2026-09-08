@@ -46,9 +46,14 @@
             <el-input-number v-model="form.scriptMode.packageTimeoutSec" :min="30" :max="3600" controls-position="right" style="width: 110px" />
             <span class="f-mini">秒超时</span>
           </div>
+          <div class="f-row check-row">
+            <el-checkbox v-model="form.scriptMode.autoBumpVersion">打包前自动同步项目版本号</el-checkbox>
+          </div>
           <div class="f-hint">
             产物目录中没有匹配当前版本的发布包时，自动在项目根执行打包命令（构建日志流入发布日志，超时终止进程树）。
-            注意：发布版本以项目版本文件为准（如 VERSION），打包产物文件名需包含该版本号。
+            打包脚本通常读项目内版本号（如 VERSION），因此手动指定的发布版本与项目版本文件不一致时，
+            打包前会自动把项目内等于旧版本的版本声明（VERSION / package.json / pom.xml / build.gradle / pubspec.yaml）
+            升级为发布版本，产物文件名需包含发布版本号。
           </div>
           <div class="f-row check-row">
             <el-checkbox v-model="form.scriptMode.bootstrapJava">缺 Java 17 时自动安装</el-checkbox>

@@ -391,6 +391,122 @@ async function main() {
     passed += 1
     console.log('  ✓ deploy.sh 同版本守卫：改动任何服务器状态前直接失败、运行目录零改动')
 
+    // ── 11. 版本同步 bumpVersionFiles：各版本文件类型 + 不误伤其他版本号 ──
+    const { detectVersion, bumpVersionFiles } = require('../electron/deploy/version-detector')
+    const bumpDir = path.join(tmpRoot, 'bump-proj')
+    fs.mkdirSync(path.join(bumpDir, 'server'), { recursive: true })
+    fs.mkdirSync(path.join(bumpDir, 'app'), { recursive: true })
+    fs.mkdirSync(path.join(bumpDir, 'node_modules', 'lib'), { recursive: true })
+    fs.writeFileSync(path.join(bumpDir, 'VERSION'), '2.0.0\n')
+    fs.writeFileSync(path.join(bumpDir, 'package.json'), JSON.stringify({
+      name: 'root', version: '2.0.0', dependencies: { spring: '3.5.0' },
+    }, null, 2))
+    fs.writeFileSync(path.join(bumpDir, 'server', 'pom.xml'), [
+      '<?xml version="1.0"?>',
+      '<project>',
+      '  <parent>',
+      '    <groupId>org.springframework.boot</groupId>',
+      '    <version>3.5.0</version>',
+      '  </parent>',
+      '  <version>2.0.0</version>',
+      '</project>',
+    ].join('\n'))
+    fs.writeFileSync(path.join(bumpDir, 'server', 'build.gradle'), "group = 'demo'\nversion = '2.0.0'\n")
+    fs.writeFileSync(path.join(bumpDir, 'app', 'pubspec.yaml'), 'name: app\nversion: 2.0.0\n')
+    fs.writeFileSync(path.join(bumpDir, 'node_modules', 'lib', 'package.json'), '{"name":"lib","version":"2.0.0"}')
+    const bumped = bumpVersionFiles(bumpDir, '2.0.0', '2.0.1')
+    assert.deepStrictEqual(bumped.sort(), ['VERSION', 'package.json', 'server/build.gradle', 'server/pom.xml', 'app/pubspec.yaml'].sort(), `应同步全部版本声明: ${bumped}`)
+    assert.strictEqual(fs.readFileSync(path.join(bumpDir, 'VERSION'), 'utf8').trim(), '2.0.1')
+    const rootPkg = JSON.parse(fs.readFileSync(path.join(bumpDir, 'package.json'), 'utf8'))
+    assert.strictEqual(rootPkg.version, '2.0.1')
+    assert.strictEqual(rootPkg.dependencies.spring, '3.5.0', '依赖版本不受影响')
+    const pom = fs.readFileSync(path.join(bumpDir, 'server', 'pom.xml'), 'utf8')
+    assert.ok(pom.includes('<version>2.0.1</version>') && !pom.includes('<version>2.0.0</version>'), 'pom 直属版本应升级')
+    assert.ok(pom.includes('<parent>') && pom.includes('<version>3.5.0</version>'), 'pom parent 版本不受影响')
+    assert.strictEqual(fs.readFileSync(path.join(bumpDir, 'server', 'build.gradle'), 'utf8'), "group = 'demo'\nversion = '2.0.1'\n")
+    assert.ok(fs.readFileSync(path.join(bumpDir, 'app', 'pubspec.yaml'), 'utf8').includes('version: 2.0.1'), 'pubspec 版本（含 build number 整体）应升级')
+    assert.strictEqual(JSON.parse(fs.readFileSync(path.join(bumpDir, 'node_modules', 'lib', 'package.json'), 'utf8')).version, '2.0.0', 'node_modules 不扫描')
+    assert.deepStrictEqual(bumpVersionFiles(bumpDir, '2.0.0', '2.0.2'), [], '解析值不等于旧版本时零改动')
+    assert.deepStrictEqual(bumpVersionFiles(bumpDir, '2.0.1', '2.0.1'), [], '新旧版本相同零改动')
+    // Flutter 场景：仅 pubspec，版本含 build number —— 解析值含 +7 整体作为旧版本匹配并整体替换
+    const flutterDir = path.join(tmpRoot, 'flutter-app')
+    fs.mkdirSync(flutterDir, { recursive: true })
+    fs.writeFileSync(path.join(flutterDir, 'pubspec.yaml'), 'name: fa\nversion: 3.0.0+5\n')
+    assert.strictEqual(detectVersion(flutterDir).version, '3.0.0+5', 'detect 应解析出含 build number 的版本')
+    assert.deepStrictEqual(bumpVersionFiles(flutterDir, '3.0.0', '3.0.1'), [], '旧版本不含 build number 时不动 pubspec')
+    assert.deepStrictEqual(bumpVersionFiles(flutterDir, '3.0.0+5', '3.0.1'), ['pubspec.yaml'])
+    assert.ok(fs.readFileSync(path.join(flutterDir, 'pubspec.yaml'), 'utf8').includes('version: 3.0.1'), 'pubspec 应整体替换为发布版本')
+    passed += 1
+    console.log('  ✓ bumpVersionFiles：五类版本文件同步、parent/依赖/node_modules 不误伤、零改动幂等')
+
+    // ── 12. 手动版本自动同步 + 打包读项目版本：发布 5.0.1 时项目 5.0.0 联动升级 ──
+    const proj4Dir = path.join(tmpRoot, 'proj-bump')
+    fs.mkdirSync(path.join(proj4Dir, 'server'), { recursive: true })
+    fs.writeFileSync(path.join(proj4Dir, 'VERSION'), '5.0.0\n')
+    fs.writeFileSync(path.join(proj4Dir, 'server', 'pom.xml'), [
+      '<?xml version="1.0"?>',
+      '<project>',
+      '  <parent>',
+      '    <groupId>org.springframework.boot</groupId>',
+      '    <version>3.5.0</version>',
+      '  </parent>',
+      '  <version>5.0.0</version>',
+      '</project>',
+    ].join('\n'))
+    // fake 打包脚本：与 Vantage package.sh 同契约——读项目 VERSION 决定产物版本
+    fs.writeFileSync(path.join(proj4Dir, 'mkpkg.sh'), [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'cd -- "$(dirname -- "${BASH_SOURCE[0]}")"',
+      'ver="$(tr -d \'[:space:]\' < VERSION)"',
+      'name="app-v${ver}-301"',
+      'echo "[mkpkg] building v${ver} ..."',
+      'd=".staging/$name"; rm -rf -- "$d"; mkdir -p -- "$d"',
+      'cat > "$d/upgrade.sh" <<\'EOS\'',
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'SD="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"; IR="$INSTALL_ROOT"',
+      'echo "[fake-upgrade] $(cat "$IR/CURRENT" 2>/dev/null || echo none) -> $(basename -- "$SD")"',
+      'if [ -f "$IR/CURRENT" ]; then old="$(cat "$IR/CURRENT")"; [ -f "$IR/releases/$old/stop.sh" ] && INSTALL_ROOT="$IR" bash "$IR/releases/$old/stop.sh" || true; fi',
+      'printf \'%s\\n\' "$(basename -- "$SD")" > "$IR/CURRENT"',
+      'INSTALL_ROOT="$IR" bash "$SD/start.sh"',
+      'EOS',
+      'printf "%s\\n" \'#!/usr/bin/env bash\' \'SD="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"\' \'echo $$ > "$SD/app.pid"; touch "$SD/.started"\' > "$d/start.sh"',
+      'printf "%s\\n" \'#!/usr/bin/env bash\' \'SD="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"\' \'rm -f "$SD/.started"\' > "$d/stop.sh"',
+      'mkdir -p release',
+      '( cd -- .staging && tar -czf "../release/$name.tar.gz" "$name" )',
+      'echo "[mkpkg] done"',
+    ].join('\n'))
+    const mkProj = (manual, autoBump) => deployProjects.save(deployProjects.normalizeProject({
+      name: `版本同步项目-${manual}`, localPath: proj4Dir, deployMode: 'script',
+      scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh', packageCommand: 'bash mkpkg.sh', packageTimeoutSec: 60, autoBumpVersion: autoBump },
+      version: { strategy: 'manual', manual },
+      targets: [{
+        id: 't1', name: '生产', remotePath: REMOTE_HOME,
+        server: { host: '203.0.113.10', port: 22, username: 'root', authType: 'password' },
+        health: { enabled: false, url: '', timeout: 90, interval: 3 },
+      }],
+    }))
+    const proj4 = mkProj('5.0.1', undefined) // autoBumpVersion 未配置 → 默认开
+    const { record: recBump, events: evBump } = await runDeploy(proj4.id)
+    assert.strictEqual(recBump.status, 'success', `版本同步发布应成功: ${recBump.message}\n${evBump.logs.map((l) => l.text).join('\n')}`)
+    assert.strictEqual(recBump.version, '5.0.1')
+    assert.strictEqual(fs.readFileSync(path.join(proj4Dir, 'VERSION'), 'utf8').trim(), '5.0.1', '项目 VERSION 应被同步为发布版本')
+    const proj4Pom = fs.readFileSync(path.join(proj4Dir, 'server', 'pom.xml'), 'utf8')
+    assert.ok(proj4Pom.includes('<version>5.0.1</version>'), 'server/pom.xml 直属版本应联动升级')
+    assert.ok(proj4Pom.includes('<version>3.5.0</version>'), 'pom parent 版本不受影响')
+    assert.ok(evBump.logs.some((l) => l.text.includes('项目版本 5.0.0 → 5.0.1') && l.text.includes('VERSION、server/pom.xml')), '日志应说明同步了哪些文件')
+    assert.strictEqual(fs.readFileSync(path.join(SERVER_ROOT, 'CURRENT'), 'utf8').trim(), 'app-v5.0.1-301', '服务器应运行同步版本后的产物')
+    // 关闭自动同步：打包成功但产物版本落后 → 失败信息指出项目版本与发布版本的偏差
+    const proj5 = mkProj('6.0.0', false)
+    const { record: recNoBump } = await runDeploy(proj5.id)
+    assert.strictEqual(recNoBump.status, 'failed')
+    assert.ok(recNoBump.message.includes('打包后仍无匹配产物'), `消息应提示打包后无匹配产物: ${recNoBump.message}`)
+    assert.ok(recNoBump.message.includes('项目版本文件仍为 5.0.1（VERSION），与发布版本 6.0.0 不一致'), `消息应指出版本偏差: ${recNoBump.message}`)
+    deployProjects.remove(proj4.id); deployProjects.remove(proj5.id)
+    passed += 1
+    console.log('  ✓ 手动版本自动同步：VERSION+pom 联动升级→打包读新版本→发布成功；关闭同步时失败信息指出偏差')
+
     console.log(`\n脚本部署形态编排自测通过（${passed} 组断言）`)
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true })
