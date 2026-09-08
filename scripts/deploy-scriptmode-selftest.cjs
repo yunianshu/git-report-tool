@@ -295,6 +295,73 @@ async function main() {
     passed += 1
     console.log('  ✓ 环境引导：toolbox JDK/pg_dump 优先并正确导出给项目脚本')
 
+    // ── 9. 产物缺失自动打包：版本不匹配 + packageCommand → 子进程构建 → 发布成功 ──
+    const proj2Dir = path.join(tmpRoot, 'proj-autopkg')
+    fs.mkdirSync(path.join(proj2Dir, 'release'), { recursive: true })
+    fs.writeFileSync(path.join(proj2Dir, 'VERSION'), '2.0.0\n')
+    makeFakeArtifact(proj2Dir, 'app-v1.9.0-001', 'success') // 旧版本包（版本不匹配）
+    // fake 打包脚本：真实 tar 出 v2.0.0 发布包（与 makeFakeArtifact 同契约），并留执行标记
+    fs.writeFileSync(path.join(proj2Dir, 'mkpkg.sh'), [
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'cd -- "$(dirname -- "${BASH_SOURCE[0]}")"',
+      'echo "[mkpkg] building v2.0.0 ..."',
+      'touch .pkg-ran',
+      'name=app-v2.0.0-011',
+      'd=".staging/$name"; rm -rf -- "$d"; mkdir -p -- "$d"',
+      'cat > "$d/upgrade.sh" <<\'EOS\'',
+      '#!/usr/bin/env bash',
+      'set -euo pipefail',
+      'SD="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"; IR="$INSTALL_ROOT"',
+      'echo "[fake-upgrade] $(cat "$IR/CURRENT" 2>/dev/null || echo none) -> $(basename -- "$SD")"',
+      'echo "[env] java=$(command -v java 2>/dev/null || echo none) pgdump=${PG_DUMP:-none}"',
+      'if [ -f "$IR/CURRENT" ]; then old="$(cat "$IR/CURRENT")"; [ -f "$IR/releases/$old/stop.sh" ] && INSTALL_ROOT="$IR" bash "$IR/releases/$old/stop.sh" || true; fi',
+      'printf \'%s\\n\' "$(basename -- "$SD")" > "$IR/CURRENT"',
+      'INSTALL_ROOT="$IR" bash "$SD/start.sh"',
+      'EOS',
+      'printf "%s\\n" \'#!/usr/bin/env bash\' \'SD="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"\' \'echo $$ > "$SD/app.pid"; touch "$SD/.started"\' > "$d/start.sh"',
+      'printf "%s\\n" \'#!/usr/bin/env bash\' \'SD="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"\' \'rm -f "$SD/.started"\' > "$d/stop.sh"',
+      'mkdir -p release',
+      '( cd -- .staging && tar -czf "../release/$name.tar.gz" "$name" )',
+      'echo "[mkpkg] done"',
+    ].join('\n'))
+    const proj2 = deployProjects.save(deployProjects.normalizeProject({
+      name: '自动打包项目', localPath: proj2Dir, deployMode: 'script',
+      scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh', packageCommand: 'bash mkpkg.sh', packageTimeoutSec: 60 },
+      version: { strategy: 'auto', manual: '' },
+      targets: [{
+        id: 't1', name: '生产', remotePath: REMOTE_HOME,
+        server: { host: '203.0.113.10', port: 22, username: 'root', authType: 'password' },
+        health: { enabled: false, url: '', timeout: 90, interval: 3 },
+      }],
+    }))
+    const { record: recAuto, events: evAuto } = await runDeploy(proj2.id)
+    assert.strictEqual(recAuto.status, 'success', `自动打包发布应成功: ${recAuto.message}\n${evAuto.logs.map((l) => l.text).join('\n')}`)
+    assert.strictEqual(recAuto.version, '2.0.0')
+    assert.ok(fs.existsSync(path.join(proj2Dir, '.pkg-ran')), '打包命令应真实执行（.pkg-ran 标记）')
+    assert.ok(evAuto.logs.some((l) => l.text.includes('[打包] [mkpkg] building')), '打包输出应流入发布日志')
+    assert.ok(evAuto.logs.some((l) => l.text.includes('产物未就绪')), '检查阶段应提示产物未就绪并推迟')
+    assert.strictEqual(fs.readFileSync(path.join(SERVER_ROOT, 'CURRENT'), 'utf8').trim(), 'app-v2.0.0-011', '服务器应运行自动打出的新版本')
+    // 打包失败（命令退出非 0）→ 整单失败
+    const proj3 = deployProjects.save(deployProjects.normalizeProject({
+      name: '打包失败项目', localPath: proj2Dir, deployMode: 'script',
+      scriptMode: { artifactDir: 'release', packageCommand: 'bash -c "echo boom >&2; exit 3"' },
+      version: { strategy: 'manual', manual: '3.0.0' }, // 目录无 3.0.0 产物 → 触发打包 → 失败
+      targets: [{
+        id: 't1', name: '生产', remotePath: REMOTE_HOME,
+        server: { host: '203.0.113.10', port: 22, username: 'root', authType: 'password' },
+        health: { enabled: false, url: '', timeout: 90, interval: 3 },
+      }],
+    }))
+    const { record: recPkgFail, events: evPkgFail } = await runDeploy(proj3.id)
+    assert.strictEqual(recPkgFail.status, 'failed')
+    assert.ok(recPkgFail.message.includes('退出码 3'), `消息应含退出码: ${recPkgFail.message}`)
+    assert.strictEqual(recPkgFail.stages.package.status, 'failed')
+    assert.ok(evPkgFail.logs.some((l) => l.text.includes('[打包] boom')), '失败输出应流入日志')
+    deployProjects.remove(proj2.id); deployProjects.remove(proj3.id)
+    passed += 1
+    console.log('  ✓ 产物缺失自动打包：真实子进程构建→发布成功；打包失败整单失败且日志可见')
+
     // ── 10. deploy.sh 服务端同版本守卫：解压后、删除运行中目录前直接失败 ──
     // 绕过客户端编排直接调 deploy.sh（模拟旧版客户端/手工调用），兜底保护运行中版本
     const srv2 = path.join(tmpRoot, 'server2')

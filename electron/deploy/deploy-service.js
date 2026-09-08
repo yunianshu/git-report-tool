@@ -7,6 +7,7 @@
 const fs = require('fs')
 const path = require('path')
 const crypto = require('crypto')
+const { spawn } = require('child_process')
 const ssh = require('./ssh-service')
 const packager = require('./packager')
 const projects = require('./deploy-projects')
@@ -78,10 +79,11 @@ function isCanceled() {
   return !!(activeRun && activeRun.canceled)
 }
 
-/** 取消当前发布：主动断开 SSH，服务器脚本收到 HUP 后按 --auto-rollback 处理 */
+/** 取消当前发布：断开 SSH（服务器脚本按 --auto-rollback 处理），并终止本地打包进程 */
 function cancel() {
   if (!activeRun) return { ok: false, error: '当前没有进行中的发布' }
   activeRun.canceled = true
+  if (activeRun.pkgChild) killTree(activeRun.pkgChild)
   ssh.close(activeRun.conn)
   return { ok: true }
 }
@@ -261,6 +263,72 @@ function deployModeOf(project) {
   return project.deployMode === 'script' ? 'script' : 'docker'
 }
 
+/** 终止进程树：Windows 下 child.kill() 不杀子进程（mvn→java / npm→node），用 taskkill */
+function killTree(child) {
+  if (!child || child.exitCode !== null) return
+  if (process.platform === 'win32') {
+    try { spawn('taskkill', ['/pid', String(child.pid), '/T', '/F'], { windowsHide: true }) } catch { /* noop */ }
+  } else {
+    try { child.kill('SIGTERM') } catch { /* noop */ }
+  }
+}
+
+/**
+ * 执行项目打包命令（script 形态产物缺失时自动构建）：
+ * 在项目根以 shell 运行 packageCommand，输出按行流到发布日志（[打包] 前缀）；
+ * 超时杀整棵进程树；用户取消时同样终止。返回 { ok, problem? }。
+ */
+function runPackageCommand(project) {
+  const sm = project.scriptMode || {}
+  const cmd = String(sm.packageCommand || '').trim()
+  const timeoutMs = Math.max(30, Number(sm.packageTimeoutSec) || 900) * 1000
+  return new Promise((resolve) => {
+    let child
+    try {
+      child = spawn(cmd, { shell: true, cwd: project.localPath, env: process.env, windowsHide: true })
+    } catch (e) {
+      return resolve({ ok: false, problem: `打包命令无法启动: ${(e && e.message) || e}` })
+    }
+    if (activeRun) activeRun.pkgChild = child
+    let settled = false
+    const finish = (r) => {
+      if (settled) return
+      settled = true
+      clearTimeout(timer)
+      if (activeRun && activeRun.pkgChild === child) activeRun.pkgChild = null
+      resolve(r)
+    }
+    const timer = setTimeout(() => {
+      log('error', `打包超时（>${timeoutMs / 1000}s），终止进程树……`)
+      killTree(child)
+      finish({ ok: false, problem: `打包命令超时（>${Math.round(timeoutMs / 1000)} 秒）已终止，可调整超时或检查构建环境` })
+    }, timeoutMs)
+    // 按行流式转发（npm/vite 的 \r 进度条会被行缓冲自然吸收）
+    let pending = { out: '', err: '' }
+    const pump = (key, chunk) => {
+      if (isCanceled()) { killTree(child); return }
+      pending[key] += String(chunk)
+      const lines = pending[key].split(/\r?\n/)
+      pending[key] = lines.pop() || ''
+      for (const line of lines) if (line.trim()) log('info', `[打包] ${line.replace(/\s+$/, '').slice(0, 500)}`)
+    }
+    child.stdout.on('data', (c) => pump('out', c))
+    child.stderr.on('data', (c) => pump('err', c))
+    child.on('error', (e) => finish({ ok: false, problem: `打包命令执行失败: ${(e && e.message) || e}` }))
+    child.on('close', (code) => {
+      for (const key of ['out', 'err']) {
+        if (pending[key].trim()) log('info', `[打包] ${pending[key].trim().slice(0, 500)}`)
+      }
+      if (isCanceled()) return finish({ ok: false, problem: '打包已取消' })
+      if (code === 0) {
+        log('success', '打包命令执行完成')
+        return finish({ ok: true })
+      }
+      finish({ ok: false, problem: `打包命令退出码 ${code}（详见上方 [打包] 日志）` })
+    })
+  })
+}
+
 /** 发布前本地检查（方案 §23 的关键项；按部署形态分别校验） */
 function preCheckLocal(project, target, version) {
   const problems = []
@@ -419,7 +487,15 @@ async function run(projectId, targetId) {
     let artifact = null
     if (!problems.length && mode === 'script') {
       artifact = resolveArtifact(project, ver.version)
-      if (!artifact.ok) problems.push(artifact.problem)
+      if (!artifact.ok) {
+        // 产物缺失/版本不匹配：配置了打包命令则推迟到打包阶段自动构建，否则检查阶段即失败
+        if (String((project.scriptMode || {}).packageCommand || '').trim()) {
+          log('warn', `产物未就绪（${artifact.problem}），将在打包阶段自动执行打包命令`)
+          artifact = null
+        } else {
+          problems.push(artifact.problem)
+        }
+      }
     }
     if (problems.length) {
       for (const p of problems) log('error', p)
@@ -442,10 +518,25 @@ async function run(projectId, targetId) {
     log('success', `项目检查通过（版本来源: ${ver.source}${mode === 'script' ? '，脚本部署形态' : ''}）`)
     tracker.end('check', 'success', t0)
 
-    // ── 阶段 2：生成 ZIP（docker 形态）/ 定位发布包（script 形态） ──
+    // ── 阶段 2：生成 ZIP（docker 形态）/ 定位或构建发布包（script 形态） ──
     tracker.begin('package')
     const t1 = Date.now()
     if (mode === 'script') {
+      if (!artifact) {
+        const pc = await runPackageCommand(project)
+        if (!pc.ok) {
+          log('error', pc.problem)
+          tracker.end('package', 'failed', t1)
+          return finish('failed', pc.problem)
+        }
+        artifact = resolveArtifact(project, ver.version)
+        if (!artifact.ok) {
+          const msg = `打包后仍无匹配产物：${artifact.problem}`
+          log('error', msg)
+          tracker.end('package', 'failed', t1)
+          return finish('failed', msg)
+        }
+      }
       const sizeMb = (artifact.sizeBytes / 1024 / 1024).toFixed(1)
       log('info', `计算发布包校验和：${artifact.fileName} ……`)
       pack = {
@@ -928,7 +1019,7 @@ module.exports = {
   run, cancel, isBusy, testConnection, listReleases, rollback,
   listDbBackups, restoreDbBackup, assertDbBackupName,
   setEmitter, STAGES, resolveVersion, buildDeployArgs,
-  resolveCompose, resolveArtifact, sha256File, releaseDirNameOf, deployModeOf,
+  resolveCompose, resolveArtifact, sha256File, releaseDirNameOf, deployModeOf, runPackageCommand,
   getDataSync, validateDataSync, buildDataSyncCommand,
   getDataImport, renderImportCommand,
 }

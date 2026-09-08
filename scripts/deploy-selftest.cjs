@@ -429,6 +429,12 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
     // 归一化：非布尔值回退 false
     const bad = deployProjects.normalizeProject({ name: 'x', scriptMode: { bootstrapJava: 'yes' } })
     assert.strictEqual(bad.scriptMode.bootstrapJava, false)
+    // 打包命令与超时归一化：空串兜底、超时夹取
+    const pkg = deployProjects.normalizeProject({ name: 'x', scriptMode: { packageCommand: '  bash pkg.sh  ', packageTimeoutSec: 5 } })
+    assert.strictEqual(pkg.scriptMode.packageCommand, 'bash pkg.sh')
+    assert.strictEqual(pkg.scriptMode.packageTimeoutSec, 900, '过小超时应回退默认 900')
+    const pkg2 = deployProjects.normalizeProject({ name: 'x', scriptMode: { packageTimeoutSec: 99999 } })
+    assert.strictEqual(pkg2.scriptMode.packageTimeoutSec, 3600, '过大超时夹取到 3600')
   })
   test('deploy.sh 语法检查（bash -n，含 script 分支）', () => {
     try {
@@ -459,7 +465,11 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
     })
     const p = deployProjects.list().find((x) => x.id === r.id)
     assert.strictEqual(p.deployMode, 'script')
-    assert.deepStrictEqual(p.scriptMode, { artifactDir: 'dist/pkg', upgradeScript: 'upgrade.sh', bootstrapJava: false, bootstrapPgdump: false })
+    assert.deepStrictEqual(p.scriptMode, {
+      artifactDir: 'dist/pkg', upgradeScript: 'upgrade.sh',
+      bootstrapJava: false, bootstrapPgdump: false,
+      packageCommand: '', packageTimeoutSec: 900,
+    })
     deployProjects.remove(r.id)
   })
 

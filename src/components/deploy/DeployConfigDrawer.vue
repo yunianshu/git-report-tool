@@ -40,6 +40,16 @@
             <el-input v-model="form.scriptMode.upgradeScript" placeholder="upgrade.sh" style="width: 200px" />
             <span class="f-mini">发布包顶层目录内的升级入口</span>
           </div>
+          <div class="f-row">
+            <span class="f-label">打包命令</span>
+            <el-input v-model="form.scriptMode.packageCommand" placeholder="bash package.sh（留空不自动打包）" style="flex: 1; font-family: monospace" />
+            <el-input-number v-model="form.scriptMode.packageTimeoutSec" :min="30" :max="3600" controls-position="right" style="width: 110px" />
+            <span class="f-mini">秒超时</span>
+          </div>
+          <div class="f-hint">
+            产物目录中没有匹配当前版本的发布包时，自动在项目根执行打包命令（构建日志流入发布日志，超时终止进程树）。
+            注意：发布版本以项目版本文件为准（如 VERSION），打包产物文件名需包含该版本号。
+          </div>
           <div class="f-row check-row">
             <el-checkbox v-model="form.scriptMode.bootstrapJava">缺 Java 17 时自动安装</el-checkbox>
             <el-checkbox v-model="form.scriptMode.bootstrapPgdump">缺 pg_dump 时自动安装</el-checkbox>

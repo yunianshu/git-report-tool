@@ -72,8 +72,9 @@ function defaultProject() {
     deployMode: 'docker',
     composeFile: 'docker-compose.yml',
     // 脚本部署：产物目录（相对项目根，放 tar.gz/tgz/zip 发布包）与升级入口脚本名；
-    // 环境引导开关：服务器缺 Java17 / pg_dump 时自动装用户态环境（不动系统）
-    scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh', bootstrapJava: false, bootstrapPgdump: false },
+    // 环境引导开关：服务器缺 Java17 / pg_dump 时自动装用户态环境（不动系统）；
+    // 打包命令：产物目录没有匹配版本的发布包时，在项目根自动执行（如 bash package.sh）
+    scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh', bootstrapJava: false, bootstrapPgdump: false, packageCommand: '', packageTimeoutSec: 900 },
     deploy: {
       backupCode: true,
       backupDatabase: false,
@@ -120,6 +121,10 @@ function normalizeProject(p) {
   }
   c.scriptMode.bootstrapJava = c.scriptMode.bootstrapJava === true
   c.scriptMode.bootstrapPgdump = c.scriptMode.bootstrapPgdump === true
+  // 打包命令（本地执行，非远端）：仅字符串清洗；超时 30s~1h 夹取
+  c.scriptMode.packageCommand = String(c.scriptMode.packageCommand || '').trim().slice(0, 500)
+  const t = Number(c.scriptMode.packageTimeoutSec)
+  c.scriptMode.packageTimeoutSec = Number.isFinite(t) && t >= 30 ? Math.min(Math.floor(t), 3600) : 900
   c.name = String(c.name || '').trim()
   c.description = String(c.description || '')
   c.localPath = String(c.localPath || '')
