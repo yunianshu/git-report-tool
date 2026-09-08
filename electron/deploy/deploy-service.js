@@ -251,6 +251,11 @@ function sha256File(filePath) {
   })
 }
 
+/** 发布包文件名对应的 release 目录名（去扩展名；包内顶层目录与文件同名的约定） */
+function releaseDirNameOf(fileName) {
+  return String(fileName).replace(/\.(tar\.gz|tgz|zip)$/i, '')
+}
+
 /** 项目部署形态（缺省 docker，向后兼容旧配置） */
 function deployModeOf(project) {
   return project.deployMode === 'script' ? 'script' : 'docker'
@@ -498,6 +503,14 @@ async function run(projectId, targetId) {
     resultBox.oldVersion = cur.stdout.trim().split('/').pop() || ''
     record.oldVersion = resultBox.oldVersion
     if (resultBox.oldVersion) log('info', `线上当前版本: ${resultBox.oldVersion}`)
+
+    // 脚本部署：线上已在运行同一发布包时立即终止——项目升级脚本会拒绝重复升级，
+    // 且继续执行会在解压阶段删除并覆盖正在运行的 release 目录
+    if (mode === 'script' && resultBox.oldVersion === releaseDirNameOf(pack.fileName)) {
+      const msg = `线上已运行同一版本（${resultBox.oldVersion}），重复发布同一发布包无意义；请先重新打包生成新时间戳的发布包`
+      log('error', msg)
+      throw new Error(msg)
+    }
 
     const zipRemote = ssh.remoteJoin(remoteHome, 'uploads', pack.fileName)
     await ssh.upload(conn, pack.zipPath, zipRemote, (done, total) => {
@@ -915,7 +928,7 @@ module.exports = {
   run, cancel, isBusy, testConnection, listReleases, rollback,
   listDbBackups, restoreDbBackup, assertDbBackupName,
   setEmitter, STAGES, resolveVersion, buildDeployArgs,
-  resolveCompose, resolveArtifact, sha256File, deployModeOf,
+  resolveCompose, resolveArtifact, sha256File, releaseDirNameOf, deployModeOf,
   getDataSync, validateDataSync, buildDataSyncCommand,
   getDataImport, renderImportCommand,
 }

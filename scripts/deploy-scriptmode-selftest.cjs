@@ -7,7 +7,8 @@
  *     经 child_process 真实执行，输出流式回放给 onLine（阶段标记解析不失真）
  *   - 仅模拟无法在本机接入的外部系统：SSH/SFTP 传输（upload 落盘到「服务器目录」）
  *   - fake 项目发布包（tar.gz + upgrade.sh/start.sh/stop.sh）模拟 Vantage 形态契约
- * 覆盖：首次发布成功 / 升级停旧切指针 / 升级脚本失败尽力恢复 / 手动回滚 / 版本列表 / 本地产物保留
+ * 覆盖：首次发布成功 / 升级停旧切指针 / 同版本重复发布快速失败（客户端+deploy.sh 双层守卫）/
+ *   升级脚本失败尽力恢复 / 手动回滚 / 版本列表 / 本地产物保留
  */
 const assert = require('assert')
 const fs = require('fs')
@@ -232,7 +233,22 @@ async function main() {
     passed += 1
     console.log('  ✓ 升级发布：CURRENT 指针切换、旧版本停止、oldVersion 识别正确')
 
-    // ── 5. 升级脚本失败：整单 failed、尽力恢复当前版本 ──
+    // ── 5. 同版本重复发布：上传前快速失败，运行中的 release 目录零改动 ──
+    fs.writeFileSync(path.join(SERVER_ROOT, 'releases', 'app-v1.0.0-002', '.sentinel'), 'keep')
+    serverState.execLog.length = 0
+    const { record: recDup, events: evDup } = await runDeploy(projectId)
+    assert.strictEqual(recDup.status, 'failed')
+    assert.ok(/线上已运行同一版本/.test(recDup.message), `消息应说明同版本拒绝: ${recDup.message}`)
+    assert.strictEqual(recDup.stages.check.status, 'success')
+    assert.strictEqual(recDup.stages.upload.status, 'failed', '应在上传阶段前拦截')
+    assert.ok(!serverState.execLog.some((c) => /deploy\.sh.*deploy/.test(c)), '不得执行服务器部署脚本')
+    assert.ok(!fs.existsSync(path.join(SERVER_ROOT, 'uploads', 'app-v1.0.0-002.tar.gz')), '发布包不得上传')
+    assert.ok(fs.existsSync(path.join(SERVER_ROOT, 'releases', 'app-v1.0.0-002', '.sentinel')), '运行中版本目录必须原样保留')
+    assert.strictEqual(fs.readFileSync(path.join(SERVER_ROOT, 'CURRENT'), 'utf8').trim(), 'app-v1.0.0-002')
+    passed += 1
+    console.log(`  ✓ 同版本重复发布：上传前快速失败（日志 ${evDup.logs.length} 行）、运行中 release 目录零改动`)
+
+    // ── 6. 升级脚本失败：整单 failed、尽力恢复当前版本 ──
     makeFakeArtifact(projDir, 'app-v1.0.0-003', 'fail')
     const { record: rec3, events: ev3 } = await runDeploy(projectId)
     assert.strictEqual(rec3.status, 'failed')
@@ -243,14 +259,14 @@ async function main() {
     passed += 1
     console.log('  ✓ 升级脚本失败 → 整单 failed、尽力恢复当前版本、CURRENT 不变')
 
-    // ── 6. listReleases（script 形态：CURRENT 指针解析） ──
+    // ── 7. listReleases（script 形态：CURRENT 指针解析） ──
     const lr = await deployService.listReleases(projectId, 't1')
     assert.ok(lr.releases.includes('app-v1.0.0-001') && lr.releases.includes('app-v1.0.0-002'))
     assert.strictEqual(lr.current, 'app-v1.0.0-002')
     passed += 1
     console.log('  ✓ listReleases：releases 列表与 CURRENT 指向解析正确')
 
-    // ── 7. 手动回滚：CURRENT 切目标并启动，stop 当前 ──
+    // ── 8. 手动回滚：CURRENT 切目标并启动，stop 当前 ──
     const rb = await deployService.rollback(projectId, 'app-v1.0.0-001', 't1')
     assert.strictEqual(rb.status, 'success', `回滚应成功: ${rb.message}`)
     assert.strictEqual(fs.readFileSync(path.join(SERVER_ROOT, 'CURRENT'), 'utf8').trim(), 'app-v1.0.0-001')
@@ -259,7 +275,7 @@ async function main() {
     passed += 1
     console.log('  ✓ 手动回滚：真实 rollback 子命令执行、启停与指针终态正确')
 
-    // ── 8. 环境引导：toolbox 的 JDK/pg_dump 优先并导出给项目升级脚本 ──
+    // ── 9. 环境引导：toolbox 的 JDK/pg_dump 优先并导出给项目升级脚本 ──
     const tbJdk = path.join(SERVER_ROOT, 'shared', 'toolbox', 'jdk', 'bin')
     const tbBin = path.join(SERVER_ROOT, 'shared', 'toolbox', 'bin')
     fs.mkdirSync(tbJdk, { recursive: true })
@@ -278,6 +294,35 @@ async function main() {
     assert.ok(envLine.text.includes('shared/toolbox/bin/pg_dump'), 'PG_DUMP 应导出 toolbox 包装')
     passed += 1
     console.log('  ✓ 环境引导：toolbox JDK/pg_dump 优先并正确导出给项目脚本')
+
+    // ── 10. deploy.sh 服务端同版本守卫：解压后、删除运行中目录前直接失败 ──
+    // 绕过客户端编排直接调 deploy.sh（模拟旧版客户端/手工调用），兜底保护运行中版本
+    const srv2 = path.join(tmpRoot, 'server2')
+    const rel2 = path.join(srv2, 'releases', 'app-v1.0.0-002')
+    fs.mkdirSync(rel2, { recursive: true })
+    fs.writeFileSync(path.join(rel2, '.sentinel'), 'keep')
+    fs.writeFileSync(path.join(srv2, 'CURRENT'), 'app-v1.0.0-002\n')
+    fs.mkdirSync(path.join(srv2, 'uploads'), { recursive: true })
+    fs.copyFileSync(
+      path.join(projDir, 'release', 'app-v1.0.0-002.tar.gz'),
+      path.join(srv2, 'uploads', 'app-v1.0.0-002.tar.gz'))
+    const shPath = path.join(tmpRoot, 'deploy-guard.sh')
+    fs.writeFileSync(shPath,
+      fs.readFileSync(path.join(__dirname, '..', 'electron', 'deploy', 'scripts', 'deploy.sh'), 'utf8').replace(/\r\n/g, '\n'))
+    const rGuard = spawnSync('bash', [msysPath(shPath), 'deploy', '--mode', 'script',
+      '--app', '守卫测试', '--home', msysPath(srv2), '--package', 'app-v1.0.0-002.tar.gz',
+      '--version', '1.0.0', '--upgrade-script', 'upgrade.sh',
+      '--no-bootstrap-java', '--no-bootstrap-pgdump',
+      '--no-backup-code', '--no-backup-db', '--auto-rollback', '--no-health',
+      '--keep-releases', '10', '--keep-backups', '10', '--keep-upload'], { encoding: 'utf8' })
+    const guardOut = `${rGuard.stdout || ''}${rGuard.stderr || ''}`
+    assert.notStrictEqual(rGuard.status, 0, '同版本发布应非零退出')
+    assert.ok(guardOut.includes('线上已运行同一版本'), `deploy.sh 应输出同版本守卫信息: ${guardOut}`)
+    assert.ok(!guardOut.includes('已解压'), '守卫应在解压完成标记前失败')
+    assert.ok(fs.existsSync(path.join(rel2, '.sentinel')), '运行中版本目录必须原样保留')
+    assert.strictEqual(fs.readFileSync(path.join(srv2, 'CURRENT'), 'utf8').trim(), 'app-v1.0.0-002')
+    passed += 1
+    console.log('  ✓ deploy.sh 同版本守卫：改动任何服务器状态前直接失败、运行目录零改动')
 
     console.log(`\n脚本部署形态编排自测通过（${passed} 组断言）`)
   } finally {

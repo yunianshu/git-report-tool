@@ -490,6 +490,12 @@ do_deploy_script() {
     fail_rollback "发布包必须只含一个顶层目录（实际 ${n} 项）"
   fi
   NEW_RELEASE="$RELEASES/$entries"
+  # 同版本守卫：线上正运行同一 release 目录时，继续会删除并覆盖运行中版本，
+  # 项目升级脚本也会拒绝重复升级——在改动任何服务器状态前直接失败
+  if [ -n "$OLD_CURRENT_NAME" ] && [ "$OLD_CURRENT_NAME" = "$entries" ]; then
+    rm -rf -- "$incoming"
+    fail_now "线上已运行同一版本目录（releases/$entries），重复发布同一发布包无意义，请重新打包生成新版本发布包"
+  fi
   rm -rf -- "$NEW_RELEASE"
   mv -f -- "$incoming/$entries" "$NEW_RELEASE"
   rmdir -- "$incoming" 2>/dev/null || true
