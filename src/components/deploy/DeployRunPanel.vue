@@ -7,10 +7,9 @@
           目标 <b>{{ activeTarget ? (activeTarget.name || '未命名') : '—' }}</b>
           <el-divider direction="vertical" />
           本地版本 <b>{{ publishVersion || '—' }}</b>
-          <el-button text size="small" type="primary" :disabled="!form.id || state.deploy.running" @click="newVersion">新版本</el-button>
           <el-divider direction="vertical" />
           线上版本 <b>{{ state.deploy.currentVersion || '未知' }}</b>
-          <el-button text size="small" type="primary" :disabled="!form.id || dirty" @click="queryReleases">查询</el-button>
+          <el-button text size="small" type="primary" :disabled="!form.id || dirty" @click="queryReleases()">查询</el-button>
         </span>
       </div>
     </template>
@@ -25,6 +24,11 @@
       >
         🚀 发布 {{ publishVersion || '' }}
       </el-button>
+      <el-button
+        size="large"
+        :disabled="!form.id || state.deploy.running"
+        @click="newVersion"
+      ><el-icon style="margin-right: 4px"><Plus /></el-icon>新版本</el-button>
       <el-button v-if="state.deploy.running" size="large" type="warning" plain @click="cancelRun">取消发布</el-button>
       <el-select
         v-if="releases.length"
@@ -80,6 +84,30 @@
     </div>
   </el-card>
 
+  <!-- 添加新版本（spec R7）：候选预测 + 自定义 -->
+  <el-dialog v-model="versionDialogVisible" title="添加新版本" width="440px">
+    <div class="ver-hint">
+      基于当前版本 <b>{{ versionBase || '—' }}</b>
+      <span v-if="versionBaseFromRemote">（线上/历史最高版本）</span>，选择要发布的新版本：
+    </div>
+    <el-radio-group v-model="versionChoice" class="ver-options">
+      <el-radio v-if="predicted.patch" value="patch">{{ predicted.patch }}（修复补丁）</el-radio>
+      <el-radio v-if="predicted.minor" value="minor">{{ predicted.minor }}（新功能）</el-radio>
+      <el-radio v-if="predicted.major" value="major">{{ predicted.major }}（大版本）</el-radio>
+      <el-radio value="custom">自定义</el-radio>
+    </el-radio-group>
+    <el-input
+      v-if="versionChoice === 'custom'"
+      v-model="customVersion"
+      placeholder="输入版本号，如 1.2.3"
+      @keyup.enter="confirmVersion"
+    />
+    <template #footer>
+      <el-button @click="versionDialogVisible = false">取消</el-button>
+      <el-button type="primary" @click="confirmVersion">保存并使用</el-button>
+    </template>
+  </el-dialog>
+
   <!-- 数据库备份恢复 -->
   <el-dialog v-model="dbDialogVisible" title="数据库备份恢复（当前目标）" width="640px">
     <el-alert type="warning" :closable="false" show-icon class="db-restore-alert">
@@ -105,6 +133,7 @@
 import { ref, computed, watch, nextTick } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../../store'
+import { bumpVersion, highestVersion } from '../../utils/version'
 
 const props = defineProps({
   /** 部署表单（响应式对象，只读使用） */
@@ -151,16 +180,62 @@ const canPublish = computed(() => {
 
 // ─── 发布（当前目标） ───
 
-/** 发布卡「新版本」（spec R7）：输入新版本号后交由父层切手动版本并保存 */
-async function newVersion() {
+/** 「新版本」对话框（spec R7）：基于当前版本预测候选，保留自定义输入 */
+const versionDialogVisible = ref(false)
+const versionChoice = ref('')
+const customVersion = ref('')
+const predicted = ref({ patch: '', minor: '', major: '' })
+const versionBase = ref('')
+/** 本地发布历史中该目标最近一次成功发布的版本（打开对话框时懒加载） */
+const historyBase = ref('')
+
+/** 基准取自线上/历史发布版本（而非本地识别版本）时给出说明 */
+const versionBaseFromRemote = computed(() => !!versionBase.value && versionBase.value !== props.publishVersion)
+
+/** 预测基准：本地版本、线上版本、本地与服务器历史发布版本中的最高者（spec R7） */
+function rebuildPrediction(force = false) {
+  const candidates = [props.publishVersion, state.deploy.currentVersion, historyBase.value, ...releases.value]
+  // 全部无法解析为 x.y.z 时回退原始版本串：不产生候选，但让用户看到当前版本并据此自定义（spec R7）
+  const base = highestVersion(candidates)
+    || String(props.publishVersion || state.deploy.currentVersion || historyBase.value || '').trim()
+  const changed = force || base !== versionBase.value
+  versionBase.value = base
+  predicted.value = {
+    patch: bumpVersion(base, 'patch'),
+    minor: bumpVersion(base, 'minor'),
+    major: bumpVersion(base, 'major'),
+  }
+  if (changed) {
+    versionChoice.value = predicted.value.patch ? 'patch' : 'custom'
+    customVersion.value = base
+  }
+}
+
+/** 补全基准：本地发布历史（快、无需网络），失败静默 */
+async function loadHistoryBase() {
   try {
-    const { value } = await ElMessageBox.prompt('输入新版本号（如 1.2.3），保存后发布按钮立即使用该版本', '添加新版本', {
-      inputValue: props.publishVersion || '',
-      confirmButtonText: '保存并使用', cancelButtonText: '取消',
-      inputPattern: /\S+/, inputErrorMessage: '版本号不能为空',
-    })
-    emit('set-version', value.trim())
-  } catch { /* 取消 */ }
+    const rows = await window.gitReport.deployHistoryList(props.form.id)
+    const hit = (Array.isArray(rows) ? rows : []).find(
+      (r) => r && r.status === 'success' && r.version && (!r.targetId || r.targetId === props.activeTargetId),
+    )
+    if (hit) historyBase.value = hit.version
+  } catch { /* 历史读取失败不影响预测 */ }
+}
+
+function newVersion() {
+  rebuildPrediction(true)
+  versionDialogVisible.value = true
+  // 基准补全：本地发布历史（快）与线上版本（需 SSH，失败静默）各自返回后刷新候选（spec R7）
+  const refresh = () => { if (versionDialogVisible.value) rebuildPrediction() }
+  if (!historyBase.value) loadHistoryBase().then(refresh)
+  if (!state.deploy.currentVersion) queryReleases(true).then(refresh)
+}
+
+function confirmVersion() {
+  const v = versionChoice.value === 'custom' ? customVersion.value.trim() : predicted.value[versionChoice.value]
+  if (!v) return ElMessage.warning('请输入版本号')
+  versionDialogVisible.value = false
+  emit('set-version', v)
 }
 
 function resetStages() {
@@ -223,18 +298,19 @@ watch(() => state.deploy.logs.length, async () => {
 })
 
 // ─── 版本列表 / 回滚（当前目标） ───
-async function queryReleases() {
+/** 查询服务器历史版本；silent 用于「新版本」预测基准的后台补查（不打扰用户） */
+async function queryReleases(silent = false) {
   try {
     const r = await window.gitReport.deployReleases(props.form.id, props.activeTargetId)
     if (r && r.ok) {
       releases.value = r.releases || []
       state.deploy.currentVersion = r.current || state.deploy.currentVersion
-      if (!releases.value.length) ElMessage.info('服务器暂无历史版本')
-    } else {
+      if (!silent && !releases.value.length) ElMessage.info('服务器暂无历史版本')
+    } else if (!silent) {
       ElMessage.error((r && r.error) || '查询失败')
     }
   } catch (e) {
-    ElMessage.error(e.message || String(e))
+    if (!silent) ElMessage.error(e.message || String(e))
   }
 }
 
@@ -320,7 +396,15 @@ async function doRollback(version, targetId) {
 function resetSelection() {
   releases.value = []
   rollbackVersion.value = ''
+  historyBase.value = ''
 }
+
+// 切换部署环境后，历史版本列表与预测基准必须重新获取，否则会沿用上一个环境的数据
+watch(() => props.activeTargetId, () => {
+  releases.value = []
+  rollbackVersion.value = ''
+  historyBase.value = ''
+})
 
 defineExpose({ doRollback, resetSelection })
 </script>
@@ -328,6 +412,10 @@ defineExpose({ doRollback, resetSelection })
 <style scoped>
 .ver-info { font-size: 13px; color: var(--brand-text-sub); font-weight: 400; }
 .ver-info b { color: var(--brand-text); font-family: var(--brand-mono); }
+.ver-hint { font-size: 13px; color: var(--brand-text-sub); margin-bottom: 12px; }
+.ver-hint b { color: var(--brand-text); font-family: var(--brand-mono); }
+.ver-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
+.ver-options .el-radio { margin-right: 0; height: auto; }
 
 .publish-row { display: flex; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .publish-btn { min-width: 220px; font-size: 15px; font-weight: 600; }
