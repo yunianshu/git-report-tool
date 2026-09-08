@@ -126,6 +126,7 @@ function makeFakeArtifact(projectDir, name, behaviour) {
     'set -euo pipefail',
     'SD="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"; IR="$INSTALL_ROOT"',
     'echo "[fake-upgrade] $(cat "$IR/CURRENT" 2>/dev/null || echo none) -> $(basename -- "$SD")"',
+    'echo "[env] java=$(command -v java 2>/dev/null || echo none) pgdump=${PG_DUMP:-none}"',
     `if [ "${behaviour}" = "fail" ]; then echo "[fake-upgrade] 模拟升级失败"; exit 7; fi`,
     'mkdir -p "$IR/backups"; touch "$IR/backups/backup-$(date +%s%N).tar.gz"',
     'if [ -f "$IR/CURRENT" ]; then old="$(cat "$IR/CURRENT")"; [ -f "$IR/releases/$old/stop.sh" ] && INSTALL_ROOT="$IR" bash "$IR/releases/$old/stop.sh" || true; fi',
@@ -257,6 +258,26 @@ async function main() {
     assert.ok(!fs.existsSync(path.join(SERVER_ROOT, 'releases', 'app-v1.0.0-002', '.started')), '原版本应停止')
     passed += 1
     console.log('  ✓ 手动回滚：真实 rollback 子命令执行、启停与指针终态正确')
+
+    // ── 8. 环境引导：toolbox 的 JDK/pg_dump 优先并导出给项目升级脚本 ──
+    const tbJdk = path.join(SERVER_ROOT, 'shared', 'toolbox', 'jdk', 'bin')
+    const tbBin = path.join(SERVER_ROOT, 'shared', 'toolbox', 'bin')
+    fs.mkdirSync(tbJdk, { recursive: true })
+    fs.mkdirSync(tbBin, { recursive: true })
+    fs.writeFileSync(path.join(tbJdk, 'java'), '#!/usr/bin/env bash\necho "openjdk version \\"17.9.9\\" 2026-01-01" >&2\n')
+    fs.writeFileSync(path.join(tbBin, 'pg_dump'), '#!/usr/bin/env bash\necho toolbox-pgdump-wrapper\n')
+    fs.chmodSync(path.join(tbJdk, 'java'), 0o755)
+    fs.chmodSync(path.join(tbBin, 'pg_dump'), 0o755)
+    makeFakeArtifact(projDir, 'app-v1.0.0-010', 'success')
+    const { record: recBoot, events: evBoot } = await runDeploy(projectId)
+    assert.strictEqual(recBoot.status, 'success', `引导场景发布应成功: ${recBoot.message}\n${evBoot.logs.map((l) => l.text).join('\n')}`)
+    assert.ok(evBoot.logs.some((l) => l.text.includes('使用工具箱 JDK')), '日志应提示使用工具箱 JDK')
+    const envLine = evBoot.logs.find((l) => l.text.includes('[env] java='))
+    assert.ok(envLine, '项目升级脚本应输出环境信息')
+    assert.ok(envLine.text.includes('shared/toolbox/jdk/bin/java'), 'PATH 应导出 toolbox JDK')
+    assert.ok(envLine.text.includes('shared/toolbox/bin/pg_dump'), 'PG_DUMP 应导出 toolbox 包装')
+    passed += 1
+    console.log('  ✓ 环境引导：toolbox JDK/pg_dump 优先并正确导出给项目脚本')
 
     console.log(`\n脚本部署形态编排自测通过（${passed} 组断言）`)
   } finally {

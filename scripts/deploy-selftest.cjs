@@ -412,7 +412,23 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
     assert.strictEqual(args[args.indexOf('--mode') + 1], 'script')
     assert.strictEqual(args[args.indexOf('--upgrade-script') + 1], 'upgrade.sh')
     assert.ok(!args.includes('--compose'), '脚本部署不应传 --compose')
+    assert.ok(args.includes('--no-bootstrap-java') && args.includes('--no-bootstrap-pgdump'), '默认不开启环境引导')
     for (const a of args) if (a.startsWith('--')) assert.ok(accepted.has(a), `deploy.sh 不认识参数 ${a}`)
+  })
+  test('script 模式开启环境引导时传 --bootstrap-* 开关', () => {
+    const project = {
+      name: 'vantage', deployMode: 'script', localPath: 'D:/x',
+      scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh', bootstrapJava: true, bootstrapPgdump: true },
+      deploy: {}, targets: [{ id: 't1', name: '测试', remotePath: '/opt/apps/v', health: {} }],
+    }
+    const args = buildDeployArgs(project, project.targets[0], { fileName: 'v.tar.gz', sha256: 'c'.repeat(64) }, '0.1.0')
+    const sh = fs.readFileSync(path.join(__dirname, '../electron/deploy/scripts/deploy.sh'), 'utf8')
+    const accepted = new Set([...sh.matchAll(/^\s+(--[a-z0-9-]+)\)/gm)].map((m) => m[1]))
+    assert.ok(args.includes('--bootstrap-java') && args.includes('--bootstrap-pgdump'))
+    for (const a of args) if (a.startsWith('--')) assert.ok(accepted.has(a), `deploy.sh 不认识参数 ${a}`)
+    // 归一化：非布尔值回退 false
+    const bad = deployProjects.normalizeProject({ name: 'x', scriptMode: { bootstrapJava: 'yes' } })
+    assert.strictEqual(bad.scriptMode.bootstrapJava, false)
   })
   test('deploy.sh 语法检查（bash -n，含 script 分支）', () => {
     try {
@@ -443,7 +459,7 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
     })
     const p = deployProjects.list().find((x) => x.id === r.id)
     assert.strictEqual(p.deployMode, 'script')
-    assert.deepStrictEqual(p.scriptMode, { artifactDir: 'dist/pkg', upgradeScript: 'upgrade.sh' })
+    assert.deepStrictEqual(p.scriptMode, { artifactDir: 'dist/pkg', upgradeScript: 'upgrade.sh', bootstrapJava: false, bootstrapPgdump: false })
     deployProjects.remove(r.id)
   })
 

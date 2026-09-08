@@ -150,7 +150,10 @@ function buildDeployArgs(project, target, pack, version) {
   if (mode === 'docker') {
     args.push('--compose', resolveCompose(project).file)
   } else {
-    args.push('--upgrade-script', (project.scriptMode && project.scriptMode.upgradeScript) || 'upgrade.sh')
+    const sm = project.scriptMode || {}
+    args.push('--upgrade-script', sm.upgradeScript || 'upgrade.sh')
+    args.push(sm.bootstrapJava ? '--bootstrap-java' : '--no-bootstrap-java')
+    args.push(sm.bootstrapPgdump ? '--bootstrap-pgdump' : '--no-bootstrap-pgdump')
   }
   args.push(d.backupCode ? '--backup-code' : '--no-backup-code')
   if (d.backupDatabase) {

@@ -71,8 +71,9 @@ function defaultProject() {
     // 部署形态：docker = Compose 编排（默认）；script = 项目自带脚本（发布包 + upgrade.sh/start.sh/stop.sh）
     deployMode: 'docker',
     composeFile: 'docker-compose.yml',
-    // 脚本部署：产物目录（相对项目根，放 tar.gz/tgz/zip 发布包）与升级入口脚本名
-    scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh' },
+    // 脚本部署：产物目录（相对项目根，放 tar.gz/tgz/zip 发布包）与升级入口脚本名；
+    // 环境引导开关：服务器缺 Java17 / pg_dump 时自动装用户态环境（不动系统）
+    scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh', bootstrapJava: false, bootstrapPgdump: false },
     deploy: {
       backupCode: true,
       backupDatabase: false,
@@ -117,6 +118,8 @@ function normalizeProject(p) {
   if (!/^[\w.-]+$/.test(c.scriptMode.upgradeScript)) {
     c.scriptMode.upgradeScript = 'upgrade.sh'
   }
+  c.scriptMode.bootstrapJava = c.scriptMode.bootstrapJava === true
+  c.scriptMode.bootstrapPgdump = c.scriptMode.bootstrapPgdump === true
   c.name = String(c.name || '').trim()
   c.description = String(c.description || '')
   c.localPath = String(c.localPath || '')

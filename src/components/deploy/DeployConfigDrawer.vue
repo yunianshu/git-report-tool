@@ -40,6 +40,14 @@
             <el-input v-model="form.scriptMode.upgradeScript" placeholder="upgrade.sh" style="width: 200px" />
             <span class="f-mini">发布包顶层目录内的升级入口</span>
           </div>
+          <div class="f-row check-row">
+            <el-checkbox v-model="form.scriptMode.bootstrapJava">缺 Java 17 时自动安装</el-checkbox>
+            <el-checkbox v-model="form.scriptMode.bootstrapPgdump">缺 pg_dump 时自动安装</el-checkbox>
+          </div>
+          <div class="f-hint">
+            自动安装为用户态，不改系统：Java 从清华镜像下载 JRE 17 解压到部署目录 shared/toolbox/jdk；
+            pg_dump 借服务器的 postgres:16-alpine 镜像生成 docker 包装（需 docker 权限）。装一次后跨版本复用。
+          </div>
           <div class="f-hint">
             脚本部署适合非 Docker 项目（如单 jar + 运维脚本）：发布时从产物目录选「文件名含当前版本」的最新发布包上传，
             服务器端解压到 releases/ 后以 INSTALL_ROOT 执行包内升级脚本（需自带备份 / 停旧 / 切 CURRENT 指针 / 启动 / 健康检查 / 失败回滚，

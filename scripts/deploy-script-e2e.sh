@@ -41,6 +41,7 @@ set -euo pipefail
 SD="\$(cd -- "\$(dirname -- "\${BASH_SOURCE[0]}")" && pwd)"
 IR="\$INSTALL_ROOT"
 echo "[fake-upgrade] \$(cat "\$IR/CURRENT" 2>/dev/null || echo none) -> \$(basename -- "\$SD")"
+echo "[env] java=\$(command -v java 2>/dev/null || echo none) pgdump=\${PG_DUMP:-none}"
 if [ "$behaviour" = "fail" ]; then echo "[fake-upgrade] 模拟升级失败"; exit 7; fi
 mkdir -p "\$IR/backups"; touch "\$IR/backups/backup-\$(date +%s%N).tar.gz"
 if [ -f "\$IR/CURRENT" ]; then
@@ -194,6 +195,18 @@ run_deploy "$zdir/pkg.zip" --keep-releases 10 --delete-upload
 assert_eq "$RC" 0 "退出码 0"
 current_is app-v1.0.0-008
 assert_file 'zip 包内 start.sh 已执行' "$APP/releases/app-v1.0.0-008/.started"
+
+echo "S11 环境引导：toolbox 的 JDK/pg_dump 优先并导出给项目脚本"
+mkdir -p "$APP/shared/toolbox/jdk/bin" "$APP/shared/toolbox/bin"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "openjdk version \"17.9.9\" 2026-01-01" >&2' > "$APP/shared/toolbox/jdk/bin/java"
+printf '%s\n' '#!/usr/bin/env bash' 'echo "toolbox-pgdump-wrapper"' > "$APP/shared/toolbox/bin/pg_dump"
+chmod +x "$APP/shared/toolbox/jdk/bin/java" "$APP/shared/toolbox/bin/pg_dump"
+P8="$(make_pkg app-v1.0.0-009 success)"
+run_deploy "$P8" --keep-releases 10 --delete-upload
+assert_eq "$RC" 0 "退出码 0"
+assert_has "$OUT" '使用工具箱 JDK' '日志提示使用工具箱 JDK'
+assert_has "$OUT" "java=$APP/shared/toolbox/jdk/bin/java" 'PATH 已导出 toolbox JDK'
+assert_has "$OUT" "pgdump=$APP/shared/toolbox/bin/pg_dump" 'PG_DUMP 已导出 toolbox 包装'
 
 echo
 echo "结果: $pass 通过, $fail 失败"
