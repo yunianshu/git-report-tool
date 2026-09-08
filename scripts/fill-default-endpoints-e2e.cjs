@@ -1,13 +1,14 @@
 /**
- * E2E（真实 Electron + 沙箱主目录）：一键填报「禅道/汉印」默认地址固定为公司内网地址
+ * E2E（真实 Electron + 沙箱主目录）：AI 服务与一键填报的默认地址固定为公司内网地址
  *
- * 需求：一键填报 · 禅道账号 与 一键填报 · 汉印工时账号 的默认地址都先固定（公司内网），
+ * 需求：AI 服务的「服务商」默认自定义、接口地址默认 http://ai.sysapp.prttech.com:18080/v1；
+ *       一键填报 · 禅道账号 与 一键填报 · 汉印工时账号 的默认地址也都先固定（公司内网），
  *       汉印「所属公司」默认选 1（厦门汉印）。用户不必每次手填。
  *
  * 验收标准（源自需求，非按实现反推）：
- *   C1 全新安装（无 config.json）：设置页显示禅道地址 http://10.11.34.2、
- *      汉印平台地址 http://10.10.21.2:5293、所属公司「1 · 厦门汉印」
- *   C2 历史配置里这两个地址/公司留空 → 同样回落默认（不显示空值）
+ *   C1 全新安装（无 config.json）：AI 服务商「自定义」+ 接口地址 http://ai.sysapp.prttech.com:18080/v1；
+ *      禅道地址 http://10.11.34.2；汉印平台地址 http://10.10.21.2:5293；所属公司「1 · 厦门汉印」
+ *   C2 历史配置里这些地址/公司留空 → 同样回落默认（不显示空值）
  *   C3 用户填过其他地址/公司 → 原样保留，不被默认值覆盖
  *   C4 主进程下发的配置（config:load）与界面显示一致（不是只有界面糊上去的）
  *
@@ -27,6 +28,7 @@ const CONFIG_FILE = path.join(USER_DATA, 'config.json')
 
 const ZENTAO_DEFAULT = 'http://10.11.34.2'
 const HANPRINT_DEFAULT = 'http://10.10.21.2:5293'
+const AI_DEFAULT = 'http://ai.sysapp.prttech.com:18080/v1'
 
 /** case: 'fresh' 无配置 / 'empty' 历史配置留空 / 'custom' 自定义地址 */
 function preseed(caseName) {
@@ -35,11 +37,13 @@ function preseed(caseName) {
   fs.mkdirSync(SHOT_DIR, { recursive: true })
   if (caseName === 'empty') {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify({
+      ai: { baseUrl: '', model: '' },
       zentao: { baseUrl: '', account: '', workStart: '08:30', workEnd: '17:30', lunchStart: '12:00', lunchEnd: '13:00' },
       hanprint: { baseUrl: '', clientId: '', account: '' },
     }, null, 2))
   } else if (caseName === 'custom') {
     fs.writeFileSync(CONFIG_FILE, JSON.stringify({
+      ai: { baseUrl: 'http://192.168.1.9:8080/v1', model: 'my-model' },
       zentao: { baseUrl: 'http://192.168.1.9:8080', account: '', workStart: '08:30', workEnd: '17:30', lunchStart: '12:00', lunchEnd: '13:00' },
       hanprint: { baseUrl: 'http://192.168.1.9:5293', clientId: '2', account: '' },
     }, null, 2))
@@ -76,6 +80,9 @@ const EVAL = `(async () => {
   ${helpers}
   const r = {}
   if (!await waitFor(() => q('.settings-page'), 20000)) { done(); return { fatal: '设置页未就绪' } }
+  // AI 服务是默认分区：先读它（后面切到一键填报后该分区只是 v-show 隐藏，值仍可读）
+  r.aiProvider = selectText('服务商')
+  r.aiBaseUrl = inputValue('接口地址')
   r.section = await openFillSection()
   r.zentaoAddr = inputValue('禅道地址')
   r.hanprintAddr = inputValue('平台地址')
@@ -83,6 +90,7 @@ const EVAL = `(async () => {
   r.zentaoHint = norm(rowOf('禅道地址')?.querySelector('.ai-hint')?.textContent)
   // C4：主进程下发的配置与界面一致
   const cfg = await window.gitReport.configLoad()
+  r.cfgAi = cfg?.ai?.baseUrl
   r.cfgZentao = cfg?.zentao?.baseUrl
   r.cfgHanprint = cfg?.hanprint?.baseUrl
   r.cfgClientId = cfg?.hanprint?.clientId
@@ -147,19 +155,22 @@ function runCase(caseName, shotName) {
 // C1：全新安装
 const c1 = runCase('fresh', 'endpoint-fresh.png')
 if (c1) {
+  assert('C1 AI 服务商默认「自定义」', String(c1.aiProvider).includes('自定义'), `实际="${c1.aiProvider}"`)
+  assert('C1 AI 接口地址默认 http://ai.sysapp.prttech.com:18080/v1', c1.aiBaseUrl === AI_DEFAULT, `实际="${c1.aiBaseUrl}"`)
   assert('C1 禅道地址默认 http://10.11.34.2', c1.zentaoAddr === ZENTAO_DEFAULT, `实际="${c1.zentaoAddr}"`)
   assert('C1 汉印地址默认 http://10.10.21.2:5293', c1.hanprintAddr === HANPRINT_DEFAULT, `实际="${c1.hanprintAddr}"`)
   assert('C1 汉印所属公司默认 1 · 厦门汉印', String(c1.company).includes('1 · 厦门汉印'), `实际="${c1.company}"`)
   // 文案断言同时兜住「改了渲染层但没重新 build」的假通过
   assert('C1 地址说明文案提示已默认填公司地址', String(c1.zentaoHint).includes('已默认填公司地址'), `实际="${c1.zentaoHint}"`)
   assert('C4 主进程配置与界面一致',
-    c1.cfgZentao === ZENTAO_DEFAULT && c1.cfgHanprint === HANPRINT_DEFAULT && c1.cfgClientId === '1',
-    `cfg=${JSON.stringify({ z: c1.cfgZentao, h: c1.cfgHanprint, c: c1.cfgClientId })}`)
+    c1.cfgAi === AI_DEFAULT && c1.cfgZentao === ZENTAO_DEFAULT && c1.cfgHanprint === HANPRINT_DEFAULT && c1.cfgClientId === '1',
+    `cfg=${JSON.stringify({ a: c1.cfgAi, z: c1.cfgZentao, h: c1.cfgHanprint, c: c1.cfgClientId })}`)
 }
 
 // C2：历史配置留空
 const c2 = runCase('empty', 'endpoint-empty.png')
 if (c2) {
+  assert('C2 留空的 AI 接口地址回落默认', c2.aiBaseUrl === AI_DEFAULT, `实际="${c2.aiBaseUrl}"`)
   assert('C2 留空的禅道地址回落默认', c2.zentaoAddr === ZENTAO_DEFAULT, `实际="${c2.zentaoAddr}"`)
   assert('C2 留空的汉印地址回落默认', c2.hanprintAddr === HANPRINT_DEFAULT, `实际="${c2.hanprintAddr}"`)
   assert('C2 留空的公司回落 1 · 厦门汉印', String(c2.company).includes('1 · 厦门汉印'), `实际="${c2.company}"`)
@@ -168,6 +179,7 @@ if (c2) {
 // C3：自定义地址保留
 const c3 = runCase('custom', 'endpoint-custom.png')
 if (c3) {
+  assert('C3 自定义 AI 接口地址保留', c3.aiBaseUrl === 'http://192.168.1.9:8080/v1', `实际="${c3.aiBaseUrl}"`)
   assert('C3 自定义禅道地址保留', c3.zentaoAddr === 'http://192.168.1.9:8080', `实际="${c3.zentaoAddr}"`)
   assert('C3 自定义汉印地址保留', c3.hanprintAddr === 'http://192.168.1.9:5293', `实际="${c3.hanprintAddr}"`)
   assert('C3 自定义公司 2 · 江西外协保留', String(c3.company).includes('2 · 江西外协'), `实际="${c3.company}"`)

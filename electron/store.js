@@ -22,7 +22,7 @@ const DEFAULTS = {
   identities: [],
   // AI 模型配置（API Key 经 safeStorage 加密后以 keyEnc 落盘）
   ai: {
-    baseUrl: 'https://api.openai.com/v1',
+    baseUrl: 'http://ai.sysapp.prttech.com:18080/v1', // 公司内网 AI 网关（默认地址，可按需改）
     model: '',
     temperature: 0.7,
   },
@@ -69,6 +69,8 @@ function load() {
     const raw = fs.readFileSync(file(), 'utf8')
     const cfg = { ...DEFAULTS, ...JSON.parse(raw) }
     cfg.ai = { ...DEFAULTS.ai, ...(cfg.ai || {}) }
+    // 公司内网地址固定默认：历史配置里留空时回落默认值，填过其他地址则原样保留
+    if (!String(cfg.ai.baseUrl || '').trim()) cfg.ai.baseUrl = DEFAULTS.ai.baseUrl
     const key = decryptKey(cfg.ai)
     // 明文 Key 不出主进程：仅下发「是否已配置 + 脱敏片段」
     cfg.ai.keyConfigured = !!key

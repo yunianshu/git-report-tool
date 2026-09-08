@@ -152,11 +152,12 @@
             <el-select v-model="provider" style="width: 240px" @change="applyPreset">
               <el-option v-for="(p, key) in AI_PRESETS" :key="key" :value="key" :label="p.label" />
             </el-select>
-            <span class="ai-hint">选择预设自动填充接口地址与模型，可再手动修改</span>
+            <span class="ai-hint">默认「自定义」（公司内网网关）；选择预设可自动填充接口地址与模型</span>
           </div>
           <div class="ai-row">
             <span class="ai-label">接口地址</span>
-            <el-input v-model="state.config.ai.baseUrl" placeholder="https://api.openai.com/v1" style="width: 400px" />
+            <el-input v-model="state.config.ai.baseUrl" placeholder="http://ai.sysapp.prttech.com:18080/v1" style="width: 400px" />
+            <span class="ai-hint">已默认填公司 AI 网关地址，可改</span>
           </div>
           <div class="ai-row">
             <span class="ai-label">API Key</span>
