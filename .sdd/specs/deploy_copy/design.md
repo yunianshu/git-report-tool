@@ -9,14 +9,11 @@
 
 ## 接口设计
 
-### 主进程 deploy-projects.js 新增 copyConfig({ fromProjectId, toProjectId })
+### 主进程 deploy-projects.js
 
-- loadAllRaw() 取原始数据；找不到源或目标 → `{ ok: false, error }`
-- 深拷贝到目标项目（目标项目自身的 createdAt/updatedAt/id/name/localPath 等保持不变）：
-  - 整体字段：deployMode、composeFile、version、deploy、scriptMode
-  - targets：每个目标用 genId() 生成新 id 后追加到目标项目 targets 末尾，其余字段（含
-    server.secret/passphrase、dataSync.importSecret 的加密对象）字节原样保留
-- persistAll 后返回 `{ ok: true, id: toProjectId, copiedTargets: n }`
+- 抽出 `applyCopyConfig(from, to)`：整体字段（deployMode/composeFile/version/deploy/scriptMode）+ targets 深拷贝（每个新 genId）追加，返回复制数量；`copyConfig` 复用。
+- 新增 `pickCopySource(projects, excludeId)`：过滤出"有至少一个 server.host 非空目标"的其他项目，取 updatedAt 最大者；无则 null。
+- `save()` 检测新项目（projects 中无该 id）→ persist 前用 pickCopySource + applyCopyConfig 带入默认配置，返回值增加 `copiedFrom`（源项目名）与 `copiedTargets`；再次保存（idx>=0）不触发。
 
 ### IPC / preload
 
@@ -37,6 +34,8 @@
 - 处理 @copy-config：调 `deployProjectsCopyConfig({ fromProjectId, toProjectId: form.id })`
   → 成功后 loadProjects()（重拉列表并 fillForm 当前项目）→ 把 activeTargetId 切到新追加的
   第一个目标 → connResult 清空 → ElMessage 提示复制了几个环境；失败报错
+- saveProject：保存前记录 form.targets 数量；返回 `copiedTargets > 0`（新建默认带入）时
+  提示来源与环境数，fillForm 后把 activeTargetId 切到第一个带入的环境
 
 ## 设计决策与 spec 回溯
 

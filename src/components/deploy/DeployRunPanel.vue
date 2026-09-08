@@ -7,6 +7,7 @@
           目标 <b>{{ activeTarget ? (activeTarget.name || '未命名') : '—' }}</b>
           <el-divider direction="vertical" />
           本地版本 <b>{{ publishVersion || '—' }}</b>
+          <el-button text size="small" type="primary" :disabled="!form.id || state.deploy.running" @click="newVersion">新版本</el-button>
           <el-divider direction="vertical" />
           线上版本 <b>{{ state.deploy.currentVersion || '未知' }}</b>
           <el-button text size="small" type="primary" :disabled="!form.id || dirty" @click="queryReleases">查询</el-button>
@@ -117,7 +118,7 @@ const props = defineProps({
   /** 表单是否有未保存修改 */
   dirty: { type: Boolean, default: false },
 })
-const emit = defineEmits(['history-changed'])
+const emit = defineEmits(['history-changed', 'set-version'])
 
 /** 与主进程 deploy-service.STAGES 保持一致；脚本部署形态下 build 阶段无对应动作 */
 const STAGE_LIST = [
@@ -149,6 +150,19 @@ const canPublish = computed(() => {
 })
 
 // ─── 发布（当前目标） ───
+
+/** 发布卡「新版本」（spec R7）：输入新版本号后交由父层切手动版本并保存 */
+async function newVersion() {
+  try {
+    const { value } = await ElMessageBox.prompt('输入新版本号（如 1.2.3），保存后发布按钮立即使用该版本', '添加新版本', {
+      inputValue: props.publishVersion || '',
+      confirmButtonText: '保存并使用', cancelButtonText: '取消',
+      inputPattern: /\S+/, inputErrorMessage: '版本号不能为空',
+    })
+    emit('set-version', value.trim())
+  } catch { /* 取消 */ }
+}
+
 function resetStages() {
   const st = {}
   for (const s of STAGE_LIST) st[s.id] = { status: 'waiting', durationMs: 0 }

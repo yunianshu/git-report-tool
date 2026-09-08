@@ -64,6 +64,7 @@
           :publish-version="publishVersion"
           :dirty="dirty"
           @history-changed="reloadHistory"
+          @set-version="onNewVersion"
         />
         <DeployHistoryTable
           ref="historyRef"
@@ -240,8 +241,9 @@ async function onCopyConfig(fromProjectId) {
   }
 }
 
-async function saveProject() {
+async function saveProject(successMsg = '配置已保存') {
   if (!form.name) return ElMessage.warning('请填写项目名称')
+  const prevTargetCount = form.targets.length
   const payload = JSON.parse(JSON.stringify(form))
   if (!payload.targets.length) payload.targets = [emptyTarget()]
   // 部署目录留空时按目标随名称自动建议，用户仍可随时修改
@@ -250,17 +252,34 @@ async function saveProject() {
   }
   const r = await window.gitReport.deployProjectsSave(payload)
   if (r && r.ok) {
-    ElMessage.success('配置已保存')
+    ElMessage.success(successMsg)
+    // 新建项目默认带入（spec R6）：主进程自动复制最近配置过的项目
+    if (r.copiedTargets > 0) {
+      ElMessage.success(`已按默认规则带入「${r.copiedFrom}」的部署配置（${r.copiedTargets} 个环境）`)
+    }
     await loadSharedProjects()
     await loadProjects()
     state.deploy.currentProjectId = r.id
     state.projects.currentId = r.id
     const p = state.deploy.projects.find((x) => x.id === r.id)
-    if (p) fillForm(p)
+    if (p) {
+      fillForm(p)
+      if (r.copiedTargets > 0) {
+        const firstNew = form.targets[prevTargetCount]
+        if (firstNew) activeTargetId.value = firstNew.id
+      }
+    }
     configOpen.value = false
   } else {
     ElMessage.error('保存失败')
   }
+}
+
+/** 发布卡「新版本」（spec R7）：切手动版本并保存，发布按钮立即生效 */
+async function onNewVersion(version) {
+  form.version.strategy = 'manual'
+  form.version.manual = version
+  await saveProject(`新版本 ${version} 已保存，可直接发布`)
 }
 
 async function removeProject() {

@@ -275,10 +275,18 @@ function save(input) {
     return t
   })
 
+  let copiedInfo = null
   if (idx >= 0) projects[idx] = { ...old, ...incoming }
-  else projects.push(incoming)
+  else {
+    // 新建项目默认带入（spec R6）：从最近配置过的其他项目整套复制部署配置
+    const source = pickCopySource(projects, incoming.id)
+    if (source) {
+      copiedInfo = { copiedFrom: source.name, copiedTargets: applyCopyConfig(source, incoming) }
+    }
+    projects.push(incoming)
+  }
   persistAll(projects)
-  return { ok: true, id: incoming.id }
+  return { ok: true, id: incoming.id, ...copiedInfo }
 }
 
 function remove(projectId) {
@@ -288,20 +296,12 @@ function remove(projectId) {
 }
 
 /**
- * 整套复制部署配置：把源项目的部署形态/版本策略/部署选项追加式复制到目标项目，
- * 源项目全部 targets 追加为目标列表新环境。在原始数据层操作，
- * 加密凭据（server.secret/passphrase、dataSync.importSecret）字节原样保留——
- * 不走 save()/mergeSecret（会把已加密 secret 当明文二次加密）。
- * 复制的目标一律重新生成 id，避免与目标项目现有目标冲突。
+ * 整套复制部署配置到目标项目（spec R1-R3）：部署形态/版本策略/部署选项 + 全部 targets。
+ * 在原始数据层操作，加密凭据（server.secret/passphrase、dataSync.importSecret）字节原样保留——
+ * 不走 mergeSecret（会把已加密 secret 当明文二次加密）。复制的目标一律重新生成 id。
+ * 返回复制的环境数量。
  */
-function copyConfig({ fromProjectId, toProjectId } = {}) {
-  const projects = loadAllRaw()
-  const from = projects.find((p) => p.id === fromProjectId)
-  const to = projects.find((p) => p.id === toProjectId)
-  if (!from) return { ok: false, error: '源项目不存在' }
-  if (!to) return { ok: false, error: '目标项目不存在' }
-  if (fromProjectId === toProjectId) return { ok: false, error: '不能从项目自身复制' }
-
+function applyCopyConfig(from, to) {
   to.deployMode = from.deployMode
   to.composeFile = from.composeFile
   to.version = JSON.parse(JSON.stringify(from.version || { strategy: 'auto', manual: '' }))
@@ -310,8 +310,29 @@ function copyConfig({ fromProjectId, toProjectId } = {}) {
   const copied = (from.targets || []).map((t) => ({ ...JSON.parse(JSON.stringify(t)), id: genId() }))
   to.targets.push(...copied)
   to.updatedAt = Date.now()
+  return copied.length
+}
+
+/** 新建项目默认带入规则（spec R6）：最近更新且至少配置过一个服务器主机的其他项目 */
+function pickCopySource(projects, excludeId) {
+  const candidates = projects.filter((p) =>
+    p.id !== excludeId && (p.targets || []).some((t) => t.server && t.server.host)
+  )
+  if (!candidates.length) return null
+  return candidates.reduce((a, b) => ((b.updatedAt || 0) > (a.updatedAt || 0) ? b : a))
+}
+
+/** 显式复制入口（部署设置抽屉「从其他项目复制」） */
+function copyConfig({ fromProjectId, toProjectId } = {}) {
+  const projects = loadAllRaw()
+  const from = projects.find((p) => p.id === fromProjectId)
+  const to = projects.find((p) => p.id === toProjectId)
+  if (!from) return { ok: false, error: '源项目不存在' }
+  if (!to) return { ok: false, error: '目标项目不存在' }
+  if (fromProjectId === toProjectId) return { ok: false, error: '不能从项目自身复制' }
+  const copiedTargets = applyCopyConfig(from, to)
   persistAll(projects)
-  return { ok: true, id: to.id, copiedTargets: copied.length }
+  return { ok: true, id: to.id, copiedTargets }
 }
 
 module.exports = { list, save, remove, copyConfig, getCredentials, getDataSyncCredentials, defaultProject, defaultTarget, normalizeProject }
