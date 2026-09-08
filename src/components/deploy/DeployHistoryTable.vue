@@ -18,6 +18,9 @@
           <span>{{ row.targetName || '默认' }}</span>
         </template>
       </el-table-column>
+      <el-table-column label="耗时" width="80">
+        <template #default="{ row }">{{ fmtDur(row.durationMs) }}</template>
+      </el-table-column>
       <el-table-column label="时间" width="150">
         <template #default="{ row }">{{ fmtTime(row.startedAt) }}</template>
       </el-table-column>
@@ -32,9 +35,6 @@
         <template #default="{ row }">
           <el-tag size="small" :type="statusType(row.status)">{{ statusText(row.status) }}</el-tag>
         </template>
-      </el-table-column>
-      <el-table-column label="耗时" width="75">
-        <template #default="{ row }">{{ fmtDur(row.durationMs) }}</template>
       </el-table-column>
       <el-table-column prop="message" label="说明" show-overflow-tooltip />
       <el-table-column label="操作" width="130" fixed="right">

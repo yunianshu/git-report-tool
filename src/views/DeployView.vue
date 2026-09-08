@@ -195,6 +195,8 @@ function resetRunDisplay() {
   state.deploy.packageCount = 0
   state.deploy.uploadPercent = 0
   state.deploy.datasyncPercent = 0
+  state.deploy.startedAt = 0
+  state.deploy.finishedAt = 0
 }
 
 function onSelectProject(id) {

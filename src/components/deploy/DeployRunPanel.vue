@@ -56,6 +56,15 @@
     <div v-if="!canPublish && !state.deploy.running" class="f-hint">
       发布前需：项目已保存、本地目录与 Compose 文件存在、已识别版本号、当前目标已配置服务器与部署目录
     </div>
+    <div v-if="hasRun" class="run-meta">
+      <div class="run-track" :class="runTrackClass">
+        <div class="run-fill" :style="{ width: runPercent + '%' }" />
+      </div>
+      <span class="run-stat">
+        {{ doneCount }}/{{ stageTotal }} 阶段 · {{ state.deploy.running ? '已用时' : '总耗时' }}
+        <b class="mono">{{ fmtElapsed(elapsedMs) }}</b>
+      </span>
+    </div>
     <div class="stages">
       <div
         v-for="(s, i) in stageList"
@@ -65,6 +74,7 @@
       >
         <span class="stage-idx">{{ i + 1 }}</span>
         <span>{{ s.label }}</span>
+        <span v-if="stageDur(s.id)" class="stage-dur">{{ stageDur(s.id) }}</span>
         <span class="stage-mark">{{ stageMark(s.id) }}</span>
       </div>
     </div>
@@ -131,10 +141,11 @@
 </template>
 
 <script setup>
-import { ref, computed, watch, nextTick } from 'vue'
+import { ref, computed, watch, nextTick, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../../store'
 import { bumpVersion, highestVersion } from '../../utils/version'
+import { fmtDur, fmtElapsed } from './deploy-form'
 
 const props = defineProps({
   /** 部署表单（响应式对象，只读使用） */
@@ -260,6 +271,56 @@ function confirmVersion() {
   emit('set-version', v)
 }
 
+// ─── 运行时间进度（本次发布/回滚的已用时与阶段完成度） ───
+
+/** 每秒刷新，仅驱动「已用时」展示；计时基准是 store 里的 startedAt，跨视图返回后按真实时刻重算 */
+const now = ref(Date.now())
+let ticker = null
+watch(() => state.deploy.running, (running) => {
+  if (ticker) { clearInterval(ticker); ticker = null }
+  if (running) {
+    now.value = Date.now()
+    ticker = setInterval(() => { now.value = Date.now() }, 1000)
+  }
+}, { immediate: true })
+onUnmounted(() => { if (ticker) clearInterval(ticker) })
+
+const hasRun = computed(() => !!state.deploy.startedAt)
+
+const stageTotal = computed(() => STAGE_LIST.length)
+
+/** 已完成阶段数（含失败/跳过/回滚——它们同样不再推进） */
+const doneCount = computed(() => STAGE_LIST.filter((s) => {
+  const st = state.deploy.stages[s.id]
+  return !!st && ['success', 'failed', 'skipped', 'rollback'].includes(st.status)
+}).length)
+
+const runPercent = computed(() => (stageTotal.value ? Math.round((doneCount.value / stageTotal.value) * 100) : 0))
+
+const runFailed = computed(() => STAGE_LIST.some((s) => {
+  const st = state.deploy.stages[s.id]
+  return !!st && (st.status === 'failed' || st.status === 'rollback')
+}))
+
+const runTrackClass = computed(() => {
+  if (state.deploy.running) return ''
+  return runFailed.value ? 'is-failed' : 'is-done'
+})
+
+/** 已用时：进行中用本地 tick；结束后用 done 事件写入的 finishedAt（缺失时回落到开始时刻） */
+const elapsedMs = computed(() => {
+  const started = state.deploy.startedAt
+  if (!started) return 0
+  const end = state.deploy.running ? now.value : (state.deploy.finishedAt || started)
+  return Math.max(0, end - started)
+})
+
+/** 阶段耗时（主进程在阶段结束时下发，running 阶段为空） */
+function stageDur(id) {
+  const st = state.deploy.stages[id]
+  return st && st.durationMs ? fmtDur(st.durationMs) : ''
+}
+
 function resetStages() {
   const st = {}
   for (const s of STAGE_LIST) st[s.id] = { status: 'waiting', durationMs: 0 }
@@ -281,6 +342,8 @@ async function publish() {
     )
   } catch { return }
   resetStages()
+  state.deploy.startedAt = Date.now()
+  state.deploy.finishedAt = 0
   state.deploy.running = true
   try {
     const r = await window.gitReport.deployRun(props.form.id, props.activeTargetId)
@@ -398,6 +461,8 @@ async function doRollback(version, targetId) {
   } catch { return }
   rollingBack.value = true
   resetStages()
+  state.deploy.startedAt = Date.now()
+  state.deploy.finishedAt = 0
   state.deploy.running = true
   try {
     const r = await window.gitReport.deployRollback(props.form.id, tid, version)
@@ -443,6 +508,14 @@ defineExpose({ doRollback, resetSelection })
 .publish-row { display: flex; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
 .publish-btn { min-width: 220px; font-size: 15px; font-weight: 600; }
 
+.run-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
+.run-track { flex: 1; max-width: 240px; height: 4px; border-radius: 2px; background: #e8ebf0; overflow: hidden; }
+.run-fill { height: 100%; border-radius: 2px; background: var(--brand-accent); transition: width .3s ease; }
+.run-track.is-done .run-fill { background: #67c23a; }
+.run-track.is-failed .run-fill { background: #f56c6c; }
+.run-stat { font-size: 12.5px; color: var(--brand-text-sub); }
+.run-stat b { color: var(--brand-text); }
+
 .stages { display: flex; flex-wrap: wrap; gap: 8px; }
 .stage-chip {
   display: inline-flex;
@@ -464,6 +537,7 @@ defineExpose({ doRollback, resetSelection })
   font-family: var(--brand-mono);
 }
 .stage-mark { font-family: var(--brand-mono); font-weight: 600; }
+.stage-dur { font-size: 11.5px; opacity: .75; font-family: var(--brand-mono); }
 .stage-chip.is-running { border-color: var(--brand-accent); color: var(--brand-accent); background: var(--el-color-primary-light-9); }
 .stage-chip.is-running .stage-idx { background: var(--brand-accent); }
 .stage-chip.is-success { border-color: #b7e1b7; color: #3f9d3f; background: #f2faf2; }

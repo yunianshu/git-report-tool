@@ -54,3 +54,13 @@ export function fmtDur(ms) {
   if (!ms) return '—'
   return ms < 1000 ? `${ms}ms` : `${(ms / 1000).toFixed(1)}s`
 }
+
+/** 运行计时（发布进行中的秒级刷新）：mm:ss，超过 1 小时补 h:mm:ss */
+export function fmtElapsed(ms) {
+  const total = Math.max(0, Math.floor((ms || 0) / 1000))
+  const p = (n) => String(n).padStart(2, '0')
+  const h = Math.floor(total / 3600)
+  const m = Math.floor((total % 3600) / 60)
+  const s = total % 60
+  return h ? `${h}:${p(m)}:${p(s)}` : `${p(m)}:${p(s)}`
+}

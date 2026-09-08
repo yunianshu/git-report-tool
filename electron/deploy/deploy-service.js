@@ -56,9 +56,9 @@ function log(level, text) {
 /** 日志落盘钩子：发布/回滚期间由运行任务设置，写历史日志用 */
 let logSink = null
 
-/** 阶段状态：running/success/failed/skipped/rollback */
-function stage(id, status) {
-  emit('deploy:stage', { stage: id, status })
+/** 阶段状态：running/success/failed/skipped/rollback；durationMs 仅阶段结束时非零 */
+function stage(id, status, durationMs) {
+  emit('deploy:stage', { stage: id, status, durationMs: durationMs || 0 })
 }
 
 function newStageTracker() {
@@ -68,7 +68,7 @@ function newStageTracker() {
     if (state[id]) {
       state[id].status = status
       if (startedAt) state[id].durationMs = Date.now() - startedAt
-      stage(id, status)
+      stage(id, status, state[id].durationMs)
     }
   }
   return { state, begin, end }

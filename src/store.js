@@ -74,6 +74,8 @@ export const state = reactive({
     uploadPercent: 0,
     datasyncPercent: 0, // 数据同步阶段上传进度
     currentVersion: '', // 服务器当前运行版本（查询 releases / 发布事件更新）
+    startedAt: 0, // 本次发布/回滚开始时刻（渲染层计时用；切换项目或换版本时清空）
+    finishedAt: 0, // 本次发布/回滚结束时刻（done 事件写入，0 表示尚未结束）
   },
   /** 一键填报（禅道工时）状态（跨视图保留，切换 tab 不丢计划） */
   fillReport: {

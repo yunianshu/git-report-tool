@@ -130,7 +130,11 @@ onMounted(async () => {
       if (state.deploy.logs.length > 2000) state.deploy.logs.splice(0, state.deploy.logs.length - 2000)
     })
     window.gitReport.onDeployStage((stage) => {
-      if (state.deploy.stages[stage.stage]) state.deploy.stages[stage.stage].status = stage.status
+      const st = state.deploy.stages[stage.stage]
+      if (!st) return
+      st.status = stage.status
+      // 阶段耗时只在结束时由主进程下发（running 事件为 0），用于 chips 上的时间标注
+      if (stage.durationMs) st.durationMs = stage.durationMs
     })
     window.gitReport.onDeployProgress((progress) => {
       if (progress.kind === 'package') state.deploy.packageCount = progress.count || 0
@@ -139,6 +143,7 @@ onMounted(async () => {
     })
     window.gitReport.onDeployDone((result) => {
       state.deploy.running = false
+      state.deploy.finishedAt = Date.now()
       // 仅发布成功才更新线上版本（回滚/数据恢复的 version 字段不是版本号）
       if (result?.record?.type === 'deploy' && result?.record?.status === 'success') {
         state.deploy.currentVersion = result.record.version
