@@ -28,7 +28,7 @@ const DEFAULTS = {
   },
   // 一键填报（禅道工时）：密码经 safeStorage 加密后以 pwdEnc 落盘，明文不出主进程
   zentao: {
-    baseUrl: '',          // 如 http://10.11.34.2
+    baseUrl: 'http://10.11.34.2', // 公司内网禅道（默认地址，可按需改）
     account: '',
     workStart: '08:30',   // 实际上班时间默认值（一键填报页可按天临时调整）
     workEnd: '17:30',     // 下班时间：补填历史日期时工时区间的终点
@@ -37,8 +37,8 @@ const DEFAULTS = {
   },
   // 一键填报（汉印工时平台）：密码经 safeStorage 加密后以 pwdEnc 落盘，明文不出主进程
   hanprint: {
-    baseUrl: '',          // 如 http://10.10.21.2:5293
-    clientId: '1',        // 1=厦门汉印 2=江西外协
+    baseUrl: 'http://10.10.21.2:5293', // 公司内网汉印工时平台（默认地址，可按需改）
+    clientId: '1',        // 1=厦门汉印 2=江西外协（默认 1）
     account: '',          // 工号
   },
 }
@@ -76,11 +76,15 @@ function load() {
     cfg.ai.apiKey = ''
     delete cfg.ai.keyEnc
     cfg.zentao = { ...DEFAULTS.zentao, ...(cfg.zentao || {}) }
+    // 公司内网地址固定默认：历史配置里留空时回落默认值，填过其他地址则原样保留
+    if (!String(cfg.zentao.baseUrl || '').trim()) cfg.zentao.baseUrl = DEFAULTS.zentao.baseUrl
     const pwd = decryptText(cfg.zentao.pwdEnc)
     cfg.zentao.pwdConfigured = !!pwd
     cfg.zentao.pwdMasked = pwd ? maskKey(pwd) : ''
     delete cfg.zentao.pwdEnc
     cfg.hanprint = { ...DEFAULTS.hanprint, ...(cfg.hanprint || {}) }
+    if (!String(cfg.hanprint.baseUrl || '').trim()) cfg.hanprint.baseUrl = DEFAULTS.hanprint.baseUrl
+    if (!String(cfg.hanprint.clientId || '').trim()) cfg.hanprint.clientId = DEFAULTS.hanprint.clientId
     const hpPwd = decryptText(cfg.hanprint.pwdEnc)
     cfg.hanprint.pwdConfigured = !!hpPwd
     cfg.hanprint.pwdMasked = hpPwd ? maskKey(hpPwd) : ''

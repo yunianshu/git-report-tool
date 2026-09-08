@@ -569,6 +569,30 @@ await test('空密码保存保留旧密码，clearPwd 清除', () => {
   assert.strictEqual(store.getZentaoPwd(), '')
 })
 
+// ═══════════ 公司内网默认地址（禅道 / 汉印） ═══════════
+console.log('一键填报默认地址:')
+await test('全新配置（无 config.json）回落公司默认地址与公司 1', () => {
+  fs.rmSync(path.join(tmpRoot, 'userdata', 'config.json'), { force: true })
+  const cfg = store.load()
+  assert.strictEqual(cfg.zentao.baseUrl, 'http://10.11.34.2')
+  assert.strictEqual(cfg.hanprint.baseUrl, 'http://10.10.21.2:5293')
+  assert.strictEqual(cfg.hanprint.clientId, '1')
+})
+await test('历史配置里地址/公司留空 → 回落默认，不显示空值', () => {
+  store.save({ zentao: { baseUrl: '', account: 'wgl' }, hanprint: { baseUrl: '', clientId: '', account: '21290' } })
+  const cfg = store.load()
+  assert.strictEqual(cfg.zentao.baseUrl, 'http://10.11.34.2')
+  assert.strictEqual(cfg.hanprint.baseUrl, 'http://10.10.21.2:5293')
+  assert.strictEqual(cfg.hanprint.clientId, '1')
+})
+await test('用户填过其他地址/公司则原样保留（不被默认值覆盖）', () => {
+  store.save({ zentao: { baseUrl: 'http://192.168.1.9:8080', account: 'wgl' }, hanprint: { baseUrl: 'http://192.168.1.9:5293', clientId: '2', account: '21290' } })
+  const cfg = store.load()
+  assert.strictEqual(cfg.zentao.baseUrl, 'http://192.168.1.9:8080')
+  assert.strictEqual(cfg.hanprint.baseUrl, 'http://192.168.1.9:5293')
+  assert.strictEqual(cfg.hanprint.clientId, '2')
+})
+
 // ═══════════ git 提交收集（真实 git 集成） ═══════════
 console.log('git 提交收集（真实仓库）:')
 

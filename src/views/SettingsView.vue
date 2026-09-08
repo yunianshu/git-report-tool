@@ -222,7 +222,7 @@
           <div class="ai-row">
             <span class="ai-label">禅道地址</span>
             <el-input v-model="state.config.zentao.baseUrl" placeholder="如 http://10.11.34.2" style="width: 320px" />
-            <span class="ai-hint">内网禅道地址，登录与工时写入均在本机完成</span>
+            <span class="ai-hint">内网禅道地址（已默认填公司地址，可改）；登录与工时写入均在本机完成</span>
           </div>
           <div class="ai-row">
             <span class="ai-label">账号</span>
@@ -266,7 +266,7 @@
           <div class="ai-row">
             <span class="ai-label">平台地址</span>
             <el-input v-model="state.config.hanprint.baseUrl" placeholder="如 http://10.10.21.2:5293" style="width: 320px" />
-            <span class="ai-hint">汉印工时填报平台（与禅道为两个独立账号）</span>
+            <span class="ai-hint">汉印工时填报平台（已默认填公司地址，可改；与禅道为两个独立账号）</span>
           </div>
           <div class="ai-row">
             <span class="ai-label">所属公司</span>
