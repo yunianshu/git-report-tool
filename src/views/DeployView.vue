@@ -242,7 +242,7 @@ async function onCopyConfig(fromProjectId) {
 }
 
 async function saveProject(successMsg = '配置已保存') {
-  if (!form.name) return ElMessage.warning('请填写项目名称')
+  if (!form.name) { ElMessage.warning('请填写项目名称'); return false }
   const prevTargetCount = form.targets.length
   const payload = JSON.parse(JSON.stringify(form))
   if (!payload.targets.length) payload.targets = [emptyTarget()]
@@ -270,16 +270,20 @@ async function saveProject(successMsg = '配置已保存') {
       }
     }
     configOpen.value = false
-  } else {
-    ElMessage.error('保存失败')
+    return true
   }
+  ElMessage.error('保存失败')
+  return false
 }
 
 /** 发布卡「新版本」（spec R7）：切手动版本并保存，发布按钮立即生效 */
 async function onNewVersion(version) {
   form.version.strategy = 'manual'
   form.version.manual = version
-  await saveProject(`新版本 ${version} 已保存，可直接发布`)
+  const saved = await saveProject(`新版本 ${version} 已保存，可直接发布`)
+  // 版本已切换＝进入新一轮发布准备，复位上一轮的阶段/日志/进度展示；
+  // 否则下方发布进程状态仍停在上一次的 ✓/✗，与「即将发布新版本」的预期不符
+  if (saved) resetRunDisplay()
 }
 
 async function removeProject() {
