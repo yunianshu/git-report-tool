@@ -190,7 +190,7 @@ function onSelectProject(id) {
   state.deploy.currentVersion = ''
   if (p) fillForm(p)
   else { Object.assign(form, emptyProject()); activeTargetId.value = form.targets[0].id }
-  reloadHistory()
+  // 发布历史由 DeployHistoryTable 自行 watch projectId 刷新（同步调用会读到旧 props）
 }
 
 function newProject() {
@@ -265,7 +265,7 @@ async function testConnection() {
 }
 
 onMounted(() => {
-  loadProjects().then(reloadHistory)
+  loadProjects() // 发布历史由 DeployHistoryTable 的 immediate watch 驱动首载
   // 发布完成事件：刷新历史 + 结果汇总（App.vue 已更新 running/stages）
   offDone = window.gitReport.onDeployDone(async (d) => {
     reloadHistory()

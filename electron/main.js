@@ -464,6 +464,14 @@ app.whenReady().then(() => {
   // 并将渲染层 error/warning 控制台消息转发到 stdout 以便断言
   if (process.env.SMOKE_EXIT_MS) {
     const wc = mainWindow.webContents
+    // 冒烟自动化依赖稳定的 timer/IPC 时序：后台或被遮挡窗口的链式 setTimeout 会被
+    // Chromium 强制节流（最严 1 次/分钟），SMOKE_EVAL 的轮询断言会因此失真——
+    // 冒烟运行禁用渲染节流，eval 期间保持窗口前台（仅冒烟模式，不影响正常使用）
+    wc.setBackgroundThrottling(false)
+    if (process.env.SMOKE_EVAL) {
+      mainWindow.show()
+      mainWindow.focus()
+    }
     wc.on('console-message', (_e, level, message) => {
       if (level >= 2) console.log(`[SMOKE][renderer:${level >= 3 ? 'error' : 'warn'}]`, message)
     })

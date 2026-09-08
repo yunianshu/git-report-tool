@@ -56,7 +56,7 @@
 </template>
 
 <script setup>
-import { ref } from 'vue'
+import { ref, watch } from 'vue'
 import { ElMessageBox } from 'element-plus'
 import { state } from '../../store'
 import { fmtTime, fmtDur } from './deploy-form'
@@ -72,11 +72,20 @@ const logDialog = ref(false)
 const dialogLog = ref('')
 
 // ─── 历史 ───
+// 过期响应防护：快速连续切换项目时，先发请求可能后回，落表前校验项目未再变化
 async function loadHistory() {
+  const pid = props.projectId || undefined
   try {
-    history.value = await window.gitReport.deployHistoryList(props.projectId || undefined) || []
-  } catch { history.value = [] }
+    const rows = await window.gitReport.deployHistoryList(pid) || []
+    if ((props.projectId || undefined) === pid) history.value = rows
+  } catch {
+    if ((props.projectId || undefined) === pid) history.value = []
+  }
 }
+
+// 项目切换时跟随刷新：props 由父组件重渲染异步更新，父层同步调用 reload 会读到旧 id，
+// 因此数据加载统一由本 watch 驱动（immediate 覆盖首载，此时 projectId 可能为空=查全部）
+watch(() => props.projectId, () => { loadHistory() }, { immediate: true })
 
 async function viewLog(row) {
   dialogLog.value = await window.gitReport.deployHistoryReadLog(row.logFile) || ''
