@@ -8,7 +8,8 @@
           <el-divider direction="vertical" />
           本地版本 <b>{{ publishVersion || '—' }}</b>
           <el-divider direction="vertical" />
-          线上版本 <b>{{ state.deploy.currentVersion || '未知' }}</b>
+          线上版本 <b>{{ onlineVersion || '未知' }}</b>
+          <span v-if="onlineVersionSource" class="ver-src">{{ onlineVersionSource }}</span>
           <el-button text size="small" type="primary" :disabled="!form.id || dirty" @click="queryReleases()">查询</el-button>
         </span>
       </div>
@@ -186,18 +187,30 @@ const versionChoice = ref('')
 const customVersion = ref('')
 const predicted = ref({ patch: '', minor: '', major: '' })
 const versionBase = ref('')
-/** 本地发布历史中该目标最近一次成功发布的版本（打开对话框时懒加载） */
-const historyBase = ref('')
+/** 本地发布记录中该目标最近一次成功发布的版本（切项目/环境即加载，供线上版本回退与预测基准共用） */
+const historyVersion = ref('')
+
+/**
+ * 线上版本（三级回退）：服务器实时查询 → 本地发布记录最近一次成功 → 服务器 releases 最高版本。
+ * 后两者是推断值，用 onlineVersionSource 标注来源，避免用户误以为已向服务器核实。
+ */
+const onlineVersion = computed(() =>
+  state.deploy.currentVersion || historyVersion.value || highestVersion(releases.value))
+const onlineVersionSource = computed(() => {
+  if (state.deploy.currentVersion) return ''
+  if (historyVersion.value) return '按发布记录'
+  return highestVersion(releases.value) ? '按服务器版本列表' : ''
+})
 
 /** 基准取自线上/历史发布版本（而非本地识别版本）时给出说明 */
 const versionBaseFromRemote = computed(() => !!versionBase.value && versionBase.value !== props.publishVersion)
 
 /** 预测基准：本地版本、线上版本、本地与服务器历史发布版本中的最高者（spec R7） */
 function rebuildPrediction(force = false) {
-  const candidates = [props.publishVersion, state.deploy.currentVersion, historyBase.value, ...releases.value]
+  const candidates = [props.publishVersion, state.deploy.currentVersion, historyVersion.value, ...releases.value]
   // 全部无法解析为 x.y.z 时回退原始版本串：不产生候选，但让用户看到当前版本并据此自定义（spec R7）
   const base = highestVersion(candidates)
-    || String(props.publishVersion || state.deploy.currentVersion || historyBase.value || '').trim()
+    || String(props.publishVersion || state.deploy.currentVersion || historyVersion.value || '').trim()
   const changed = force || base !== versionBase.value
   versionBase.value = base
   predicted.value = {
@@ -211,23 +224,32 @@ function rebuildPrediction(force = false) {
   }
 }
 
-/** 补全基准：本地发布历史（快、无需网络），失败静默 */
-async function loadHistoryBase() {
+/**
+ * 读取本地发布记录里该目标最近一次成功发布的版本（快、无需网络，失败静默）。
+ * 异步返回时项目/环境可能已切换，丢弃过期结果。
+ */
+async function loadHistoryVersion() {
+  const pid = props.form.id
+  const tid = props.activeTargetId
+  if (!pid) { historyVersion.value = ''; return }
   try {
-    const rows = await window.gitReport.deployHistoryList(props.form.id)
+    const rows = await window.gitReport.deployHistoryList(pid)
+    if (pid !== props.form.id || tid !== props.activeTargetId) return
     const hit = (Array.isArray(rows) ? rows : []).find(
-      (r) => r && r.status === 'success' && r.version && (!r.targetId || r.targetId === props.activeTargetId),
+      (r) => r && r.status === 'success' && r.version && (!r.targetId || r.targetId === tid),
     )
-    if (hit) historyBase.value = hit.version
-  } catch { /* 历史读取失败不影响预测 */ }
+    historyVersion.value = hit ? hit.version : ''
+  } catch { /* 历史读取失败不影响展示 */ }
 }
+
+// 切项目/环境即补全，不必等用户点「查询」或打开「新版本」
+watch(() => [props.form.id, props.activeTargetId], () => { loadHistoryVersion() }, { immediate: true })
 
 function newVersion() {
   rebuildPrediction(true)
   versionDialogVisible.value = true
-  // 基准补全：本地发布历史（快）与线上版本（需 SSH，失败静默）各自返回后刷新候选（spec R7）
+  // 基准补全：线上版本需 SSH（失败静默）返回后刷新候选；本地发布记录已随切换预载
   const refresh = () => { if (versionDialogVisible.value) rebuildPrediction() }
-  if (!historyBase.value) loadHistoryBase().then(refresh)
   if (!state.deploy.currentVersion) queryReleases(true).then(refresh)
 }
 
@@ -250,7 +272,7 @@ function resetStages() {
 async function publish() {
   const v = props.publishVersion
   const t = props.activeTarget
-  const oldV = state.deploy.currentVersion || '（未知）'
+  const oldV = onlineVersion.value || '（未知）'
   try {
     await ElMessageBox.confirm(
       `即将发布 ${props.form.name} ${v} 到【${t.name}】${t.server.host}:${t.remotePath}（当前线上版本 ${oldV}）。发布过程中会备份并自动构建重启，是否继续？`,
@@ -396,14 +418,14 @@ async function doRollback(version, targetId) {
 function resetSelection() {
   releases.value = []
   rollbackVersion.value = ''
-  historyBase.value = ''
+  historyVersion.value = ''
 }
 
-// 切换部署环境后，历史版本列表与预测基准必须重新获取，否则会沿用上一个环境的数据
+// 切换部署环境后，历史版本列表必须重新获取，否则会沿用上一个环境的数据
+// （线上版本回退值 historyVersion 由上方 watch([form.id, activeTargetId]) 重新加载）
 watch(() => props.activeTargetId, () => {
   releases.value = []
   rollbackVersion.value = ''
-  historyBase.value = ''
 })
 
 defineExpose({ doRollback, resetSelection })
@@ -412,6 +434,7 @@ defineExpose({ doRollback, resetSelection })
 <style scoped>
 .ver-info { font-size: 13px; color: var(--brand-text-sub); font-weight: 400; }
 .ver-info b { color: var(--brand-text); font-family: var(--brand-mono); }
+.ver-src { margin-left: 4px; font-size: 11.5px; color: var(--brand-text-sub); }
 .ver-hint { font-size: 13px; color: var(--brand-text-sub); margin-bottom: 12px; }
 .ver-hint b { color: var(--brand-text); font-family: var(--brand-mono); }
 .ver-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
