@@ -287,4 +287,31 @@ function remove(projectId) {
   return { ok: true }
 }
 
-module.exports = { list, save, remove, getCredentials, getDataSyncCredentials, defaultProject, defaultTarget, normalizeProject }
+/**
+ * 整套复制部署配置：把源项目的部署形态/版本策略/部署选项追加式复制到目标项目，
+ * 源项目全部 targets 追加为目标列表新环境。在原始数据层操作，
+ * 加密凭据（server.secret/passphrase、dataSync.importSecret）字节原样保留——
+ * 不走 save()/mergeSecret（会把已加密 secret 当明文二次加密）。
+ * 复制的目标一律重新生成 id，避免与目标项目现有目标冲突。
+ */
+function copyConfig({ fromProjectId, toProjectId } = {}) {
+  const projects = loadAllRaw()
+  const from = projects.find((p) => p.id === fromProjectId)
+  const to = projects.find((p) => p.id === toProjectId)
+  if (!from) return { ok: false, error: '源项目不存在' }
+  if (!to) return { ok: false, error: '目标项目不存在' }
+  if (fromProjectId === toProjectId) return { ok: false, error: '不能从项目自身复制' }
+
+  to.deployMode = from.deployMode
+  to.composeFile = from.composeFile
+  to.version = JSON.parse(JSON.stringify(from.version || { strategy: 'auto', manual: '' }))
+  to.deploy = JSON.parse(JSON.stringify(from.deploy || defaultProject().deploy))
+  to.scriptMode = JSON.parse(JSON.stringify(from.scriptMode || defaultProject().scriptMode))
+  const copied = (from.targets || []).map((t) => ({ ...JSON.parse(JSON.stringify(t)), id: genId() }))
+  to.targets.push(...copied)
+  to.updatedAt = Date.now()
+  persistAll(projects)
+  return { ok: true, id: to.id, copiedTargets: copied.length }
+}
+
+module.exports = { list, save, remove, copyConfig, getCredentials, getDataSyncCredentials, defaultProject, defaultTarget, normalizeProject }

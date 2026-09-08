@@ -49,7 +49,9 @@
       v-model:active-target-id="activeTargetId"
       :form="form"
       :detected="detected"
+      :projects="state.deploy.projects"
       @save="saveProject"
+      @copy-config="onCopyConfig"
       @reset-conn="connResult = null"
     />
 
@@ -213,6 +215,29 @@ function newProject() {
   runPanelRef.value?.resetSelection()
   connResult.value = null
   resetRunDisplay()
+}
+
+/** 从源项目整套复制部署配置（主进程含凭据复制），完成后刷新表单并选中新追加的第一个环境 */
+async function onCopyConfig(fromProjectId) {
+  const prevTargetCount = form.targets.length
+  try {
+    const r = await window.gitReport.deployProjectsCopyConfig({ fromProjectId, toProjectId: form.id })
+    if (!r || !r.ok) return ElMessage.error((r && r.error) || '复制失败')
+    await loadProjects()
+    const p = state.deploy.projects.find((x) => x.id === form.id)
+    if (p) {
+      fillForm(p)
+      state.deploy.currentProjectId = form.id
+      const firstNew = form.targets[prevTargetCount]
+      if (firstNew) activeTargetId.value = firstNew.id
+    }
+    connResult.value = null
+    runPanelRef.value?.resetSelection()
+    state.deploy.currentVersion = ''
+    ElMessage.success(`已复制 ${r.copiedTargets} 个环境的部署配置`)
+  } catch (e) {
+    ElMessage.error(e.message || String(e))
+  }
 }
 
 async function saveProject() {

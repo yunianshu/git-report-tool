@@ -348,6 +348,7 @@ function registerIpc() {
   deployService.setEmitter((ch, payload) => broadcast(ch, payload))
   ipcMain.handle('deploy:projects:list', () => deployProjects.list())
   ipcMain.handle('deploy:projects:save', (_e, p) => deployProjects.save(p))
+  ipcMain.handle('deploy:projects:copyConfig', (_e, args) => deployProjects.copyConfig(args))
   ipcMain.handle('deploy:projects:remove', (_e, id) => deployProjects.remove(id))
   ipcMain.handle('deploy:detectVersion', (_e, project) => deployService.resolveVersion(project || {}))
   ipcMain.handle('deploy:testConnection', async (_e, { projectId, targetId }) => {

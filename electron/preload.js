@@ -90,6 +90,7 @@ contextBridge.exposeInMainWorld('gitReport', {
   deployProjectsList: () => ipcRenderer.invoke('deploy:projects:list'),
   deployProjectsSave: (p) => ipcRenderer.invoke('deploy:projects:save', toPlain(p)),
   deployProjectsRemove: (id) => ipcRenderer.invoke('deploy:projects:remove', id),
+  deployProjectsCopyConfig: (args) => ipcRenderer.invoke('deploy:projects:copyConfig', args),
   deployDetectVersion: (project) => ipcRenderer.invoke('deploy:detectVersion', toPlain(project)),
   deployTestConnection: (projectId, targetId) =>
     ipcRenderer.invoke('deploy:testConnection', { projectId, targetId }),

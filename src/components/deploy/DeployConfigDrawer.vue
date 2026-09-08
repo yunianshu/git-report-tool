@@ -8,7 +8,12 @@
   >
     <div class="deploy-config-scroll">
       <el-card shadow="never" class="card">
-        <template #header><div class="card-header"><span>基本信息</span></div></template>
+        <template #header>
+          <div class="card-header">
+            <span>基本信息</span>
+            <el-button text size="small" type="primary" @click="openCopyDialog"><el-icon><CopyDocument /></el-icon>从其他项目复制</el-button>
+          </div>
+        </template>
         <div class="f-row">
           <span class="f-label">项目名称</span>
           <el-input v-model="form.name" placeholder="如 myapp" style="flex: 1" />
@@ -303,11 +308,34 @@
         <el-button type="primary" :disabled="!form.name" @click="emit('save')"><el-icon><Check /></el-icon>保存部署设置</el-button>
       </div>
     </template>
+
+    <!-- 从其他项目复制部署配置 -->
+    <el-dialog v-model="copyDialogVisible" title="从其他项目复制部署配置" width="480px" append-to-body>
+      <el-alert type="warning" :closable="false" show-icon class="copy-alert">
+        将把所选项目的部署形态、版本策略、部署选项与全部环境（含服务器凭据、健康检查、数据同步）追加到当前项目，
+        现有环境保留不变。当前未保存的修改将丢弃。
+      </el-alert>
+      <div class="f-row">
+        <span class="f-label">源项目</span>
+        <el-select v-model="copyFromId" placeholder="选择要复制配置的项目" style="flex: 1">
+          <el-option
+            v-for="p in copyableProjects"
+            :key="p.id"
+            :value="p.id"
+            :label="`${p.name}（${(p.targets || []).length} 个环境）`"
+          />
+        </el-select>
+      </div>
+      <template #footer>
+        <el-button @click="copyDialogVisible = false">取消</el-button>
+        <el-button type="primary" :disabled="!copyFromId" @click="confirmCopy">复制配置</el-button>
+      </template>
+    </el-dialog>
   </el-drawer>
 </template>
 
 <script setup>
-import { computed } from 'vue'
+import { computed, ref } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { emptyTarget } from './deploy-form'
 
@@ -320,8 +348,10 @@ const props = defineProps({
   activeTargetId: { type: String, default: '' },
   /** 自动识别的版本号 { version, source } */
   detected: { type: Object, default: () => ({ version: '', source: '' }) },
+  /** 部署项目列表（复制配置时的源项目候选） */
+  projects: { type: Array, default: () => [] },
 })
-const emit = defineEmits(['update:modelValue', 'update:activeTargetId', 'save', 'reset-conn'])
+const emit = defineEmits(['update:modelValue', 'update:activeTargetId', 'save', 'reset-conn', 'copy-config'])
 
 /** 当前编辑的部署目标（响应式：切换目标后服务器/健康检查卡随之切换） */
 const activeTarget = computed(() => {
@@ -372,6 +402,24 @@ async function removeTarget() {
   props.form.targets.splice(i, 1)
   if (props.activeTargetId === t.id) emit('update:activeTargetId', props.form.targets[Math.max(0, i - 1)].id)
   ElMessage.success('已删除目标')
+}
+
+// ─── 从其他项目复制部署配置 ───
+const copyDialogVisible = ref(false)
+const copyFromId = ref('')
+
+/** 源项目候选：排除当前项目自身 */
+const copyableProjects = computed(() => props.projects.filter((p) => p.id !== props.form.id))
+
+function openCopyDialog() {
+  copyFromId.value = ''
+  copyDialogVisible.value = true
+}
+
+function confirmCopy() {
+  if (!copyFromId.value) return
+  copyDialogVisible.value = false
+  emit('copy-config', copyFromId.value)
 }
 
 async function browseLocal() {
