@@ -183,11 +183,23 @@ function onHistoryRollback(version, targetId) {
   runPanelRef.value?.doRollback(version, targetId)
 }
 
+/** 清空上一次发布运行残留的展示状态（阶段 chips / 日志 / 进度计数）。
+ *  发布进行中不清理：运行进度与日志按 store 约定跨视图保留，不因切换项目丢失在途展示 */
+function resetRunDisplay() {
+  if (state.deploy.running) return
+  state.deploy.stages = {}
+  state.deploy.logs = []
+  state.deploy.packageCount = 0
+  state.deploy.uploadPercent = 0
+  state.deploy.datasyncPercent = 0
+}
+
 function onSelectProject(id) {
   const p = state.deploy.projects.find((x) => x.id === id)
   runPanelRef.value?.resetSelection()
   connResult.value = null
   state.deploy.currentVersion = ''
+  resetRunDisplay()
   if (p) fillForm(p)
   else { Object.assign(form, emptyProject()); activeTargetId.value = form.targets[0].id }
   // 发布历史由 DeployHistoryTable 自行 watch projectId 刷新（同步调用会读到旧 props）
@@ -200,6 +212,7 @@ function newProject() {
   detected.value = { version: '', source: '' }
   runPanelRef.value?.resetSelection()
   connResult.value = null
+  resetRunDisplay()
 }
 
 async function saveProject() {
