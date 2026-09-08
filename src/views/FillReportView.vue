@@ -44,11 +44,21 @@
           >
             <div class="project-option">
               <span class="project-option-name">{{ p.name }}</span>
-              <el-tag v-if="bindings[p.id]" size="small" type="success" class="project-option-tag">
-                已绑定 #{{ bindings[p.id].taskId }}
-              </el-tag>
-              <el-tag v-else-if="p.repoCount === 0" size="small" type="info" class="project-option-tag">无仓库</el-tag>
-              <el-tag v-else size="small" type="warning" class="project-option-tag">未绑定</el-tag>
+              <span class="project-option-right">
+                <el-tag v-if="bindings[p.id]" size="small" type="success" class="project-option-tag">
+                  已绑定 #{{ bindings[p.id].taskId }}
+                </el-tag>
+                <el-tag v-else-if="p.repoCount === 0" size="small" type="info" class="project-option-tag">无仓库</el-tag>
+                <el-tag v-else size="small" type="warning" class="project-option-tag">未绑定</el-tag>
+                <el-button
+                  v-if="bindings[p.id]"
+                  link
+                  type="danger"
+                  size="small"
+                  class="project-option-unbind"
+                  @click.stop="unbindProject(p.id)"
+                >解绑</el-button>
+              </span>
             </div>
           </el-option>
         </el-select>
@@ -130,7 +140,11 @@
               </span>
             </div>
             <div class="pmatch">
-              <el-tag v-if="p.taskId" size="small" type="success">禅道 #{{ p.taskId }} {{ p.taskName || '已绑定任务' }}</el-tag>
+              <template v-if="p.taskId">
+                <el-tag size="small" type="success">禅道 #{{ p.taskId }} {{ p.taskName || '已绑定任务' }}</el-tag>
+                <el-button size="small" plain @click="openBind(p.projectId)">更换</el-button>
+                <el-button size="small" plain type="danger" @click="unbindProject(p.projectId)">解绑</el-button>
+              </template>
               <template v-else>
                 <el-tag size="small" type="danger">未绑定</el-tag>
                 <el-button size="small" type="primary" plain :disabled="!zentaoConfigured" @click="openBind(p.projectId)">绑定禅道任务</el-button>
@@ -214,7 +228,7 @@
     <!-- 绑定禅道任务弹窗 -->
     <el-dialog
       v-model="bindDialog.visible"
-      :title="`绑定禅道任务 · ${bindDialog.projectName}`"
+      :title="`${bindDialog.boundTaskId ? '管理绑定' : '绑定禅道任务'} · ${bindDialog.projectName}`"
       width="600"
     >
       <el-select
@@ -231,7 +245,11 @@
           </div>
         </el-option>
       </el-select>
-      <div class="bind-hint">绑定一次后长期生效，之后填报该项目会自动关联此任务。</div>
+      <div class="bind-hint">
+        {{ bindDialog.boundTaskId
+          ? '可改选其他任务后保存绑定，或点「解除绑定」取消关联（取消后该项目提交需重新绑定才能填报）。'
+          : '绑定一次后长期生效，之后填报该项目会自动关联此任务。' }}
+      </div>
       <template #footer>
         <el-button v-if="bindDialog.boundTaskId" type="danger" plain @click="doUnbind">解除绑定</el-button>
         <el-button @click="bindDialog.visible = false">取消</el-button>
@@ -413,17 +431,35 @@ async function doBind() {
   if (plan.value) generate()
 }
 
-async function doUnbind() {
-  const { projectId } = bindDialog.value
-  await window.gitReport.fillUnbind(projectId)
+/** 解除项目与禅道任务的绑定；下拉、明细行、绑定弹窗三处共用 */
+async function unbindProject(projectId) {
+  if (!projectId) return
+  const name = state.projects.items.find((p) => p.id === projectId)?.name || projectId
+  try {
+    const r = await window.gitReport.fillUnbind(projectId)
+    if (r && r.ok === false) {
+      ElMessage.error('解除绑定失败')
+      return
+    }
+  } catch (e) {
+    ElMessage.error(`解除绑定失败：${e?.message || e}`)
+    return
+  }
   const next = { ...bindings.value }
   delete next[projectId]
   bindings.value = next
-  bindDialog.value.visible = false
-  bindDialog.value.taskId = null
-  bindDialog.value.boundTaskId = null
-  ElMessage.success('已解除绑定')
+  if (bindDialog.value.projectId === projectId) {
+    bindDialog.value.visible = false
+    bindDialog.value.taskId = null
+    bindDialog.value.boundTaskId = null
+  }
+  ElMessage.success(`已解除「${name}」的禅道任务绑定`)
+  // 绑定影响任务匹配与汇总，重新生成报告以刷新
   if (plan.value) generate()
+}
+
+async function doUnbind() {
+  await unbindProject(bindDialog.value.projectId)
 }
 
 async function submitFill(preview) {
@@ -525,6 +561,13 @@ async function copyReport() {
   white-space: nowrap;
 }
 .project-option-tag { flex-shrink: 0; }
+.project-option-right {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  flex-shrink: 0;
+}
+.project-option-unbind { padding: 0; height: auto; }
 .bind-tip {
   margin-top: 10px;
   font-size: 12px;
