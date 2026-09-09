@@ -43,6 +43,7 @@
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh` CLI）作为应用内置能力：**打开软件自动开启本地服务，关闭软件自动关闭服务**，无需手动敲命令，**目标机器无需安装 dsh 或 Node**。
 
 - **运行时内置**：安装包内自带固定版本 `@deepseek-ai/dsh` 依赖树，位于 `resources/harness-runtime/`，由 **Electron 自带的 Node** 执行（`ELECTRON_RUN_AS_NODE=1` + `--expose-internals`；Electron 40+ 内置 Node 24，具备 dsh 需要的 `node:sqlite` 与 `import.meta.main`），目标机器无需安装 dsh 或 Node；首次启动在用户主目录自动生成 `~/.dsh`，离线可用
+- **默认配置内置**：首次启动把内置 provider（汉印 `hprt`、智谱 `zai-coding-cn`）与默认模型补进 `~/.dsh/settings.yaml`，目标机器无需手工添加；**不含任何密钥**——只写 `apiKeyEnv` 凭据名，使用者在 Harness「设置 → 模型」填入自己的 key 即可用。只补缺失项，同名 provider 与已有默认模型保持用户原值、注释保留；注入一次后写标记不再改动，settings.yaml 语法错误时原样跳过（`electron/harness-defaults.js`）
 - **自动启停**：应用启动时自动拉起 `dsh web`（监听 `127.0.0.1`，默认端口 3080，被占用时自动改用系统分配的空闲端口）；退出应用时连同子进程树一起结束，不留残留服务；异常退出遗留的进程会在下次启动时清理
 - **内嵌进入**：侧栏「DeepSeek Harness」直接内嵌完整 Harness GUI（会话、工作区、模型选择、设置），也可一键用系统浏览器打开
 - **鉴权闭环**：`dsh web` 就绪后输出的一次性 token 由主进程捕获，内嵌页首次导航用它换取 HttpOnly + SameSite=Strict 登录 cookie 后落到干净根地址——token 不写日志、不落盘
