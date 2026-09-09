@@ -3,5 +3,7 @@ dist/
 release/
 *.log
 .DS_Store
-# 内置 Harness 运行时（构建期由 scripts/prepare-harness-runtime.cjs 生成，约 300MB，不入库）
+# 内置 Harness 运行时（构建期由 scripts/prepare-harness-runtime.cjs 生成，约 217MB + 49MB 归档，不入库）
 build/harness-runtime/
+build/harness-runtime.tar.gz
+build/harness-runtime.json

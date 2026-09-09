@@ -21,6 +21,7 @@ const net = require('net')
 const os = require('os')
 const path = require('path')
 const { ensureDefaultSettings } = require('./harness-defaults')
+const harnessRuntime = require('./harness-runtime')
 
 /** 默认监听端口（被占用时自动改用系统分配的空闲端口） */
 const DEFAULT_PORT = 3080
@@ -37,6 +38,7 @@ let emitter = () => {}
 let logBuffer = ''
 let state = {
   status: 'stopped', // stopped | starting | running | error
+  stage: '',         // starting 阶段的细分（extract=正在解包内置运行时）
   port: 0,
   pid: 0,
   url: '',          // 带 token，仅供内嵌 webview 首次导航
@@ -79,9 +81,10 @@ function resolveCli() {
 
 /**
  * 内置运行时目录（随安装包分发）：
- * 打包后为 <resources>/harness-runtime，开发态为 <repo>/build/harness-runtime。
- * 内含 dsh/（固定版本的依赖树），由 Electron 自带的 Node 执行，
- * 使目标机器无需安装 dsh 或 Node。
+ * 打包后为 <resources>/harness-runtime（原样目录）或解包后的用户数据目录
+ * （安装包实际分发的是 harness-runtime.tar.gz，见 electron/harness-runtime.js），
+ * 开发态为 <repo>/build/harness-runtime。内含 dsh/（固定版本的依赖树），
+ * 由 Electron 自带的 Node 执行，使目标机器无需安装 dsh 或 Node。
  */
 function bundledRuntimeDir() {
   // DSH_RUNTIME_DIR 显式指定运行时目录（不设时按安装包/开发态默认位置查找）
@@ -97,7 +100,8 @@ function bundledRuntimeDir() {
   for (const dir of candidates) {
     try { if (fs.existsSync(path.join(dir, 'dsh'))) return dir } catch { /* noop */ }
   }
-  return ''
+  // 归档解包完成后的位置（ensureBundledRuntime 写入）
+  return harnessRuntime.cachedRuntimeDir()
 }
 
 function bundledEntry(dir) {
@@ -159,9 +163,10 @@ function buildEnv() {
   return env
 }
 
-/** 是否已安装 Harness（内置运行时 / CLI / 已有 ~/.dsh 主目录任一存在） */
+/** 是否已安装 Harness（内置运行时 / 随包归档 / CLI / 已有 ~/.dsh 主目录任一存在） */
 function isInstalled() {
   if (bundledRuntimeDir()) return true
+  if (harnessRuntime.hasShippedRuntime()) return true // 归档在、尚未解包也算可用
   if (resolveCli()) return true
   try { return fs.existsSync(homeDir()) } catch { return false }
 }
@@ -268,17 +273,30 @@ function spawnHarness(launch, args, cwd) {
 }
 
 async function doStart(opts = {}) {
+  // 先清理上次异常退出遗留的进程，避免它们占着旧的运行时目录导致解包删不掉
+  await cleanupStale()
+
+  // 内置运行时以单文件归档随包分发：首次使用（或升级换版本）需解包到用户数据目录，约 1 分钟
+  await harnessRuntime.ensureBundledRuntime({
+    onStage: (stage) => {
+      if (stage !== 'extract') return
+      setState({
+        status: 'starting', stage, error: '', port: 0, pid: 0, url: '', displayUrl: '',
+        startedAt: Date.now(), runtime: 'bundled', cli: '', runtimeDir: '',
+      })
+    },
+  })
+
   const launch = resolveLaunch()
   const bundled = launch.runtime === 'bundled'
   if (!bundled && !resolveCli() && !fs.existsSync(homeDir())) {
     setState({
-      status: 'error',
+      status: 'error', stage: '',
       error: '未检测到 DeepSeek Harness（dsh）。请先安装：npm i -g @deepseek-ai/dsh',
       cli: '', runtime: launch.runtime, runtimeDir: '', home: homeDir(),
     })
     return snapshot()
   }
-  await cleanupStale()
 
   const home = homeDir()
   // 内置默认 provider/模型（不含密钥）：只补缺失项、一次性注入，失败不阻塞启动
@@ -298,7 +316,7 @@ async function doStart(opts = {}) {
 
   logBuffer = ''
   setState({
-    status: 'starting', error: '', port, pid: 0, url: '', displayUrl: '', home, startedAt: Date.now(),
+    status: 'starting', stage: '', error: '', port, pid: 0, url: '', displayUrl: '', home, startedAt: Date.now(),
     runtime: launch.runtime,
     runtimeDir: launch.runtimeDir,
     defaults: defaultsNote,

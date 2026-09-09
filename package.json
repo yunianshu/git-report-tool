@@ -47,8 +47,12 @@
     ],
     "extraResources": [
       {
-        "from": "build/harness-runtime",
-        "to": "harness-runtime"
+        "from": "build/harness-runtime.tar.gz",
+        "to": "harness-runtime.tar.gz"
+      },
+      {
+        "from": "build/harness-runtime.json",
+        "to": "harness-runtime.json"
       }
     ],
     "beforePack": "scripts/prepare-harness-runtime.cjs",
@@ -67,7 +71,8 @@
     "nsis": {
       "oneClick": false,
       "allowToChangeInstallationDirectory": true,
-      "perMachine": false
+      "perMachine": false,
+      "include": "scripts/installer.nsh"
     },
     "mac": {
       "target": [
@@ -94,6 +99,7 @@
     "dompurify": "^3.4.13",
     "marked": "^18.0.9",
     "ssh2": "^1.17.0",
+    "tar": "^7.5.22",
     "yaml": "^2.9.0"
   }
 }

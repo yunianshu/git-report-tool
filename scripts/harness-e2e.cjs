@@ -37,10 +37,10 @@ const EVAL = `(async () => {
   r.menuFound = !!item
   if (item) item.click()
 
-  // 等待 webview 真正挂载（dsh 首次启动需加载插件与前端资源）
+  // 等待 webview 真正挂载（打包产物首跑还要先解包内置运行时，约 30 秒）
   let wv = null
   const t0 = Date.now()
-  while (Date.now() - t0 < 90000) {
+  while (Date.now() - t0 < 150000) {
     const el = q('webview')
     if (el && typeof el.getWebContentsId === 'function') {
       try { el.getWebContentsId(); wv = el; break } catch (e) { /* 尚未附加 */ }
@@ -85,6 +85,8 @@ const EVAL = `(async () => {
   return r
 })()`
 
+const EXE = process.env.E2E_EXE || ''
+const label = EXE ? '打包产物' : '开发版'
 const env = {
   ...process.env,
   PROJECT_MANAGER_USER_DATA: USER_DATA,
@@ -92,14 +94,13 @@ const env = {
   USERPROFILE: HOME_SANDBOX,
   HOME: HOME_SANDBOX,
   SMOKE_HARNESS: '1',
-  SMOKE_EXIT_MS: process.env.SMOKE_EXIT_MS || '100000',
+  // 打包产物首跑要先把内置运行时归档解包（约 30 秒），再启动 dsh
+  SMOKE_EXIT_MS: process.env.SMOKE_EXIT_MS || (EXE ? '180000' : '100000'),
   SMOKE_EVAL: EVAL,
   SMOKE_EVAL_MS: '1000',
   SMOKE_CLICK_MS: '600000', // 禁用冒烟默认切页，交由 EVAL 自己点击
 }
 
-const EXE = process.env.E2E_EXE || ''
-const label = EXE ? '打包产物' : '开发版'
 // 全新主目录（空目录，模拟从未用过 dsh 的机器）
 fs.mkdirSync(HOME_SANDBOX, { recursive: true })
 console.log(`=== DeepSeek Harness 内置服务 E2E（${label}） ===`)
@@ -111,16 +112,20 @@ console.log(`全新主目录=${HOME_SANDBOX}`)
  * 只统计本次被测形态（开发态 electron.exe / 打包产物 exe），避免把同时运行的另一形态计入。
  */
 function dshProcessCount() {
-  try {
-    if (process.platform === 'win32') {
-      const marker = (EXE ? path.basename(EXE) : 'electron.exe').toLowerCase()
-      const out = execFileSync('wmic', ['process', 'get', 'ProcessId,CommandLine', '/format:csv'], { encoding: 'utf8' })
-      return out.split(/\r?\n/).filter((l) => /bin\.js/i.test(l) && /dsh/i.test(l) && /\bweb\b/.test(l)
-        && l.toLowerCase().includes(marker)).length
-    }
-    const out = execFileSync('bash', ['-lc', "ps -eo args | grep -c '[b]in.js.*dsh.*web'"], { encoding: 'utf8' })
-    return Number(out.trim()) || 0
-  } catch { return -1 }
+  // wmic 偶发返回 WMI 错误（"节点 - ... 错误: ..."），重试几次避免误判
+  for (let attempt = 0; attempt < 3; attempt++) {
+    try {
+      if (process.platform === 'win32') {
+        const marker = (EXE ? path.basename(EXE) : 'electron.exe').toLowerCase()
+        const out = execFileSync('wmic', ['process', 'get', 'ProcessId,CommandLine', '/format:csv'], { encoding: 'utf8' })
+        return out.split(/\r?\n/).filter((l) => /bin\.js/i.test(l) && /dsh/i.test(l) && /\bweb\b/.test(l)
+          && l.toLowerCase().includes(marker)).length
+      }
+      const out = execFileSync('bash', ['-lc', "ps -eo args | grep -c '[b]in.js.*dsh.*web'"], { encoding: 'utf8' })
+      return Number(out.trim()) || 0
+    } catch { /* 重试 */ }
+  }
+  return -1
 }
 
 /** 查询进程可执行文件路径（用于确认 dsh 跑在 Electron 自身而非额外 Node 上） */
@@ -151,7 +156,7 @@ const before = dshProcessCount()
 const p = spawnSync(
   EXE || process.execPath,
   EXE ? [] : [path.join(ROOT, 'node_modules', 'electron', 'cli.js'), '.'],
-  { cwd: EXE ? path.dirname(EXE) : ROOT, encoding: 'utf8', timeout: 240000, env },
+  { cwd: EXE ? path.dirname(EXE) : ROOT, encoding: 'utf8', timeout: EXE ? 330000 : 150000, env },
 )
 const stdout = String(p.stdout || '')
 
@@ -167,6 +172,7 @@ assert('H1 打开软件自动开启端口（主进程自动拉起并输出就绪
 
 const evalLine = stdout.split('\n').find((l) => l.includes('[SMOKE][eval]'))
 if (!evalLine) {
+  console.log(`进程退出：status=${p.status} signal=${p.signal}${p.error ? ` error=${p.error.message}` : ''}`)
   console.log('未取到渲染层结果，stdout 尾部：')
   console.log(stdout.slice(-3000))
   process.exit(1)
@@ -188,12 +194,18 @@ assert('H5 使用安装包内置运行时（用户机器无需安装 dsh/Node）
 assert('H5b 全新主目录下自动完成首次自举（生成 ~/.dsh）',
   fs.existsSync(path.join(HOME_SANDBOX, '.dsh')),
   `home=${HOME_SANDBOX} 内容=${fs.existsSync(HOME_SANDBOX) ? fs.readdirSync(HOME_SANDBOX).join(',') : '(不存在)'}`)
-const runtimeDir = EXE
-  ? path.join(path.dirname(EXE), 'resources', 'harness-runtime')
+// 内置运行时以单文件归档随包分发，首次启动解包到 userData/runtime（安装包不必逐文件解压 2.6 万个文件）
+const extractedDir = EXE
+  ? path.join(USER_DATA, 'runtime')
   : path.join(ROOT, 'build', 'harness-runtime')
-assert('H5c 不再内置独立 Node 运行时（复用 Electron 自带 Node）',
-  fs.existsSync(path.join(runtimeDir, 'dsh')) && !fs.existsSync(path.join(runtimeDir, 'node')),
-  `runtimeDir=${runtimeDir} 内容=${fs.existsSync(runtimeDir) ? fs.readdirSync(runtimeDir).join(',') : '(不存在)'}`)
+assert('H5c 内置运行时按需解包到用户数据目录且不含独立 Node 目录（复用 Electron 自带 Node）',
+  fs.existsSync(path.join(extractedDir, 'dsh')) && !fs.existsSync(path.join(extractedDir, 'node')),
+  `dir=${extractedDir} 内容=${fs.existsSync(extractedDir) ? fs.readdirSync(extractedDir).slice(0, 8).join(',') : '(不存在)'}`)
+const shippedArchive = EXE
+  ? path.join(path.dirname(EXE), 'resources', 'harness-runtime.tar.gz')
+  : path.join(ROOT, 'build', 'harness-runtime.tar.gz')
+assert('H5d 安装包以单个归档分发运行时（安装器只写 1 个文件，不再逐文件解压）',
+  fs.existsSync(shippedArchive), `archive=${shippedArchive}`)
 
 // H6/H7：内置默认 provider 配置（不含密钥）随安装包分发到全新机器
 const sandboxSettings = path.join(HOME_SANDBOX, '.dsh', 'settings.yaml')

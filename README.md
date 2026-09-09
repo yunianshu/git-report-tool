@@ -42,7 +42,8 @@
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh` CLI）作为应用内置能力：**打开软件自动开启本地服务，关闭软件自动关闭服务**，无需手动敲命令，**目标机器无需安装 dsh 或 Node**。
 
-- **运行时内置**：安装包内自带固定版本 `@deepseek-ai/dsh` 依赖树，位于 `resources/harness-runtime/`，由 **Electron 自带的 Node** 执行（`ELECTRON_RUN_AS_NODE=1` + `--expose-internals`；Electron 40+ 内置 Node 24，具备 dsh 需要的 `node:sqlite` 与 `import.meta.main`），目标机器无需安装 dsh 或 Node；首次启动在用户主目录自动生成 `~/.dsh`，离线可用
+- **运行时内置**：安装包内自带固定版本 `@deepseek-ai/dsh` 依赖树，以单个归档 `resources/harness-runtime.tar.gz` 分发，**首次启动解包到用户数据目录 `<userData>/runtime`**（约 30 秒，之后按版本标记复用），由 **Electron 自带的 Node** 执行（`ELECTRON_RUN_AS_NODE=1` + `--expose-internals`；Electron 40+ 内置 Node 24，具备 dsh 需要的 `node:sqlite` 与 `import.meta.main`），目标机器无需安装 dsh 或 Node；首次启动在用户主目录自动生成 `~/.dsh`，离线可用
+  - 为什么打成一个归档：依赖树约 2.6 万个文件（217MB），原样放进安装包时 NSIS 要逐文件解压再整树复制，Windows 实测安装需约 16 分钟（用户会以为卡死）；单文件分发后安装约 1 分钟。解包优先用系统 `tar`（约 26 秒），缺失时回退内置 JS 解包器（`electron/harness-runtime.js`）
 - **默认配置内置**：首次启动把内置 provider（汉印 `hprt`、智谱 `zai-coding-cn`）与默认模型补进 `~/.dsh/settings.yaml`，目标机器无需手工添加；**不含任何密钥**——只写 `apiKeyEnv` 凭据名，使用者在 Harness「设置 → 模型」填入自己的 key 即可用。只补缺失项，同名 provider 与已有默认模型保持用户原值、注释保留；注入一次后写标记不再改动，settings.yaml 语法错误时原样跳过（`electron/harness-defaults.js`）
 - **自动启停**：应用启动时自动拉起 `dsh web`（监听 `127.0.0.1`，默认端口 3080，被占用时自动改用系统分配的空闲端口）；退出应用时连同子进程树一起结束，不留残留服务；异常退出遗留的进程会在下次启动时清理
 - **内嵌进入**：侧栏「DeepSeek Harness」直接内嵌完整 Harness GUI（会话、工作区、模型选择、设置），也可一键用系统浏览器打开
@@ -51,9 +52,9 @@
 - **服务设置**：端口与「是否随应用自动启动」可配置
 - **实现要点**：主进程 `electron/harness-service.js` 负责解析运行时、拉起与整树关闭；渲染层通过 `<webview>`（独立 guest，不受父页 CSP / X-Frame-Options 限制）承载 GUI
 
-运行时解析优先级：内置运行时 → 本机全局安装的 `dsh` → PATH。开发/调试可用 `DSH_RUNTIME_DIR` 指定运行时目录，或用 `DSH_CLI` 指定可执行文件。
+运行时解析优先级：已解包的内置运行时 → 本机全局安装的 `dsh` → PATH。开发/调试可用 `DSH_RUNTIME_DIR` 指定运行时目录，或用 `DSH_CLI` 指定可执行文件。
 
-构建：`scripts/prepare-harness-runtime.cjs` 在打包前（`beforePack`）安装固定版本 dsh 到 `build/harness-runtime/`（已缓存，约 260MB，不入库；版本用 `DSH_VERSION` 覆盖）。安装包体积因此增大（Windows 约 +220MB 解压后）。
+构建：`scripts/prepare-harness-runtime.cjs` 在打包前（`beforePack`）安装固定版本 dsh 到 `build/harness-runtime/`（已缓存，约 217MB，不入库；版本用 `DSH_VERSION` 覆盖），并打成 `build/harness-runtime.tar.gz`（约 49MB）随包分发。安装包体积因此增大（Windows 约 +49MB）。
 
 ## 活动报告
 

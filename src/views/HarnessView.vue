@@ -33,8 +33,8 @@
         <!-- 启动中 -->
         <div v-else-if="starting" class="harness-placeholder">
           <el-icon class="harness-placeholder-icon is-spin"><Loading /></el-icon>
-          <h3>正在启动 DeepSeek Harness…</h3>
-          <p>首次启动需要加载插件与前端资源，通常 10～30 秒，请稍候。</p>
+          <h3>{{ startingTitle }}</h3>
+          <p>{{ startingHint }}</p>
         </div>
 
         <!-- 出错 / 未安装 -->
@@ -107,6 +107,12 @@ const autoStartInput = ref(true)
 
 const running = computed(() => snapshot.value.status === 'running' && !!snapshot.value.url)
 const starting = computed(() => snapshot.value.status === 'starting')
+/** 首次使用/升级后：内置运行时以单文件归档随包分发，启动前先解包（约 1 分钟） */
+const extracting = computed(() => starting.value && snapshot.value.stage === 'extract')
+const startingTitle = computed(() => (extracting.value ? '正在解包内置 DeepSeek Harness 运行时…' : '正在启动 DeepSeek Harness…'))
+const startingHint = computed(() => (extracting.value
+  ? '首次启动（或升级换版本后）需要把内置运行时解包到用户目录，约 1 分钟，请稍候。'
+  : '首次启动需要加载插件与前端资源，通常 10～30 秒，请稍候。'))
 const installed = computed(() => snapshot.value.installed !== false)
 /** webview 首次导航必须带 token：直接开根地址会因缺 cookie 返回 401 */
 const webviewUrl = computed(() => snapshot.value.url)
