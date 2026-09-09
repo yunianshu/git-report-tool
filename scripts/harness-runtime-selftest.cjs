@@ -74,6 +74,15 @@ function writeTree(root) {
   process.env.DSH_RUNTIME_DIR = path.join(root, 'nope')
   check('R8 DSH_RUNTIME_DIR 无效时不回退解包', (await rt.ensureBundledRuntime()) === '')
 
+  // 系统 tar 缺失/被拦截时回退内置 JS 解包器
+  delete process.env.DSH_RUNTIME_DIR
+  process.env.DSH_RUNTIME_FORCE_JS = '1'
+  fs.rmSync(cacheDir, { recursive: true, force: true })
+  const dir4 = await rt.ensureBundledRuntime()
+  check('R9 系统 tar 不可用时回退 JS 解包器',
+    dir4 === cacheDir && fs.existsSync(path.join(cacheDir, '.complete')), dir4)
+  delete process.env.DSH_RUNTIME_FORCE_JS
+
   try { fs.rmSync(root, { recursive: true, force: true }) } catch { /* noop */ }
   console.log(failed ? `\n结果：${failed} 项失败` : '\n结果：全部通过')
   process.exit(failed ? 1 : 0)

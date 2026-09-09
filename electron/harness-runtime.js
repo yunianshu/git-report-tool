@@ -103,8 +103,9 @@ function systemTar() {
   return 'tar'
 }
 
-/** 系统 tar 解包；成功返回 true */
+/** 系统 tar 解包；成功返回 true（DSH_RUNTIME_FORCE_JS=1 可强制走 JS 解包器，自测用） */
 function extractWithSystemTar(archive, target) {
+  if (process.env.DSH_RUNTIME_FORCE_JS === '1') return false
   try {
     const result = spawnSync(systemTar(), ['-xzf', archive, '-C', target, '--strip-components=1'],
       { stdio: 'ignore', windowsHide: true })
