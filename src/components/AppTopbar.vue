@@ -52,8 +52,9 @@ let offMaximized = null
 
 function winMinimize() { window.gitReport?.winMinimize?.() }
 async function winToggleMaximize() {
-  const r = await window.gitReport?.winToggleMaximize?.()
-  if (typeof r === 'boolean') maximized.value = r
+  try { await window.gitReport?.winToggleMaximize?.() } catch { /* noop */ }
+  // 不采用 IPC 返回值：Windows 下 maximize()/unmaximize() 异步生效，主进程立即读
+  // isMaximized() 拿到的是旧状态；图标以 maximize/unmaximize 事件为准（onMounted 已接线）
 }
 function winClose() { window.gitReport?.winClose?.() }
 

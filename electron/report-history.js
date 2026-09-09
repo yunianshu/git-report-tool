@@ -31,12 +31,35 @@ function list() {
   return readIndex().reports.sort((a, b) => (a.id < b.id ? 1 : -1))
 }
 
+/** 历史上限：超出后裁剪最旧记录，并同步删除其正文文件（防无限增长） */
+const MAX_REPORTS = 200
+
+/** 删除被裁剪记录的正文文件（basename 防穿越；失败静默） */
+function removeReportFiles(records) {
+  for (const rec of records || []) {
+    const file = rec && rec.file
+    if (typeof file !== 'string' || !file.endsWith('.md')) continue
+    try { fs.rmSync(path.join(reportsDir(), path.basename(file)), { force: true }) } catch { /* noop */ }
+  }
+}
+
+/** 生成唯一 ID：毫秒时间戳 + 同毫秒自增序号（快速连续保存时 Date.now() 会碰撞，
+ *  多份报告共用同一正文文件互相覆盖） */
+let lastIdMs = 0
+let idSeq = 0
+function nextId() {
+  const now = Date.now()
+  if (now === lastIdMs) idSeq += 1
+  else { lastIdMs = now; idSeq = 0 }
+  return `${now}-${idSeq}`
+}
+
 /** 自动保存一份报告，返回记录 */
 function save(payload) {
   const { title, content, period = '', dateRange = '', commitCount = 0, projectCount = 0 } = payload || {}
   const now = new Date()
   const pad = (n) => String(n).padStart(2, '0')
-  const id = String(Date.now())
+  const id = nextId()
   const createdAt = `${now.getFullYear()}-${pad(now.getMonth() + 1)}-${pad(now.getDate())} ${pad(now.getHours())}:${pad(now.getMinutes())}:${pad(now.getSeconds())}`
 
   fs.mkdirSync(reportsDir(), { recursive: true })
@@ -54,7 +77,11 @@ function save(payload) {
     file: path.relative(app.getPath('userData'), file),
     createdAt,
   })
-  writeIndex(idx)
+  // 注意不能用 slice(0, len - MAX)：len < MAX 时 end 为负表示从末尾倒数，会误删保留范围内的记录
+  const kept = idx.reports.slice(-MAX_REPORTS)
+  const dropped = idx.reports.slice(0, Math.max(0, idx.reports.length - MAX_REPORTS))
+  writeIndex({ reports: kept })
+  removeReportFiles(dropped)
   return { id, title, createdAt }
 }
 

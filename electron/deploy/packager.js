@@ -119,8 +119,10 @@ function buildPackage(opts) {
     const done = (fn) => (v) => { if (!settled) { settled = true; fn(v) } }
 
     output.on('close', done(() => {
-      const sha256 = sha256File(zipPath)
-      resolve({ zipPath, fileName, sha256, fileCount, sizeBytes: archive.pointer() })
+      // 流式计算哈希：同步 readFileSync 会把整个包读进内存并阻塞主进程（大包数百 MB）
+      sha256FileStream(zipPath)
+        .then((sha256) => resolve({ zipPath, fileName, sha256, fileCount, sizeBytes: archive.pointer() }))
+        .catch(reject)
     }))
     output.on('error', done(reject))
     archive.on('error', done(reject))
@@ -145,9 +147,15 @@ function formatStamp(d) {
   return `${d.getFullYear()}${p(d.getMonth() + 1)}${p(d.getDate())}-${p(d.getHours())}${p(d.getMinutes())}${p(d.getSeconds())}`
 }
 
-function sha256File(p) {
-  // 项目源码包体积有限，直接同步读取计算，避免流式回调竞态
-  return crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex')
+/** 文件 SHA256（流式读取，发布包可达数百 MB，不能同步整读阻塞主进程） */
+function sha256FileStream(p) {
+  return new Promise((resolve, reject) => {
+    const h = crypto.createHash('sha256')
+    const s = fs.createReadStream(p)
+    s.on('error', reject)
+    s.on('data', (d) => h.update(d))
+    s.on('end', () => resolve(h.digest('hex')))
+  })
 }
 
 /**
@@ -179,7 +187,9 @@ function buildDataPackage(opts) {
     const done = (fn) => (v) => { if (!settled) { settled = true; fn(v) } }
 
     output.on('close', done(() => {
-      resolve({ zipPath, fileName, sha256: sha256File(zipPath), fileCount, sizeBytes: archive.pointer(), sourceDir })
+      sha256FileStream(zipPath)
+        .then((sha256) => resolve({ zipPath, fileName, sha256, fileCount, sizeBytes: archive.pointer(), sourceDir }))
+        .catch(reject)
     }))
     output.on('error', done(reject))
     archive.on('error', done(reject))

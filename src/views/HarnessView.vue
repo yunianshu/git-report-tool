@@ -226,9 +226,12 @@ function reload() {
 
 /** 全屏偏好写回配置：下次进入 Harness 视图自动铺满。用监听而非按钮回调，
  *  保证「guest 内按 Esc」「窗口全屏被外部改变」等路径同样记录用户意图 */
-watch(immersive, (value) => {
+watch(immersive, async (value) => {
   state.config.harness = { ...(state.config.harness || {}), fullscreen: !!value }
-  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
+  try {
+    const r = await window.gitReport.configSave(toPlain(state.config))
+    if (r && r.ok === false) ElMessage.error(r.error || '全屏偏好保存失败')
+  } catch { /* 主进程未就绪时静默 */ }
 })
 
 async function setFullscreen(flag) {
@@ -261,10 +264,19 @@ function onNavigated() {
   loadFailed.value = false
 }
 
-function saveSettings() {
+async function saveSettings() {
   const port = Math.min(65535, Math.max(1024, Number(portInput.value) || 3080))
   state.config.harness = { ...(state.config.harness || {}), port, autoStart: !!autoStartInput.value }
-  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
+  try {
+    const r = await window.gitReport.configSave(toPlain(state.config))
+    if (r && r.ok === false) {
+      ElMessage.error(r.error || '保存失败')
+      return
+    }
+  } catch (e) {
+    ElMessage.error(`保存失败：${(e && e.message) || e}`)
+    return
+  }
   settingsVisible.value = false
   ElMessage.success('已保存，重启服务后生效')
 }

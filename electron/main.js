@@ -187,16 +187,17 @@ function registerIpc() {
   // 配置
   ipcMain.handle('config:load', () => store.load())
   ipcMain.handle('config:save', (_e, cfg) => {
+    const r = store.save(cfg)
+    if (r !== true) return { ok: false, error: '配置写入失败（数据目录只读或磁盘异常），修改未保存' }
     // 根目录/排除规则变化 → 失效扫描缓存并重新预热（新配置的仓库列表与提交即时就绪）
     const before = store.load()
-    const r = store.save(cfg)
     const after = store.load()
     const sig = (c) => JSON.stringify([c.roots || [], (c.excludes || []).slice().sort()])
     if (sig(before) !== sig(after)) {
       gitService.invalidateScanCache()
       warmupPipeline()
     }
-    return r
+    return { ok: true }
   })
 
   // 目录选择

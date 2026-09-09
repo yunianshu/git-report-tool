@@ -462,7 +462,7 @@ async function fetchModels(showSuccess = true) {
 const canFetchModels = computed(() => !!(state.config.ai.baseUrl && (state.config.ai.keyConfigured || apiKeyInput.value)))
 
 /** 保存全部配置；AI 密钥：输入了新 Key 则替换，留空则主进程保留既有；禅道密码同规则 */
-function saveConfig() {
+async function saveConfig() {
   if (apiKeyInput.value) {
     state.config.ai.apiKey = apiKeyInput.value
     state.config.ai.keyConfigured = true
@@ -489,7 +489,29 @@ function saveConfig() {
   } else {
     delete state.config.hanprint.password
   }
-  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
+  try {
+    const r = await window.gitReport.configSave(toPlain(state.config))
+    if (r && r.ok === false) ElMessage.error(r.error || '配置保存失败')
+  } catch (e) {
+    ElMessage.error(`配置保存失败：${(e && e.message) || e}`)
+  }
+}
+
+/** 清除已存密钥/密码类配置；成功才更新本地展示状态（失败时磁盘仍保留原值） */
+async function saveClearConfig(section, flag) {
+  state.config[section][flag] = true
+  let ok = true
+  let error = ''
+  try {
+    const r = await window.gitReport.configSave(toPlain(state.config))
+    if (r && r.ok === false) { ok = false; error = r.error || '操作失败' }
+  } catch (e) {
+    ok = false
+    error = (e && e.message) || String(e)
+  }
+  delete state.config[section][flag]
+  if (!ok) ElMessage.error(`清除失败（${error}），配置未修改`)
+  return ok
 }
 
 async function clearKey() {
@@ -498,9 +520,7 @@ async function clearKey() {
   } catch {
     return
   }
-  state.config.ai.clearKey = true
-  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
-  delete state.config.ai.clearKey
+  if (!(await saveClearConfig('ai', 'clearKey'))) return
   state.config.ai.keyConfigured = false
   state.config.ai.keyMasked = ''
   apiKeyInput.value = ''
@@ -541,9 +561,7 @@ async function clearZtPwd() {
   } catch {
     return
   }
-  state.config.zentao.clearPwd = true
-  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
-  delete state.config.zentao.clearPwd
+  if (!(await saveClearConfig('zentao', 'clearPwd'))) return
   state.config.zentao.pwdConfigured = false
   state.config.zentao.pwdMasked = ''
   ztPwdInput.value = ''
@@ -582,9 +600,7 @@ async function clearHpPwd() {
   } catch {
     return
   }
-  state.config.hanprint.clearPwd = true
-  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
-  delete state.config.hanprint.clearPwd
+  if (!(await saveClearConfig('hanprint', 'clearPwd'))) return
   state.config.hanprint.pwdConfigured = false
   state.config.hanprint.pwdMasked = ''
   hpPwdInput.value = ''
@@ -688,20 +704,24 @@ function ensureInfoWorkers() {
 
 async function browseRoot() {
   const dir = await window.gitReport.pickDirectory()
-  if (dir && !state.config.roots.includes(dir)) {
-    state.config.roots.push(dir)
-    saveConfig()
-    doScan() // 添加根目录后立即扫描并列出仓库
-  }
+  addRootPath(dir)
 }
 function addRoot() {
   const v = newRoot.value.trim()
-  if (v && !state.config.roots.includes(v)) {
-    state.config.roots.push(v)
-    saveConfig()
-    doScan() // 添加根目录后立即扫描并列出仓库
-  }
+  addRootPath(v)
   newRoot.value = ''
+}
+/** 归一化判重（尾随分隔符/大小写差异视为同一目录），避免重复扫描同一根目录 */
+function addRootPath(v) {
+  if (!v) return
+  const key = pathKey(v)
+  if (state.config.roots.some((r) => pathKey(r) === key)) {
+    if (v === newRoot.value.trim()) ElMessage.info('该根目录已添加')
+    return
+  }
+  state.config.roots.push(v)
+  saveConfig()
+  doScan() // 添加根目录后立即扫描并列出仓库
 }
 
 /** 该仓库是否已加入工作区项目（按 localPath 匹配） */
