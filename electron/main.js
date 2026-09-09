@@ -95,14 +95,29 @@ function createWindow() {
  * 幂等：预热进行中/已完成的重复触发直接复用（scanReposCached/collectCommits 内部去重）。
  */
 let warmupTask = null
+
+/**
+ * 已发现仓库快照 —— 预热在窗口加载完成前就启动，早于渲染层注册监听器的
+ * git:scanRepoFound 事件会丢失；只靠事件累积会让「Git 活动源」数量少于
+ * 收集进度的总数。渲染层接线后主动拉取本快照补齐。
+ */
+let knownRepos = []
+
+/** 发现仓库：先入快照再广播，保证快照不落后于事件 */
+function rememberRepo(repoPath) {
+  if (repoPath && !knownRepos.includes(repoPath)) knownRepos.push(repoPath)
+  broadcast('git:scanRepoFound', repoPath)
+}
+
 async function warmupPipeline() {
   const task = (async () => {
     const cfg = store.load()
     if (!cfg.roots || !cfg.roots.length) return []
     const repos = await gitService.scanReposCached(cfg.roots, cfg.excludes, {
       onProgress: (p) => broadcast('git:scanProgress', p),
-      onRepo: (r) => broadcast('git:scanRepoFound', r),
+      onRepo: rememberRepo,
     })
+    knownRepos = [...repos] // 扫描结果为权威列表（缓存命中时不会触发 onRepo）
     // 预热路径同样广播 scanDone：渲染层扫描态复位不依赖用户手动扫描
     broadcast('git:scanDone', { total: repos.length })
     if (!repos.length) return repos
@@ -167,9 +182,9 @@ function registerIpc() {
   // 进度/发现事件经 broadcast 推送，无论预热还是用户触发，渲染端都能收到进度流
   ipcMain.handle('git:scanRepos', (_e, { roots, excludes, force }) => {
     const onProgress = (p) => broadcast('git:scanProgress', p)
-    const onRepo = (r) => broadcast('git:scanRepoFound', r)
-    return gitService.scanReposCached(roots, excludes, { force: !!force, onProgress, onRepo })
+    return gitService.scanReposCached(roots, excludes, { force: !!force, onProgress, onRepo: rememberRepo })
       .then((result) => {
+        knownRepos = [...result] // 命中缓存时不触发 onRepo，用返回值校准快照
         broadcast('git:scanDone', { total: result.length })
         return result
       })
@@ -186,6 +201,8 @@ function registerIpc() {
     if (!warmupTask) warmupPipeline()
     return warmupTask
   })
+  // 已发现仓库快照：渲染层接线晚于预热启动时，用它补齐错过的 git:scanRepoFound 事件
+  ipcMain.handle('git:reposSnapshot', () => knownRepos)
 
   // 报告导出
   ipcMain.handle('report:save', async (_e, { defaultName, content }) => {

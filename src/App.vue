@@ -102,6 +102,12 @@ onMounted(async () => {
 
     // ─── Git 扫描全局接线：预热与手动扫描的事件都实时反映到工作台 ───
     const pathKey = (p) => String(p || '').replace(/\\/g, '/').toLowerCase()
+    /** 用权威仓库路径列表同步发现列表（保留已加载的 info，避免详情重复请求） */
+    const syncDiscoveredRepos = (paths) => {
+      if (!Array.isArray(paths) || !paths.length) return
+      const known = new Map(state.discoveredRepos.map((row) => [pathKey(row.path), row]))
+      state.discoveredRepos = paths.map((path) => known.get(pathKey(path)) || { path, shortName: shortPath(path), info: null })
+    }
     window.gitReport.onScanProgress((progress) => {
       state.report.scanProgress = progress
       state.scan.scanning = true
@@ -151,14 +157,14 @@ onMounted(async () => {
     })
 
     warmupActive = true
+    // 预热早于本组件挂载启动，接线前广播的发现事件已丢失：先用快照补齐，
+    // 否则收集期间的「Git 活动源」数量会小于「正在加载今日活动 x/y」的总数
+    window.gitReport.reposSnapshot().then(syncDiscoveredRepos).catch(() => {})
     window.gitReport.warmup().then((repos) => {
       warmupActive = false
       state.scan.collecting = false
       // 预热结果为权威列表：按路径合并（保留已有项的 info，补齐事件流可能漏掉的）
-      if (Array.isArray(repos) && repos.length) {
-        const known = new Map(state.discoveredRepos.map((row) => [pathKey(row.path), row]))
-        state.discoveredRepos = repos.map((path) => known.get(pathKey(path)) || { path, shortName: shortPath(path), info: null })
-      }
+      syncDiscoveredRepos(repos)
     }).catch(() => {
       warmupActive = false
       state.scan.collecting = false

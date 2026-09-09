@@ -36,6 +36,8 @@ contextBridge.exposeInMainWorld('gitReport', {
   scanRepos: (roots, excludes, force) =>
     ipcRenderer.invoke('git:scanRepos', { roots: toPlain(roots), excludes: toPlain(excludes), force: !!force }),
   warmup: () => ipcRenderer.invoke('git:warmup'),
+  // 已发现仓库快照（补齐接线前错过的发现事件，避免数量与收集总数不一致）
+  reposSnapshot: () => ipcRenderer.invoke('git:reposSnapshot'),
   repoInfo: (repo) => ipcRenderer.invoke('git:repoInfo', repo),
   collectCommits: (repos, opts) =>
     ipcRenderer.invoke('git:collectCommits', { repos: toPlain(repos), opts: toPlain(opts) }),
