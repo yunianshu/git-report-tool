@@ -31,6 +31,15 @@ const ARCHIVE = path.join(BUILD_DIR, 'harness-runtime.tar.gz')
 const SHIPPED_MARKER = path.join(BUILD_DIR, 'harness-runtime.json')
 /** dsh 需要 Node ≥22.5 的 node:sqlite 与 ≥22.18 的 import.meta.main（Electron 40+ 内置 Node 24） */
 const DSH_VERSION = process.env.DSH_VERSION || '0.1.5-alpha.1'
+/**
+ * dsh-win32-process 补丁号。dsh 的 Windows Job 子进程路径用 CreateProcessW
+ * 创建目标进程（pwsh 等）时不带 CREATE_NO_WINDOW，而内置运行时以
+ * ELECTRON_RUN_AS_NODE 跑 dsh——进程链上没有任何控制台，Windows 只能为每个
+ * 控制台程序新分配一个，默认终端（Windows Terminal）就会弹窗：Harness 会话
+ * 每执行一次命令弹一个空白终端窗口。补丁给三处创建标志位补上
+ * CREATE_NO_WINDOW(0x08000000)。补丁号变化会改变版本标记，触发客户端重新解包。
+ */
+const WIN32_NO_WINDOW_PATCH = 1
 const MARKER = path.join(OUT_DIR, 'runtime.json')
 
 function arg(name, fallback) {
@@ -102,8 +111,42 @@ async function packArchive(expected) {
   log(`归档完成：${ARCHIVE}（${(fs.statSync(ARCHIVE).size / 1048576).toFixed(0)} MB）`)
 }
 
+/**
+ * 给 dsh-win32-process 补 CREATE_NO_WINDOW（幂等；期望的字面量找不到时抛错，
+ * 避免 dsh 升级后补丁静默失效、带着弹窗问题出包）。
+ *
+ * 三处创建点与对应替换（CREATE_NO_WINDOW = 0x08000000 = 134217728）：
+ *   - 普通目标 CreateProcessW：   1028（SUSPENDED|UNICODE_ENV）→ 134218756
+ *   - 受限令牌 Job：              4（SUSPENDED）→ 134217732
+ *   - 受限令牌探测（管道版）：    0 → 134217728
+ */
+function patchWin32Console() {
+  const file = path.join(OUT_DIR, 'dsh', 'node_modules', '@deepseek-ai', 'dsh-win32-process', 'lib', 'index.js')
+  const source = fs.readFileSync(file, 'utf8')
+  if (source.includes('134218756')) {
+    log(`dsh-win32-process 已带 CREATE_NO_WINDOW 补丁（v${WIN32_NO_WINDOW_PATCH}），跳过`)
+    return
+  }
+  const replacements = [
+    ['null, null, 1, 1028, environment', 'null, null, 1, 134218756, environment'],
+    ['createRestrictedProcess(api, options, commandLine, 4, startupInfo, processInfo)',
+      'createRestrictedProcess(api, options, commandLine, 134217732, startupInfo, processInfo)'],
+    ['options.args), 0, startupInfo, processInfo) === 0', 'options.args), 134217728, startupInfo, processInfo) === 0'],
+  ]
+  let patched = source
+  for (const [from, to] of replacements) {
+    const count = patched.split(from).length - 1
+    if (count !== 1) {
+      throw new Error(`dsh-win32-process 补丁点期望出现 1 次实际 ${count} 次：「${from}」——dsh 版本可能已变化，请核对 @deepseek-ai/dsh@${DSH_VERSION} 的进程创建标志`)
+    }
+    patched = patched.replace(from, to)
+  }
+  fs.writeFileSync(file, patched)
+  log(`已为 dsh-win32-process 补 CREATE_NO_WINDOW（v${WIN32_NO_WINDOW_PATCH}，3 处创建点）`)
+}
+
 async function main() {
-  const expected = { dshVersion: DSH_VERSION, platform: PLATFORM, arch: ARCH }
+  const expected = { dshVersion: DSH_VERSION, platform: PLATFORM, arch: ARCH, win32NoWindowPatch: WIN32_NO_WINDOW_PATCH }
   let needInstall = true
   if (!process.env.DSH_RUNTIME_FORCE && fs.existsSync(MARKER)) {
     try {
@@ -120,6 +163,7 @@ async function main() {
     fs.writeFileSync(MARKER, JSON.stringify(expected, null, 2))
     log(`依赖树完成：${OUT_DIR}（约 ${dirSizeMB(OUT_DIR)} MB）`)
   }
+  patchWin32Console()
   await packArchive(expected)
 }
 
