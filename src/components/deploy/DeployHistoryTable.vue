@@ -1,5 +1,5 @@
 <template>
-  <el-card shadow="never" class="card">
+  <el-card shadow="never" class="card deploy-card-history">
     <template #header>
       <div class="card-header">
         <span>发布历史</span>

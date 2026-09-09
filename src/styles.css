@@ -870,9 +870,13 @@ body {
 
 /* 部署与设置 */
 .deploy-page .page-header, .settings-page .page-header, .report-page .page-header { flex-shrink: 0; }
+/* 发布与发布日志并排（日志在发布卡右侧），发布历史在下方通栏、占满剩余宽度。
+   用卡片自身类名定位：组件内的 el-dialog 会内联渲染隐藏的 el-overlay，
+   .card 的 nth-child 序号不可靠（历史遗留写法曾因此从未命中）。 */
 .deploy-main-column { min-width: 0; display: grid; grid-template-columns: minmax(0, 1.1fr) minmax(360px, .9fr); gap: 14px; align-items: start; }
-.deploy-main-column > .card:first-child, .deploy-main-column > .card:nth-child(2) { grid-column: 1; }
-.deploy-main-column > .card:nth-child(3) { grid-column: 2; grid-row: 1 / span 2; }
+.deploy-main-column > .deploy-card-publish { grid-column: 1; grid-row: 1; }
+.deploy-main-column > .deploy-card-log { grid-column: 2; grid-row: 1; }
+.deploy-main-column > .deploy-card-history { grid-column: 1 / -1; grid-row: 2; }
 .deploy-config-scroll { padding: 0 4px 12px; }
 .deploy-config-scroll .card { box-shadow: none; }
 /* 部署页跨组件共享（DeployView / deploy 子组件） */

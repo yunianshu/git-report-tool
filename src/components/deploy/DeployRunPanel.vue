@@ -1,5 +1,5 @@
 <template>
-  <el-card shadow="never" class="card">
+  <el-card shadow="never" class="card deploy-card-publish">
     <template #header>
       <div class="card-header">
         <span>发布</span>
@@ -80,7 +80,7 @@
     </div>
   </el-card>
 
-  <el-card shadow="never" class="card">
+  <el-card shadow="never" class="card deploy-card-log">
     <template #header>
       <div class="card-header">
         <span>发布日志</span>
