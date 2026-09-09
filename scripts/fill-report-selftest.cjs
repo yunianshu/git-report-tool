@@ -143,29 +143,23 @@ await test('用户场景：09:30 起点 → 17:05 当前 = 6.5h', () => {
   assert.strictEqual(list[0].hours, 6.5) // 455−60 = 395min → 390 = 6.5h
 })
 
-await test('resolveEndTime：填报今天一律返回点击生成报告的时刻（含已过下班的加班时段）', () => {
-  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T16:05:00')), '16:05')
-  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T18:42:00')), '18:42')
+await test('resolveEndTime：一律返回点击生成报告的时刻（与填报日期无关）', () => {
+  assert.strictEqual(fill.resolveEndTime(new Date('2026-09-07T16:05:00')), '16:05')
+  assert.strictEqual(fill.resolveEndTime(new Date('2026-09-07T18:42:00')), '18:42') // 已过下班时间不截断
+  assert.strictEqual(fill.resolveEndTime(new Date('2026-09-09T00:30:00')), '00:30') // 凌晨收工
 })
 
-await test('resolveEndTime：补填历史日期返回下班时间', () => {
-  assert.strictEqual(fill.resolveEndTime('2026-09-06', '17:30', new Date('2026-09-07T16:05:00')), '17:30')
+await test('resolveEndTime：显式填写的下班/加班结束时间优先于点击时刻', () => {
+  assert.strictEqual(fill.resolveEndTime(new Date('2026-09-09T11:20:00'), '00:30'), '00:30') // 白天补填也以显式收工时间为准
+  assert.strictEqual(fill.resolveEndTime(new Date('2026-09-09T11:20:00'), '23:00'), '23:00')
+  assert.strictEqual(fill.resolveEndTime(new Date('2026-09-09T11:20:00'), ''), '11:20') // 空串 → 点击时刻
 })
 
-await test('resolveEndTime：显式填写的下班/加班结束时间优先于自动推导', () => {
-  // 历史日期填 00:30（次日凌晨）→ 直接用 00:30，不再回落 workEnd
-  assert.strictEqual(fill.resolveEndTime('2026-09-06', '17:30', new Date('2026-09-07T16:05:00'), '00:30'), '00:30')
-  // 今天填了显式值也以显式值为准（不再取当前时刻）
-  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T16:05:00'), '23:00'), '23:00')
-  // 空串/未传 → 维持原自动行为
-  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T16:05:00'), ''), '16:05')
-})
-
-await test('isCrossDay：仅显式填写且早于上班时间时判为跨夜', () => {
-  assert.strictEqual(fill.isCrossDay('08:30', '00:30', '00:30'), true)   // 加班到次日凌晨
-  assert.strictEqual(fill.isCrossDay('08:30', '17:30', '17:30'), false)  // 正常下班
-  assert.strictEqual(fill.isCrossDay('08:30', '00:30', ''), false)       // 自动推导不跨夜
-  assert.strictEqual(fill.isCrossDay('20:00', '04:00', '04:00'), true)   // 夜班
+await test('isCrossDay：终点早于上班时间即按次日跨夜', () => {
+  assert.strictEqual(fill.isCrossDay('08:30', '00:30'), true)   // 加班到次日凌晨
+  assert.strictEqual(fill.isCrossDay('08:30', '17:30'), false)  // 正常下班
+  assert.strictEqual(fill.isCrossDay('08:30', '11:20'), false)  // 当天白天点击
+  assert.strictEqual(fill.isCrossDay('20:00', '04:00'), true)   // 夜班
 })
 
 await test('用户场景复现：昨天 08:30 上班、次日 00:30 加班结束 → 15h（而非 8h）', () => {
@@ -175,6 +169,17 @@ await test('用户场景复现：昨天 08:30 上班、次日 00:30 加班结束
   ], { startTime: '08:30', endTime: '00:30', crossDay: true })
   assert.strictEqual(list.length, 1)
   // 08:30 → 次日 00:30 = 960min，扣 60min 午休 = 900min → 900 = 15h
+  assert.strictEqual(list[0].hours, 15)
+})
+
+await test('用户场景复现：凌晨 00:30 收工当时点生成报告（不填下班时间）→ 自动跨夜 15h', () => {
+  const endTime = fill.resolveEndTime(new Date('2026-09-09T00:30:00'))
+  assert.strictEqual(endTime, '00:30')
+  const crossDay = fill.isCrossDay('08:30', endTime)
+  assert.strictEqual(crossDay, true)
+  const list = fill.distributeByProject([
+    { time: '09:12', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
+  ], { startTime: '08:30', endTime, crossDay })
   assert.strictEqual(list[0].hours, 15)
 })
 
@@ -688,11 +693,12 @@ if (gitOk()) {
   })
 
   await test('plan 端到端：真实提交 → 按提交数分配 → 汇总（不依赖禅道）', async () => {
-    // 不配置禅道：plan 应容错返回 ztError 而不抛异常；历史日期 → 终点为下班 17:30
+    // 不配置禅道：plan 应容错返回 ztError 而不抛异常；显式 endTime 让断言不依赖运行时刻
     store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
     const r = await fill.plan({
       date: pastDayStr,
       startTime: '09:12', // 实际上班时间（与首条提交时刻恰好相同，仅作对照）
+      endTime: '17:30',
       projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
     })
     assert.ok(r.ztError)
@@ -710,6 +716,7 @@ if (gitOk()) {
     const r = await fill.plan({
       date: pastDayStr,
       startTime: '08:30', // 早于首条提交 09:12
+      endTime: '17:30',
       projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
     })
     // 08:30→17:30 = 540−60 = 480 = 8h
@@ -732,17 +739,19 @@ if (gitOk()) {
     assert.strictEqual(r.endTimeManual, true)
   })
 
-  await test('plan 端到端：未填 endTime 时历史日期仍为 17:30（不跨夜）', async () => {
+  await test('plan 端到端：未填 endTime 时终点为点击时刻（与填报日期无关）', async () => {
     store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
+    const before = new Date()
     const r = await fill.plan({
-      date: pastDayStr,
+      date: pastDayStr, // 历史日期，同样取点击时刻
       startTime: '08:30',
       projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
     })
-    assert.strictEqual(r.planned[0].hours, 8)
-    assert.strictEqual(r.rangeEnd, '17:30')
-    assert.strictEqual(r.crossDay, false)
+    const after = new Date()
+    const hm = (d) => `${pd(d.getHours())}:${pd(d.getMinutes())}`
+    assert.ok([hm(before), hm(after)].includes(r.rangeEnd), `rangeEnd=${r.rangeEnd} 不在 ${hm(before)}–${hm(after)} 内`)
     assert.strictEqual(r.endTimeManual, false)
+    assert.strictEqual(r.crossDay, fill.isCrossDay('08:30', r.rangeEnd))
   })
 
   await test('plan 拒绝非法 endTime 格式', async () => {

@@ -307,15 +307,15 @@ const startTime = computed({
   set: (v) => { state.fillReport.startTime = v },
 })
 /**
- * 下班/加班结束时间（可留空走自动）。填写后若早于上班时间，按次日跨夜计算
- * ——例如昨天 08:30 上班、今天凌晨 00:30 收工，选昨天日期 + 填 00:30 即 15h。
+ * 下班/加班结束时间（留空则取点击「生成报告」的当前时刻，与填报日期无关）。
+ * 早于上班时间时按次日跨夜计算——例如昨天 08:30 上班、今天凌晨 00:30 收工，
+ * 选昨天日期 + 填 00:30 即 15h。
  */
 const endTime = computed({
   get: () => state.fillReport.endTime || '',
   set: (v) => { state.fillReport.endTime = v || '' },
 })
-const configWorkEnd = computed(() => state.config.zentao?.workEnd || '17:30')
-const endPlaceholder = computed(() => (fillDate.value === todayStr() ? '下班（现在）' : `下班（${configWorkEnd.value}）`))
+const endPlaceholder = '下班（现在）'
 
 function hmOf(s) {
   const [h, m] = String(s || '').split(':').map(Number)
@@ -338,9 +338,8 @@ function previewMinutes(start, end, crossDay) {
 /** 工具条实时预览：区间与预计工时，让跨夜/误填立刻可见 */
 const rangePreview = computed(() => {
   const start = startTime.value || '08:30'
-  const auto = fillDate.value === todayStr() ? nowHM() : configWorkEnd.value
-  const end = endTime.value || auto
-  const crossDay = !!endTime.value && hmOf(end) < hmOf(start)
+  const end = endTime.value || nowHM()
+  const crossDay = hmOf(end) < hmOf(start)
   const min = previewMinutes(start, end, crossDay)
   const hours = (Math.floor(min / 30) * 30 / 60).toFixed(1)
   return `${start}–${crossDay ? '次日 ' : ''}${end} · 预计 ${hours}h`

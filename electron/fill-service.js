@@ -49,27 +49,22 @@ function workMinutes(start, end, lunchS, lunchE) {
 
 /**
  * 尾段终点：页面显式填写的下班/加班结束时间优先（支持跨夜，如「00:30」表示次日凌晨）；
- * 未填写时：填报今天 → 点击生成报告的当前时刻（含已过下班时间的加班时段，不截断）；
- * 补填历史日期 → 下班时间（无「现在」概念）。now 可注入以便自测。
+ * 未填写时一律取点击生成报告的当前时刻，不区分填报日期——补填历史日期时「现在」
+ * 同样是已知的终点，设置页不再有固定下班时间。now 可注入以便自测。
  */
-function resolveEndTime(date, workEnd, now = new Date(), explicitEnd = '') {
+function resolveEndTime(now = new Date(), explicitEnd = '') {
   if (explicitEnd) return explicitEnd
   const p = (n) => String(n).padStart(2, '0')
-  const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
-  if (date === today) {
-    const nowMin = now.getHours() * 60 + now.getMinutes()
-    return `${p(Math.floor(nowMin / 60))}:${p(nowMin % 60)}`
-  }
-  return workEnd || '17:30'
+  const nowMin = now.getHours() * 60 + now.getMinutes()
+  return `${p(Math.floor(nowMin / 60))}:${p(nowMin % 60)}`
 }
 
 /**
- * 工时区间是否跨夜：仅当页面显式填写结束时间且早于上班时间时成立
- * （如 08:30 上班、次日 00:30 加班结束）。自动推导的终点不参与判断，
- * 避免「当前时刻早于上班时间」被误判成跨夜。
+ * 工时区间是否跨夜：终点早于上班时间即视为次日
+ * （如 08:30 上班、次日 00:30 加班结束）。
  */
-function isCrossDay(startTime, endTime, explicitEnd) {
-  return !!explicitEnd && hm(endTime) < hm(startTime)
+function isCrossDay(startTime, endTime) {
+  return hm(endTime) < hm(startTime)
 }
 
 // ─── 按项目聚合（一个项目一条工时记录，内容为简洁编号列表） ───
@@ -363,20 +358,18 @@ async function plan(payload) {
   const identitiesMissing = !identities.length
   const commits = identitiesMissing ? [] : await collectTimedCommits(projects, { date, identities })
 
-  // 总工时区间 = 页面填写的实际上班时间 → 终点（显式填写优先，可跨夜；否则今天为点击
-  // 生成报告的时刻，历史日期为下班时间）；git 提交时刻只用于收集内容与计数，不参与工时
+  // 总工时区间 = 页面填写的实际上班时间 → 终点（显式填写优先，否则取点击生成报告的
+  // 当前时刻；终点早于上班时间即按次日跨夜）；git 提交时刻只用于收集内容与计数
   const workStart = String(payload.startTime || (cfg.zentao && cfg.zentao.workStart) || '08:30')
   if (!validHM(workStart)) throw new Error('实际上班时间格式不正确（应为 HH:MM）')
   const explicitEnd = String(payload.endTime || '').trim()
   if (explicitEnd && !validHM(explicitEnd)) throw new Error('下班时间格式不正确（应为 HH:MM）')
-  const workEnd = (cfg.zentao && cfg.zentao.workEnd) || '17:30'
   const workCfg = {
     lunchStart: (cfg.zentao && cfg.zentao.lunchStart) || '12:00',
     lunchEnd: (cfg.zentao && cfg.zentao.lunchEnd) || '13:00',
-    workEnd,
   }
-  const endTime = resolveEndTime(date, workEnd, undefined, explicitEnd)
-  const crossDay = isCrossDay(workStart, endTime, explicitEnd)
+  const endTime = resolveEndTime(undefined, explicitEnd)
+  const crossDay = isCrossDay(workStart, endTime)
   const planned = distributeByProject(commits, { startTime: workStart, endTime, ...workCfg, crossDay })
   const rangeStart = workStart
 

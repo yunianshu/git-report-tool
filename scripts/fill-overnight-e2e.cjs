@@ -133,6 +133,8 @@ const helpers = `
   const generateEnabled = () => { const b = generateBtn(); return !!(b && !b.disabled) }
   const rowOf = (name) => [...document.querySelectorAll('.prow')].find((r) => norm(r.textContent).includes(name))
   const cardHeaders = () => [...document.querySelectorAll('.fill-page .card-header')].map((x) => norm(x.textContent)).join(' | ')
+  const dateInputValue = () => (q('.fill-toolbar .el-date-editor input') || {}).value || ''
+  const nowHM = () => { const d = new Date(); return \`\${String(d.getHours()).padStart(2, '0')}:\${String(d.getMinutes()).padStart(2, '0')}\` }
   const done = () => setTimeout(() => window.close(), 400)
 `
 
@@ -141,17 +143,20 @@ const EVAL = `(async () => {
   const r = {}
   if (!await viewReady()) { done(); return { fatal: '一键填报页未就绪' } }
 
-  // B1：下班时间选择器存在（可留空 → placeholder 提示自动取值）
+  // B1：下班时间选择器存在（可留空 → placeholder 提示取点击时刻）
   const sel = endSelect()
   r.endSelectExists = !!sel
   r.endPlaceholder = sel ? norm(sel.textContent) : ''
   r.rangeTipDefault = rangeTip()
 
-  // B2：切到昨天，未填下班时间 → 终点为 17:30、非跨夜
+  // B2：切到昨天，未填下班时间 → 终点为点击时刻（与填报日期无关，不再是 17:30）
+  const nowBefore = nowHM()
   r.datePanelOpened = await openDatePanel()
   r.pickedYesterday = pickDateShortcut('昨天')
-  r.yesterdayApplied = await waitFor(() => rangeTip().includes('17:30'), 8000)
+  r.dateApplied = await waitFor(() => dateInputValue() === '${YESTERDAY}', 8000)
+  r.dateAfterPick = dateInputValue()
   r.rangeTipYesterday = rangeTip()
+  r.expectedEnds = [nowBefore, nowHM()]
 
   // B3：下班时间选 00:30（早于上班时间）→ 次日跨夜 + 15h
   r.endOpened = await openEndSelect()
@@ -226,8 +231,11 @@ if (!ev) {
   assert('B1 工具条出现下班时间选择器', ev.endSelectExists === true)
   assert('B1 placeholder 提示自动取值', /下班（.+）/.test(String(ev.endPlaceholder)), `实际="${ev.endPlaceholder}"`)
   assert('B1 默认预览显示区间与预计工时', /预计/.test(String(ev.rangeTipDefault)), `实际="${ev.rangeTipDefault}"`)
-  assert('B2 切到昨天成功', ev.datePanelOpened === 'ok' && ev.pickedYesterday === true, `panel=${ev.datePanelOpened} pick=${ev.pickedYesterday}`)
-  assert('B2 未填下班时间 → 08:30–17:30 · 预计 8.0h', ev.rangeTipYesterday === '08:30–17:30 · 预计 8.0h', `实际="${ev.rangeTipYesterday}"`)
+  assert('B2 切到昨天成功', ev.datePanelOpened === 'ok' && ev.pickedYesterday === true && ev.dateApplied === true, `panel=${ev.datePanelOpened} pick=${ev.pickedYesterday} date=${ev.dateAfterPick}`)
+  const endIsNow = (ev.expectedEnds || []).some((e) => String(ev.rangeTipYesterday).includes(`–${e} ·`))
+  assert('B2 未填下班时间 → 终点为点击时刻（与日期无关，不再是 17:30）',
+    endIsNow && /^08:30–(次日 )?\d{2}:\d{2} · 预计 \d+\.\d\s*h$/.test(String(ev.rangeTipYesterday)),
+    `实际="${ev.rangeTipYesterday}" 期望终点∈${JSON.stringify(ev.expectedEnds)}`)
   assert('B3 选 00:30 成功', ev.endOpened === true && ev.pickedEnd === true, `open=${ev.endOpened} pick=${ev.pickedEnd}`)
   assert('B3 预览显示次日跨夜且 15.0h', ev.rangeTipOvernight === '08:30–次日 00:30 · 预计 15.0h', `实际="${ev.rangeTipOvernight}"`)
   assert('B4 生成报告后出现明细行', ev.picked === true && ev.generated === true && ev.rowAppeared === true, `picked=${ev.picked} gen=${ev.generated} row=${ev.rowAppeared}`)
