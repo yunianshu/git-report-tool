@@ -1,7 +1,7 @@
 /**
  * 主进程入口
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, webContents } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const gitService = require('./git-service')
@@ -23,6 +23,15 @@ const harnessService = require('./harness-service')
 // 统一数据目录为 ASCII 固定值，与产品显示名（productName，可中文）解耦：
 // dev / 打包 GUI / 无头 CLI 三模式共用同一份配置，改名或换产品名不丢数据
 app.setPath('userData', process.env.PROJECT_MANAGER_USER_DATA || path.join(app.getPath('appData'), 'dev-project-manager'))
+
+// 冒烟自动化依赖稳定的定时器时序：窗口被遮挡/失焦时 Chromium 会强制节流渲染层
+// 的链式 setTimeout（最严 1 次/分钟），SMOKE_EVAL 的轮询会停滞到超出退出时限，
+// 表现为「取不到渲染层结果」。必须在 app ready 前关闭这些节流（仅冒烟模式）。
+if (process.env.SMOKE_EXIT_MS) {
+  app.commandLine.appendSwitch('disable-background-timer-throttling')
+  app.commandLine.appendSwitch('disable-renderer-backgrounding')
+  app.commandLine.appendSwitch('disable-backgrounding-occluded-windows')
+}
 
 // 一次性迁移：旧版本默认数据目录 %APPDATA%/git-report-desktop（更名前）。
 // 仅在新目录还没有任何配置、且未通过 PROJECT_MANAGER_USER_DATA 显式指定数据目录时，
@@ -84,6 +93,20 @@ function createWindow() {
   // 最大化状态同步给渲染层（自定义标题栏按钮图标切换）
   mainWindow.on('maximize', () => broadcast('win:maximized', true))
   mainWindow.on('unmaximize', () => broadcast('win:maximized', false))
+
+  // 沉浸全屏（Harness 内嵌页铺满整屏）：窗口全屏状态是唯一真源，渲染层据此隐藏应用外壳
+  mainWindow.on('enter-full-screen', () => broadcast('win:fullscreen', true))
+  mainWindow.on('leave-full-screen', () => broadcast('win:fullscreen', false))
+  // webview 是独立 webContents，焦点在 guest 内时按键不会冒泡到宿主页：全屏下按 Esc
+  // 退出必须由主进程在 guest 侧监听，否则用户在 dsh 界面里按 Esc 会被困在全屏。
+  mainWindow.webContents.on('did-attach-webview', (_event, guest) => {
+    guest.on('before-input-event', (_e, input) => {
+      const isEscape = input && (input.key === 'Escape' || input.code === 'Escape')
+      if (isEscape && input.type === 'keyDown' && mainWindow && !mainWindow.isDestroyed() && mainWindow.isFullScreen()) {
+        mainWindow.setFullScreen(false)
+      }
+    })
+  })
 
   const devUrl = process.env.ELECTRON_RENDERER_URL
   if (devUrl) {
@@ -153,6 +176,13 @@ function registerIpc() {
   })
   ipcMain.handle('win:close', () => mainWindow && mainWindow.close())
   ipcMain.handle('win:isMaximized', () => !!(mainWindow && mainWindow.isMaximized()))
+  // 全屏开关（Harness 沉浸模式）：返回窗口实际状态，避免渲染层与窗口状态不一致
+  ipcMain.handle('win:setFullScreen', (_e, flag) => {
+    if (!mainWindow) return false
+    mainWindow.setFullScreen(!!flag)
+    return mainWindow.isFullScreen()
+  })
+  ipcMain.handle('win:isFullScreen', () => !!(mainWindow && mainWindow.isFullScreen()))
 
   // 配置
   ipcMain.handle('config:load', () => store.load())
@@ -542,6 +572,25 @@ app.whenReady().then(() => {
       if (level >= 2) console.log(`[SMOKE][renderer:${level >= 3 ? 'error' : 'warn'}]`, message)
     })
     wc.on('did-fail-load', (_e, code, desc) => console.log('[SMOKE][did-fail-load]', code, desc))
+    // 调试用：SMOKE_GUEST_KEY=Escape 时周期性地向 webview guest 注入按键，
+    // 验证「焦点在 dsh 页面内按 Esc 退出全屏」（宿主页收不到 guest 的按键）
+    if (process.env.SMOKE_GUEST_KEY) {
+      const key = process.env.SMOKE_GUEST_KEY
+      const startMs = Number(process.env.SMOKE_GUEST_KEY_MS) || 50000
+      const times = Number(process.env.SMOKE_GUEST_KEY_TIMES) || 4
+      for (let i = 0; i < times; i++) {
+        setTimeout(() => {
+          try {
+            const guests = webContents.getAllWebContents().filter((c) => c.getType() === 'webview')
+            for (const guest of guests) {
+              guest.sendInputEvent({ type: 'keyDown', keyCode: key })
+              guest.sendInputEvent({ type: 'keyUp', keyCode: key })
+            }
+            console.log('[SMOKE][guest-key]', key, `→ ${guests.length} 个 guest`)
+          } catch (err) { console.log('[SMOKE][guest-key-err]', err.message) }
+        }, startMs + i * 5000)
+      }
+    }
     // 点击打开目标视图（SMOKE_VIEW，默认「部署」），验证应用壳与各页面可正常挂载
     setTimeout(() => {
       wc.executeJavaScript(`(() => {
@@ -565,9 +614,14 @@ app.whenReady().then(() => {
     // 调试用：SMOKE_EVAL=表达式 时在渲染层执行并打印结果（端到端验证 IPC 链路用）
     if (process.env.SMOKE_EVAL) {
       setTimeout(() => {
+        // eval-start 打点：结果行缺失时用于区分「未开始执行」与「执行未返回」
+        console.log('[SMOKE][eval-start]', new Date().toISOString())
         wc.executeJavaScript(`(${process.env.SMOKE_EVAL})`).then((r) => console.log('[SMOKE][eval]', JSON.stringify(r))).catch((e) => console.log('[SMOKE][eval-err]', e.message))
       }, Number(process.env.SMOKE_EVAL_MS) || 4000)
     }
+    // 渲染进程异常（崩溃/无响应）在自动化里必须可见，否则表现为「eval 结果凭空消失」
+    wc.on('render-process-gone', (_e, details) => console.log('[SMOKE][render-gone]', JSON.stringify(details)))
+    mainWindow.on('unresponsive', () => console.log('[SMOKE][unresponsive]'))
     if (process.env.SMOKE_SCREENSHOT_PATH) {
       setTimeout(async () => {
         try {

@@ -45,11 +45,16 @@ export const state = reactive({
       clientId: '1',
       account: '',
     },
-    /** 内置 DeepSeek Harness 本地服务（端口 / 是否随应用自动启动） */
+    /** 内置 DeepSeek Harness 本地服务（端口 / 是否随应用自动启动 / 进入时是否全屏） */
     harness: {
       port: 3080,
       autoStart: true,
+      fullscreen: false,
     },
+  },
+  /** 应用外壳状态：沉浸全屏由主进程窗口全屏驱动（Harness 视图铺满整屏时隐藏侧栏/顶栏） */
+  ui: {
+    fullscreen: false,
   },
   /** 报告生成过程（跨视图保留，切换 tab 不中断） */
   report: {

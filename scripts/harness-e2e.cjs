@@ -159,6 +159,11 @@ const p = spawnSync(
   { cwd: EXE ? path.dirname(EXE) : ROOT, encoding: 'utf8', timeout: EXE ? 330000 : 150000, env },
 )
 const stdout = String(p.stdout || '')
+if (process.env.E2E_DEBUG) {
+  console.log('--- 子进程 SMOKE 日志 ---')
+  for (const l of stdout.split('\n')) if (l.includes('[SMOKE]')) console.log(l.trim())
+  console.log('--- 子进程 SMOKE 日志结束 ---')
+}
 
 let failed = 0
 const assert = (name, cond, detail) => {
@@ -172,6 +177,9 @@ assert('H1 打开软件自动开启端口（主进程自动拉起并输出就绪
 
 const evalLine = stdout.split('\n').find((l) => l.includes('[SMOKE][eval]'))
 if (!evalLine) {
+  // EVAL 抛错行出现在启动早期，会被后面的 harness 日志挤出尾部——先单独捞出
+  const errLine = stdout.split('\n').find((l) => l.includes('[SMOKE][eval-err]'))
+  if (errLine) console.log('渲染层 EVAL 抛错:', errLine.trim())
   console.log(`进程退出：status=${p.status} signal=${p.signal}${p.error ? ` error=${p.error.message}` : ''}`)
   console.log('未取到渲染层结果，stdout 尾部：')
   console.log(stdout.slice(-3000))

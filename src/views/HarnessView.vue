@@ -1,6 +1,7 @@
 <template>
-  <div class="page harness-page">
+  <div class="page harness-page" :class="{ 'is-immersive': immersive }">
     <PageHeader
+      v-if="!immersive"
       eyebrow="DEEPSEEK HARNESS"
       title="DeepSeek Harness"
       description="内置的 DeepSeek 智能体工作台：打开软件自动开启本地服务，关闭软件时一并关闭。"
@@ -13,6 +14,7 @@
         <el-button v-else-if="installed" type="primary" :loading="busy" @click="start">
           <el-icon><VideoPlay /></el-icon>启动服务
         </el-button>
+        <el-button v-if="running" @click="enterFullscreen"><el-icon><FullScreen /></el-icon>全屏</el-button>
         <el-button @click="settingsVisible = true"><el-icon><Setting /></el-icon>服务设置</el-button>
       </template>
     </PageHeader>
@@ -54,10 +56,19 @@
             <el-button v-else @click="openInstallDocs">查看安装说明</el-button>
           </div>
         </div>
+
+        <!-- 全屏时唯一的退出入口：webview 之上的悬浮条（Esc 亦可，含 dsh 页面内按 Esc） -->
+        <div v-if="immersive" class="harness-immersive-bar">
+          <span :class="['harness-dot', `is-${snapshot.status}`]" />
+          <span class="harness-immersive-label">{{ statusLabel }}</span>
+          <el-button size="small" @click="exitFullscreen">
+            <el-icon><Close /></el-icon>退出全屏
+          </el-button>
+        </div>
       </div>
 
       <!-- 服务信息条：让「端口已自动开启」可见 -->
-      <footer v-if="running" class="harness-footer">
+      <footer v-if="running && !immersive" class="harness-footer">
         <span class="harness-dot" />
         <span>服务运行中</span>
         <span v-if="runtimeLabel" class="harness-meta">{{ runtimeLabel }}</span>
@@ -89,8 +100,9 @@
 </template>
 
 <script setup>
-import { computed, onBeforeUnmount, onMounted, ref } from 'vue'
+import { computed, onBeforeUnmount, onMounted, ref, watch } from 'vue'
 import { ElMessage } from 'element-plus'
+import { Close, FullScreen } from '@element-plus/icons-vue'
 import PageHeader from '../components/PageHeader.vue'
 import { state } from '../store'
 import { toPlain } from '../utils/ipc'
@@ -107,6 +119,8 @@ const autoStartInput = ref(true)
 
 const running = computed(() => snapshot.value.status === 'running' && !!snapshot.value.url)
 const starting = computed(() => snapshot.value.status === 'starting')
+/** 沉浸全屏：窗口全屏 + 隐藏应用外壳（侧栏/顶栏）与页头/底栏，webview 铺满整屏 */
+const immersive = computed(() => state.ui.fullscreen === true)
 /** 首次使用/升级后：内置运行时以单文件归档随包分发，启动前先解包（约 1 分钟） */
 const extracting = computed(() => starting.value && snapshot.value.stage === 'extract')
 const startingTitle = computed(() => (extracting.value ? '正在解包内置 DeepSeek Harness 运行时…' : '正在启动 DeepSeek Harness…'))
@@ -194,6 +208,29 @@ function reload() {
   if (view && typeof view.reload === 'function') view.reload()
 }
 
+/** 全屏偏好写回配置：下次进入 Harness 视图自动铺满。用监听而非按钮回调，
+ *  保证「guest 内按 Esc」「窗口全屏被外部改变」等路径同样记录用户意图 */
+watch(immersive, (value) => {
+  state.config.harness = { ...(state.config.harness || {}), fullscreen: !!value }
+  try { window.gitReport.configSave(toPlain(state.config)) } catch { /* noop */ }
+})
+
+async function setFullscreen(flag) {
+  try {
+    state.ui.fullscreen = !!(await window.gitReport.winSetFullScreen(flag))
+  } catch (err) {
+    ElMessage.error(err?.message || '切换全屏失败')
+  }
+}
+
+function enterFullscreen() { return setFullscreen(true) }
+function exitFullscreen() { return setFullscreen(false) }
+
+/** 焦点在宿主页时（未点进 dsh 页面）按 Esc 退出；guest 内的 Esc 由主进程监听 */
+function onKeydown(event) {
+  if (event.key === 'Escape' && immersive.value) exitFullscreen()
+}
+
 function onFailLoad(event) {
   // -3 为主动取消（切换地址时常见），不算故障
   if (event && event.errorCode === -3) return
@@ -217,9 +254,17 @@ onMounted(async () => {
   if (!running.value && !starting.value && installed.value) start()
   portInput.value = Number(state.config.harness?.port) || 3080
   autoStartInput.value = state.config.harness?.autoStart !== false
+  window.addEventListener('keydown', onKeydown)
+  // 上次退出时处于全屏 → 进入本视图即恢复铺满
+  if (state.config.harness?.fullscreen === true) enterFullscreen()
 })
 
-onBeforeUnmount(() => { if (unsubscribe) unsubscribe() })
+onBeforeUnmount(() => {
+  if (unsubscribe) unsubscribe()
+  window.removeEventListener('keydown', onKeydown)
+  // 离开视图必须恢复应用外壳，否则侧栏/顶栏被隐藏后用户无法导航
+  if (immersive.value) window.gitReport.winSetFullScreen(false).catch(() => {})
+})
 </script>
 
 <style scoped>
@@ -232,6 +277,9 @@ onBeforeUnmount(() => { if (unsubscribe) unsubscribe() })
   padding: 22px 26px 24px;
 }
 .harness-page .page-header { margin-bottom: 14px; }
+/* 沉浸全屏：去掉页面留白与卡片描边，webview 直接铺满整屏 */
+.harness-page.is-immersive { padding: 0; }
+.harness-page.is-immersive .harness-shell { border: 0; border-radius: 0; }
 
 .harness-pill {
   display: inline-flex;
@@ -324,7 +372,32 @@ onBeforeUnmount(() => { if (unsubscribe) unsubscribe() })
   font-size: 12px;
 }
 .harness-dot { width: 7px; height: 7px; border-radius: 50%; background: #49a878; }
+.harness-dot.is-starting { background: #d9a441; }
+.harness-dot.is-error { background: #d1585a; }
 .harness-meta { color: #8a94a2; font-family: var(--brand-mono); }
+
+/* 全屏悬浮条：叠在 webview 之上（DOM 层），半透明以免遮挡 dsh 自己的界面 */
+.harness-immersive-bar {
+  position: absolute;
+  top: 10px;
+  right: 12px;
+  z-index: 10;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  padding: 5px 6px 5px 12px;
+  border: 1px solid rgba(0, 0, 0, .06);
+  border-radius: 999px;
+  background: rgba(255, 255, 255, .86);
+  box-shadow: 0 6px 18px rgba(16, 24, 40, .12);
+  backdrop-filter: blur(6px);
+  font-size: 12px;
+  color: #55606e;
+  opacity: .55;
+  transition: opacity .18s ease;
+}
+.harness-immersive-bar:hover { opacity: 1; }
+.harness-immersive-label { white-space: nowrap; }
 
 .harness-hint { margin-top: 2px; color: var(--text-muted); font-size: 12px; line-height: 1.6; }
 </style>

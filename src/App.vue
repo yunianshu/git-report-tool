@@ -1,8 +1,9 @@
 <template>
-  <div class="app-shell">
-    <AppSidebar v-model="view" />
+  <div class="app-shell" :class="{ 'is-immersive': state.ui.fullscreen }">
+    <AppSidebar v-if="!state.ui.fullscreen" v-model="view" />
     <section class="shell-main">
       <AppTopbar
+        v-if="!state.ui.fullscreen"
         :projects="state.projects.items"
         :current-id="state.projects.currentId"
         @select-project="selectProject"
@@ -27,7 +28,7 @@
 </template>
 
 <script setup>
-import { ref, onMounted } from 'vue'
+import { ref, onMounted, watch } from 'vue'
 import { ElMessage } from 'element-plus'
 import AppSidebar from './components/AppSidebar.vue'
 import AppTopbar from './components/AppTopbar.vue'
@@ -72,6 +73,11 @@ function openProjectEditor(project = null) {
   editorVisible.value = true
 }
 
+/** 全屏只属于 Harness 视图：任何原因切走后立即恢复应用外壳（侧栏被隐藏时用户无法自行切走） */
+watch(view, (next) => {
+  if (next !== 'harness' && state.ui.fullscreen) window.gitReport.winSetFullScreen(false).catch(() => {})
+})
+
 async function saveEditorProject(project) {
   try {
     await saveProject(project)
@@ -84,6 +90,10 @@ async function saveEditorProject(project) {
 }
 
 onMounted(async () => {
+  // 沉浸全屏：窗口全屏状态由主进程维护，渲染层只跟随（F11/Esc 等外部改变同样同步）
+  window.gitReport.onWinFullscreen((value) => { state.ui.fullscreen = !!value })
+  try { state.ui.fullscreen = !!(await window.gitReport.winIsFullScreen()) } catch { /* 主进程未就绪 */ }
+
   await loadProjects()
   try {
     const cfg = await window.gitReport.configLoad()

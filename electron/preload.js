@@ -70,6 +70,9 @@ contextBridge.exposeInMainWorld('gitReport', {
   winClose: () => ipcRenderer.invoke('win:close'),
   winIsMaximized: () => ipcRenderer.invoke('win:isMaximized'),
   onWinMaximized: (cb) => subscribe('win:maximized', cb),
+  winSetFullScreen: (flag) => ipcRenderer.invoke('win:setFullScreen', !!flag),
+  winIsFullScreen: () => ipcRenderer.invoke('win:isFullScreen'),
+  onWinFullscreen: (cb) => subscribe('win:fullscreen', cb),
   // 项目中心
   projectsList: () => ipcRenderer.invoke('projects:list'),
   projectsSave: (project) => ipcRenderer.invoke('projects:save', toPlain(project)),
