@@ -23,7 +23,7 @@
       </main>
     </section>
 
-    <ProjectEditor v-model:visible="editorVisible" :project="editingProject" @saved="saveEditorProject" />
+    <ProjectEditor v-model:visible="editorVisible" :project="editingProject" :saving="editorSaving" @saved="saveEditorProject" />
   </div>
 </template>
 
@@ -50,6 +50,7 @@ import { shortPath } from './utils/path'
 const view = ref('dashboard')
 const settingsSection = ref('ai')
 const editorVisible = ref(false)
+const editorSaving = ref(false)
 const editingProject = ref(null)
 const { loadProjects, selectProject, saveProject } = useProjects()
 
@@ -79,6 +80,7 @@ watch(view, (next) => {
 })
 
 async function saveEditorProject(project) {
+  editorSaving.value = true
   try {
     await saveProject(project)
     editorVisible.value = false
@@ -86,6 +88,8 @@ async function saveEditorProject(project) {
     ElMessage.success(project.id ? '项目已更新' : '项目已创建')
   } catch (error) {
     ElMessage.error(error?.message || '保存项目失败')
+  } finally {
+    editorSaving.value = false
   }
 }
 

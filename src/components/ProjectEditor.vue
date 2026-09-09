@@ -34,12 +34,13 @@
 </template>
 
 <script setup>
-import { reactive, ref, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { reactive, watch } from 'vue'
 
 const props = defineProps({
   visible: { type: Boolean, default: false },
   project: { type: Object, default: null },
+  /** 父组件的保存进行中状态：emit 不等待异步保存完成，本地 saving 无法覆盖保存期 */
+  saving: { type: Boolean, default: false },
 })
 const emit = defineEmits(['update:visible', 'saved'])
 const STATUS_OPTIONS = [
@@ -49,7 +50,6 @@ const STATUS_OPTIONS = [
 ]
 const emptyForm = () => ({ name: '', description: '', localPath: '', status: 'active', tags: [], notes: '' })
 const form = reactive(emptyForm())
-const saving = ref(false)
 
 watch(() => [props.visible, props.project], () => {
   if (!props.visible) return
@@ -66,15 +66,8 @@ async function browse() {
   if (path) form.localPath = path
 }
 
-async function submit() {
-  if (!form.name.trim() || saving.value) return
-  saving.value = true
-  try {
-    emit('saved', JSON.parse(JSON.stringify({ ...form, name: form.name.trim() })))
-  } catch (error) {
-    ElMessage.error(error?.message || '保存项目失败')
-  } finally {
-    saving.value = false
-  }
+function submit() {
+  if (!form.name.trim() || props.saving) return
+  emit('saved', JSON.parse(JSON.stringify({ ...form, name: form.name.trim() })))
 }
 </script>

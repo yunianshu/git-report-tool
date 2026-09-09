@@ -49,6 +49,21 @@ async function occupy(port) {
   blocker.close()
   await sleep(500)
 
+  // ── B6 启动中点停止：作废进行中的启动，随后仍可正常重新拉起 ──
+  // （必须在 B2 前执行：B2 会把环境变量指向空目录以模拟未安装，污染后续用例）
+  delete require.cache[require.resolve('../electron/harness-service')]
+  const svc3 = require('../electron/harness-service')
+  const inflight = svc3.start({ port: 0 })
+  await sleep(1500) // 进入 starting（加载插件 / 等待服务地址）
+  svc3.stop()
+  const s6 = await inflight
+  check('B6 启动中停止后结果为 stopped（不被就绪覆盖）', s6.status === 'stopped', `status=${s6.status}`)
+  await sleep(800)
+  const s7 = await svc3.start({ port: 0 })
+  check('B6b 作废后可重新启动', s7.status === 'running' && s7.pid > 0, `status=${s7.status} error=${s7.error}`)
+  svc3.stop()
+  await sleep(500)
+
   // ── B2 未安装 → 明确安装提示（屏蔽内置运行时 + 临时空环境屏蔽本机 dsh）──
   const empty = path.join(os.tmpdir(), `pm-harness-empty-${Date.now()}`)
   process.env.APPDATA = empty

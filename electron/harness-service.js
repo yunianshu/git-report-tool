@@ -34,6 +34,11 @@ const MAX_LOG_CHARS = 4000
 
 let child = null
 let starting = null
+/** 启动序号：stop()/restart() 递增使进行中的启动作废（解包/等待就绪阶段没有 child 可杀，
+ *  只能作废；作废的启动即使随后输出服务地址也按已停止处理，不覆盖 stop 设置的状态） */
+let startSeq = 0
+/** 当前 starting Promise 对应的序号（已被作废的 starting 允许被新 start() 替换，restart 依赖此行为） */
+let startingToken = -1
 let emitter = () => {}
 let logBuffer = ''
 let state = {
@@ -272,7 +277,7 @@ function spawnHarness(launch, args, cwd) {
   return spawn(comspec, ['/d', '/s', '/c', line], options)
 }
 
-async function doStart(opts = {}) {
+async function doStart(opts = {}, token = startSeq) {
   // 先清理上次异常退出遗留的进程，避免它们占着旧的运行时目录导致解包删不掉
   await cleanupStale()
 
@@ -286,6 +291,8 @@ async function doStart(opts = {}) {
       })
     },
   })
+  // 解包耗时可达分钟级：期间用户可能已点停止/重启，作废的启动不再拉起进程
+  if (token !== startSeq) return snapshot()
 
   const launch = resolveLaunch()
   const bundled = launch.runtime === 'bundled'
@@ -330,6 +337,11 @@ async function doStart(opts = {}) {
       if (settled) return
       settled = true
       if (timer) clearTimeout(timer)
+      // 启动已被 stop()/restart() 作废：无论就绪、超时还是退出，都按已停止收尾
+      // （进程已被 stop 杀掉，不能再用 running/error 覆盖 stop 设置的状态）
+      if (token !== startSeq) {
+        patch = { status: 'stopped', url: '', displayUrl: '', port: 0, pid: 0, error: '' }
+      }
       setState(patch)
       resolve(snapshot())
     }
@@ -394,16 +406,19 @@ async function doStart(opts = {}) {
   })
 }
 
-/** 启动服务（幂等：运行中直接返回当前状态，启动中复用同一个 Promise） */
+/** 启动服务（幂等：运行中直接返回当前状态，启动中且未被作废时复用同一个 Promise） */
 async function start(opts = {}) {
   if (state.status === 'running' && child && child.exitCode === null) return snapshot()
-  if (starting) return starting
-  starting = doStart(opts).finally(() => { starting = null })
+  if (starting && startingToken === startSeq) return starting
+  const token = ++startSeq
+  startingToken = token
+  starting = doStart(opts, token).finally(() => { starting = null })
   return starting
 }
 
 /** 关闭服务：连同子进程树一起结束，并清理残留记录 */
 function stop() {
+  startSeq += 1 // 作废进行中的启动（解包阶段无 child 可杀）
   const proc = child
   child = null
   if (proc) killTree(proc.pid)

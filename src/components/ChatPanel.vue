@@ -156,6 +156,8 @@ function stopGen() {
 }
 
 function onKeydown(event) {
+  // 输入法组合态（选词/确认候选）的 Enter 不是发送：中文输入下不过滤会把半句话发出去
+  if (event.isComposing || event.keyCode === 229) return
   if (event.key === 'Enter' && !event.shiftKey) {
     event.preventDefault()
     send()

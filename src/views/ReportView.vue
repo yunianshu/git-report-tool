@@ -66,6 +66,13 @@
         title="当前项目尚未关联可识别的 Git 仓库。项目仍可正常使用，也可以到“项目”中关联本地目录。"
         class="warn"
       />
+      <el-alert
+        v-else-if="onlyMine && identitiesMissing"
+        type="warning"
+        :closable="false"
+        title="尚未配置本人身份，「只看本人」会匹配不到任何提交。请到「设置 → 个人身份」添加 Git 账号。"
+        class="warn"
+      />
     </el-card>
 
     <!-- 生成过程：扫描 / 收集中 -->
@@ -371,6 +378,8 @@ async function doCollect() {
     state.report.rawCommits = data
     state.report.collectedRange = { since: r.since, until: r.until, repoPaths: repos.slice() }
     state.report.openProjects = []
+    // 新一轮数据里可能没有旧勾选的作者：残留筛选会静默隐藏提交，必须重置
+    authorFilter.value = []
     state.report.phase = 'done'
     if (data.length) autoSave()
     if (!data.length) {
@@ -403,6 +412,9 @@ function isMine(c) {
     (id) => (id.email && c.authorEmail === id.email) || (id.name && c.authorName === id.name)
   )
 }
+
+/** 「只看本人」但没有可匹配的身份：过滤必然为空，必须显式提示而不是误报「无提交」 */
+const identitiesMissing = computed(() => !(state.config?.identities || []).length)
 
 const filteredCommits = computed(() =>
   state.report.rawCommits.filter((c) => {
