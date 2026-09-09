@@ -620,6 +620,9 @@ let unsubScanDone = null
 const INFO_CONCURRENCY = 6
 let infoQueue = []
 let infoWorkers = []
+// worker 代际：重扫/卸载时递增，旧代循环检测到失配后立即退出
+// （否则旧 worker 在扫描期间不会退出，多次重扫后按 6 递增无限累积）
+let infoEpoch = 0
 
 const sleep = (ms) => new Promise((r) => setTimeout(r, ms))
 
@@ -653,15 +656,18 @@ onMounted(() => {
   }
 })
 onBeforeUnmount(() => {
+  infoEpoch += 1 // 让仍在轮询的 worker 退出
   if (unsubProgress) unsubProgress()
   if (unsubRepoFound) unsubRepoFound()
   if (unsubScanDone) unsubScanDone()
 })
 
 function ensureInfoWorkers() {
+  const epoch = infoEpoch
   while (infoWorkers.length < INFO_CONCURRENCY) {
     const worker = (async () => {
       for (;;) {
+        if (epoch !== infoEpoch) return // 已被新一轮扫描/卸载取代
         const row = infoQueue.shift()
         if (!row) {
           if (!scanning.value) return
@@ -673,6 +679,7 @@ function ensureInfoWorkers() {
         } catch {
           row.info = { remote: '-', branch: '-', lastCommit: '-' }
         }
+        if (epoch !== infoEpoch) return // await 期间被取代，不再消费新队列
       }
     })()
     infoWorkers.push(worker)
@@ -752,6 +759,7 @@ async function doScan() {
     ElMessage.warning('请先添加至少一个扫描根目录')
     return
   }
+  infoEpoch += 1 // 旧 worker 立即失效，避免重复扫描累积轮询循环
   state.discoveredRepos.length = 0
   infoQueue = []
   infoWorkers = []

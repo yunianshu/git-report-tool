@@ -347,7 +347,13 @@ async function publish() {
   state.deploy.running = true
   try {
     const r = await window.gitReport.deployRun(props.form.id, props.activeTargetId)
-    if (r && r.error) ElMessage.error(r.error)
+    if (r && r.error) {
+      ElMessage.error(r.error)
+      // 主进程前置校验失败（如「已有发布任务进行中」）不会发出 done 事件，
+      // 必须自行复位运行态，否则发布按钮永久 loading、取消按钮失灵
+      state.deploy.running = false
+      state.deploy.startedAt = 0
+    }
   } catch (e) {
     state.deploy.running = false
     ElMessage.error(e.message || String(e))

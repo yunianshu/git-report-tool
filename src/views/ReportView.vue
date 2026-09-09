@@ -313,6 +313,15 @@ const stale = computed(() => {
 /** 一键生成：扫描（若有需要）→ 收集提交 → 展示，分阶段显示进度 */
 async function generate() {
   if (busy.value) return
+  // 日期被清空（null）时 until 计算为空串，git 查询会静默失败并误报「无提交记录」
+  if (period.value === 'daily' && !dailyDate.value) {
+    ElMessage.warning('请先选择日报日期')
+    return
+  }
+  if (period.value === 'custom' && !customSince.value) {
+    ElMessage.warning('自定义周期请先选择开始日期')
+    return
+  }
   // 阶段 1：确保有仓库（自动扫描）
   if (!state.discoveredRepos.length) {
     if (!state.config.roots || !state.config.roots.length) {

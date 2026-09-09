@@ -57,7 +57,11 @@ function readLog(logFile) {
 function add(record) {
   const records = loadAll()
   records.push(record)
-  persist(records.slice(-MAX_RECORDS))
+  const kept = records.slice(-MAX_RECORDS)
+  persist(kept)
+  // 注意不能用 slice(0, len - MAX)：len < MAX 时 end 为负，slice 负索引表示从末尾倒数，
+  // 会误删仍在保留范围内记录的日志文件
+  removeLogFiles(records.slice(0, Math.max(0, records.length - MAX_RECORDS)))
   return record
 }
 
@@ -77,8 +81,20 @@ function persist(records) {
   fs.writeFileSync(historyFile(), JSON.stringify({ records }, null, 2), 'utf8')
 }
 
+/** 删除记录对应的日志文件（basename 防穿越；失败静默，不阻塞历史操作） */
+function removeLogFiles(records) {
+  for (const r of records || []) {
+    const name = r && r.logFile
+    if (typeof name !== 'string' || !name.endsWith('.log')) continue
+    try { fs.rmSync(path.join(logDir(), path.basename(name)), { force: true }) } catch { /* noop */ }
+  }
+}
+
 function clear(projectId) {
-  persist(projectId ? loadAll().filter((r) => r.projectId !== projectId) : [])
+  const all = loadAll()
+  const removed = projectId ? all.filter((r) => r.projectId === projectId) : all
+  persist(projectId ? all.filter((r) => r.projectId !== projectId) : [])
+  removeLogFiles(removed) // 清空历史必须连日志文件一起清理，否则 deploy-logs 无限累积
   return { ok: true }
 }
 

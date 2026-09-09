@@ -30,7 +30,20 @@
           partition="persist:harness"
           allowpopups
           @did-fail-load="onFailLoad"
+          @did-navigate="onNavigated"
+          @did-navigate-in-page="onNavigated"
         />
+
+        <!-- 加载失败浮层：运行中 snapshot.error 不占位展示（占位层只在非 running 渲染），
+             不加浮层用户只能看到空白页面，无从得知失败原因与重试入口 -->
+        <div v-if="running && loadFailed" class="harness-loadfail">
+          <el-icon class="harness-loadfail-icon"><WarningFilled /></el-icon>
+          <p>{{ loadFailText }}</p>
+          <div class="harness-loadfail-actions">
+            <el-button size="small" @click="reload">重试加载</el-button>
+            <el-button size="small" type="primary" :loading="busy" @click="restart">重启服务</el-button>
+          </div>
+        </div>
 
         <!-- 启动中 -->
         <div v-else-if="starting" class="harness-placeholder">
@@ -116,6 +129,9 @@ const webviewRef = ref(null)
 const settingsVisible = ref(false)
 const portInput = ref(3080)
 const autoStartInput = ref(true)
+/** webview 加载失败浮层（仅 running 状态；非 running 由占位层展示 snapshot.error） */
+const loadFailed = ref(false)
+const loadFailText = ref('')
 
 const running = computed(() => snapshot.value.status === 'running' && !!snapshot.value.url)
 const starting = computed(() => snapshot.value.status === 'starting')
@@ -235,8 +251,14 @@ function onFailLoad(event) {
   // -3 为主动取消（切换地址时常见），不算故障
   if (event && event.errorCode === -3) return
   if (event && event.errorCode) {
-    snapshot.value = { ...snapshot.value, error: `页面加载失败（${event.errorCode} ${event.errorDescription || ''}）`.trim() }
+    loadFailed.value = true
+    loadFailText.value = `页面加载失败（${event.errorCode} ${event.errorDescription || ''}）`.trim()
   }
+}
+
+/** 导航成功即撤下失败浮层（reload / 服务重启 / token 刷新后自动恢复） */
+function onNavigated() {
+  loadFailed.value = false
 }
 
 function saveSettings() {
@@ -377,6 +399,25 @@ onBeforeUnmount(() => {
 .harness-meta { color: #8a94a2; font-family: var(--brand-mono); }
 
 /* 全屏悬浮条：叠在 webview 之上（DOM 层），半透明以免遮挡 dsh 自己的界面 */
+.harness-loadfail {
+  position: absolute;
+  inset: 0;
+  z-index: 5;
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  justify-content: center;
+  gap: 10px;
+  background: #fbfcfd;
+  color: #55606e;
+  font-size: 13px;
+  text-align: center;
+  padding: 24px;
+}
+.harness-loadfail p { margin: 0; max-width: 520px; line-height: 1.7; }
+.harness-loadfail-icon { font-size: 28px; color: #d1585a; }
+.harness-loadfail-actions { display: flex; gap: 8px; margin-top: 4px; }
+
 .harness-immersive-bar {
   position: absolute;
   top: 10px;
