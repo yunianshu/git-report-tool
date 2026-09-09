@@ -326,7 +326,7 @@
           <div class="ai-row">
             <span class="ai-label">下班时间</span>
             <el-time-select v-model="state.config.zentao.workEnd" start="16:00" end="21:00" step="00:30" style="width: 120px" />
-            <span class="ai-hint">补填历史日期时工时算到下班；填报今天一律算到点击「生成报告」的时刻（含加班）</span>
+            <span class="ai-hint">补填历史日期时工时算到下班；一键填报页可临时覆盖（填的时间早于上班时间按次日跨夜，如 00:30）；填报今天一律算到点击「生成报告」的时刻（含加班）</span>
           </div>
           <div class="ai-row">
             <span class="ai-label">午休时间</span>

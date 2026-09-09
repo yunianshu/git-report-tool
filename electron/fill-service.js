@@ -27,6 +27,15 @@ function hm(s) {
   return h * 60 + m
 }
 
+/** HH:MM 合法性（IPC 可被直接调用，不能只依赖页面控件产生的值） */
+function validHM(s) {
+  const m = /^(\d{1,2}):(\d{2})$/.exec(String(s || '').trim())
+  if (!m) return false
+  const h = Number(m[1])
+  const mi = Number(m[2])
+  return h >= 0 && h <= 23 && mi >= 0 && mi <= 59
+}
+
 function round2(n) {
   return Math.round(n * 100) / 100
 }
@@ -39,10 +48,12 @@ function workMinutes(start, end, lunchS, lunchE) {
 }
 
 /**
- * 尾段终点：填报今天 → 点击生成报告的当前时刻（含已过下班时间的加班时段，
- * 不截断）；补填历史日期 → 下班时间（无「现在」概念）。now 可注入以便自测。
+ * 尾段终点：页面显式填写的下班/加班结束时间优先（支持跨夜，如「00:30」表示次日凌晨）；
+ * 未填写时：填报今天 → 点击生成报告的当前时刻（含已过下班时间的加班时段，不截断）；
+ * 补填历史日期 → 下班时间（无「现在」概念）。now 可注入以便自测。
  */
-function resolveEndTime(date, workEnd, now = new Date()) {
+function resolveEndTime(date, workEnd, now = new Date(), explicitEnd = '') {
+  if (explicitEnd) return explicitEnd
   const p = (n) => String(n).padStart(2, '0')
   const today = `${now.getFullYear()}-${p(now.getMonth() + 1)}-${p(now.getDate())}`
   if (date === today) {
@@ -50,6 +61,15 @@ function resolveEndTime(date, workEnd, now = new Date()) {
     return `${p(Math.floor(nowMin / 60))}:${p(nowMin % 60)}`
   }
   return workEnd || '17:30'
+}
+
+/**
+ * 工时区间是否跨夜：仅当页面显式填写结束时间且早于上班时间时成立
+ * （如 08:30 上班、次日 00:30 加班结束）。自动推导的终点不参与判断，
+ * 避免「当前时刻早于上班时间」被误判成跨夜。
+ */
+function isCrossDay(startTime, endTime, explicitEnd) {
+  return !!explicitEnd && hm(endTime) < hm(startTime)
 }
 
 // ─── 按项目聚合（一个项目一条工时记录，内容为简洁编号列表） ───
@@ -63,15 +83,18 @@ function stripPrefix(subject) {
 
 /**
  * 工时分配（与提交时刻无关）：
- * - 总工时 = workMinutes(实际上班时间, endTime) 扣午休后按 step 整体取整
+ * - 总工时 = workMinutes(实际上班时间, endTime) 扣午休后按 step 整体取整；
+ *   crossDay=true 表示终点在次日（加班跨夜，如 08:30 → 次日 00:30）
  * - 各项目工时 = 总工时 × 该项目提交数 / 总提交数，0.5h 向下取整；
  *   余量补给提交最多的项目，保证 Σ = 总工时
  * - 说明 = 去类型前缀的编号列表（同活动报告复制格式）
  */
-function distributeByProject(commits, { startTime, endTime, lunchStart, lunchEnd, step = 30 } = {}) {
+function distributeByProject(commits, { startTime, endTime, lunchStart, lunchEnd, step = 30, crossDay = false } = {}) {
   const sorted = [...(commits || [])].sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))
   if (!sorted.length) return []
-  const totalMin = workMinutes(hm(startTime || '08:30'), hm(endTime || '17:30'), hm(lunchStart || '12:00'), hm(lunchEnd || '13:00'))
+  const startMin = hm(startTime || '08:30')
+  const endMin = hm(endTime || '17:30') + (crossDay ? 24 * 60 : 0)
+  const totalMin = workMinutes(startMin, endMin, hm(lunchStart || '12:00'), hm(lunchEnd || '13:00'))
   const totalHours = round2(Math.floor(totalMin / step) * step / 60)
 
   const groups = new Map()
@@ -340,18 +363,21 @@ async function plan(payload) {
   const identitiesMissing = !identities.length
   const commits = identitiesMissing ? [] : await collectTimedCommits(projects, { date, identities })
 
-  // 总工时区间 = 页面填写的实际上班时间 → 终点（今天为点击生成报告的时刻，历史日期为下班时间）；
-  // git 提交时刻只用于收集内容与计数，不参与工时
+  // 总工时区间 = 页面填写的实际上班时间 → 终点（显式填写优先，可跨夜；否则今天为点击
+  // 生成报告的时刻，历史日期为下班时间）；git 提交时刻只用于收集内容与计数，不参与工时
   const workStart = String(payload.startTime || (cfg.zentao && cfg.zentao.workStart) || '08:30')
-  if (!/^\d{1,2}:\d{2}$/.test(workStart)) throw new Error('实际上班时间格式不正确（应为 HH:MM）')
+  if (!validHM(workStart)) throw new Error('实际上班时间格式不正确（应为 HH:MM）')
+  const explicitEnd = String(payload.endTime || '').trim()
+  if (explicitEnd && !validHM(explicitEnd)) throw new Error('下班时间格式不正确（应为 HH:MM）')
   const workEnd = (cfg.zentao && cfg.zentao.workEnd) || '17:30'
   const workCfg = {
     lunchStart: (cfg.zentao && cfg.zentao.lunchStart) || '12:00',
     lunchEnd: (cfg.zentao && cfg.zentao.lunchEnd) || '13:00',
     workEnd,
   }
-  const endTime = resolveEndTime(date, workEnd)
-  const planned = distributeByProject(commits, { startTime: workStart, endTime, ...workCfg })
+  const endTime = resolveEndTime(date, workEnd, undefined, explicitEnd)
+  const crossDay = isCrossDay(workStart, endTime, explicitEnd)
+  const planned = distributeByProject(commits, { startTime: workStart, endTime, ...workCfg, crossDay })
   const rangeStart = workStart
 
   const bindings = listBindings()
@@ -430,6 +456,8 @@ async function plan(payload) {
     workConfig: workCfg,
     rangeStart,
     rangeEnd: endTime,
+    crossDay,
+    endTimeManual: !!explicitEnd,
     planned,
     tasks,
     unmatchedProjects,
@@ -511,6 +539,7 @@ module.exports = {
   hm,
   workMinutes,
   resolveEndTime,
+  isCrossDay,
   stripPrefix,
   distributeByProject,
   parseTimedLines,

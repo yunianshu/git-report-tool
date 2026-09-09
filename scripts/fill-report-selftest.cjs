@@ -152,6 +152,39 @@ await test('resolveEndTime：补填历史日期返回下班时间', () => {
   assert.strictEqual(fill.resolveEndTime('2026-09-06', '17:30', new Date('2026-09-07T16:05:00')), '17:30')
 })
 
+await test('resolveEndTime：显式填写的下班/加班结束时间优先于自动推导', () => {
+  // 历史日期填 00:30（次日凌晨）→ 直接用 00:30，不再回落 workEnd
+  assert.strictEqual(fill.resolveEndTime('2026-09-06', '17:30', new Date('2026-09-07T16:05:00'), '00:30'), '00:30')
+  // 今天填了显式值也以显式值为准（不再取当前时刻）
+  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T16:05:00'), '23:00'), '23:00')
+  // 空串/未传 → 维持原自动行为
+  assert.strictEqual(fill.resolveEndTime('2026-09-07', '17:30', new Date('2026-09-07T16:05:00'), ''), '16:05')
+})
+
+await test('isCrossDay：仅显式填写且早于上班时间时判为跨夜', () => {
+  assert.strictEqual(fill.isCrossDay('08:30', '00:30', '00:30'), true)   // 加班到次日凌晨
+  assert.strictEqual(fill.isCrossDay('08:30', '17:30', '17:30'), false)  // 正常下班
+  assert.strictEqual(fill.isCrossDay('08:30', '00:30', ''), false)       // 自动推导不跨夜
+  assert.strictEqual(fill.isCrossDay('20:00', '04:00', '04:00'), true)   // 夜班
+})
+
+await test('用户场景复现：昨天 08:30 上班、次日 00:30 加班结束 → 15h（而非 8h）', () => {
+  const list = fill.distributeByProject([
+    { time: '09:12', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
+    { time: '22:40', msg: 'fix: B', projectId: 'p1', projectName: 'P1' },
+  ], { startTime: '08:30', endTime: '00:30', crossDay: true })
+  assert.strictEqual(list.length, 1)
+  // 08:30 → 次日 00:30 = 960min，扣 60min 午休 = 900min → 900 = 15h
+  assert.strictEqual(list[0].hours, 15)
+})
+
+await test('跨夜未开启时保持原语义（倒序区间记 0）', () => {
+  const list = fill.distributeByProject([
+    { time: '09:12', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
+  ], { startTime: '08:30', endTime: '00:30' })
+  assert.strictEqual(list[0].hours, 0)
+})
+
 // ═══════════ 按项目聚合（一个项目一条记录 + 简洁编号内容） ═══════════
 console.log('按项目聚合:')
 await test('stripPrefix 去掉 Conventional Commits 前缀', () => {
@@ -682,6 +715,42 @@ if (gitOk()) {
     // 08:30→17:30 = 540−60 = 480 = 8h
     assert.strictEqual(r.planned[0].hours, 8)
     assert.strictEqual(r.rangeStart, '08:30')
+  })
+
+  await test('plan 端到端：显式 endTime 跨夜（历史日期 08:30 → 次日 00:30 = 15h）', async () => {
+    store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
+    const r = await fill.plan({
+      date: pastDayStr,
+      startTime: '08:30',
+      endTime: '00:30', // 早于上班时间 → 次日跨夜
+      projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
+    })
+    // 08:30 → 次日 00:30 = 960min，扣 60min 午休 = 900min → 15h
+    assert.strictEqual(r.planned[0].hours, 15)
+    assert.strictEqual(r.rangeEnd, '00:30')
+    assert.strictEqual(r.crossDay, true)
+    assert.strictEqual(r.endTimeManual, true)
+  })
+
+  await test('plan 端到端：未填 endTime 时历史日期仍为 17:30（不跨夜）', async () => {
+    store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
+    const r = await fill.plan({
+      date: pastDayStr,
+      startTime: '08:30',
+      projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }],
+    })
+    assert.strictEqual(r.planned[0].hours, 8)
+    assert.strictEqual(r.rangeEnd, '17:30')
+    assert.strictEqual(r.crossDay, false)
+    assert.strictEqual(r.endTimeManual, false)
+  })
+
+  await test('plan 拒绝非法 endTime 格式', async () => {
+    store.save({ roots: [], identities: [{ name: 'Me', email: 'me@corp.com' }] })
+    await assert.rejects(
+      () => fill.plan({ date: pastDayStr, startTime: '08:30', endTime: '25:99', projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }] }),
+      /下班时间格式不正确/,
+    )
   })
 } else {
   console.log('  （git 不可用，跳过真实仓库集成用例）')

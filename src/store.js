@@ -82,6 +82,7 @@ export const state = reactive({
     plan: null, // 最近一次 fill:plan 结果（planned/tasks/bindings 等）
     date: '', // 填报日期 YYYY-MM-DD
     startTime: '', // 实际上班时间 HH:MM（空则用设置页默认）
+    endTime: '', // 下班/加班结束时间 HH:MM（空则自动：今天取当前时刻、历史日期取设置页 workEnd；早于上班时间按次日跨夜）
     running: false, // 生成/提交进行中
     submitting: false,
   },

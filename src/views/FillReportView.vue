@@ -3,7 +3,7 @@
     <PageHeader
       eyebrow="FILL REPORT"
       title="一键填报"
-      description="按 Git 提交时间自动计算工时（扣午休、0.5h 向下取整），确认后一键写入禅道任务。"
+      description="按填写的上班/下班时间计算工时（扣午休、0.5h 向下取整），下班时间早于上班时间按次日跨夜；确认后一键写入禅道任务。"
     />
 
     <!-- 顶部工具条：选日期 → 选项目 → 生成报告 -->
@@ -25,6 +25,15 @@
           placeholder="上班时间"
           style="width: 108px"
         />
+        <el-time-select
+          v-model="endTime"
+          start="00:00" end="23:45" step="00:15"
+          clearable
+          class="end-time-select"
+          :placeholder="endPlaceholder"
+          style="width: 126px"
+        />
+        <span class="fill-range-tip">{{ rangePreview }}</span>
         <el-select
           v-model="selectedProjectIds"
           multiple
@@ -126,7 +135,7 @@
       <el-card shadow="never" class="card">
         <template #header>
           <div class="card-header">
-            <span>提交明细 · {{ plan.date }}（{{ plan.rangeStart }}–{{ plan.rangeEnd }}，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}）</span>
+            <span>提交明细 · {{ plan.date }}（{{ plan.rangeStart }}–{{ plan.crossDay ? '次日 ' : '' }}{{ plan.rangeEnd }}，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}）</span>
             <span class="header-meta">{{ plan.planned.length }} 个项目 · {{ plan.commitCount }} 条提交 · 合计 {{ totalHours }}h</span>
           </div>
         </template>
@@ -297,6 +306,45 @@ const startTime = computed({
   get: () => state.fillReport.startTime || (state.config.zentao?.workStart || '08:30'),
   set: (v) => { state.fillReport.startTime = v },
 })
+/**
+ * 下班/加班结束时间（可留空走自动）。填写后若早于上班时间，按次日跨夜计算
+ * ——例如昨天 08:30 上班、今天凌晨 00:30 收工，选昨天日期 + 填 00:30 即 15h。
+ */
+const endTime = computed({
+  get: () => state.fillReport.endTime || '',
+  set: (v) => { state.fillReport.endTime = v || '' },
+})
+const configWorkEnd = computed(() => state.config.zentao?.workEnd || '17:30')
+const endPlaceholder = computed(() => (fillDate.value === todayStr() ? '下班（现在）' : `下班（${configWorkEnd.value}）`))
+
+function hmOf(s) {
+  const [h, m] = String(s || '').split(':').map(Number)
+  return (h || 0) * 60 + (m || 0)
+}
+function nowHM() {
+  const d = new Date()
+  return `${String(d.getHours()).padStart(2, '0')}:${String(d.getMinutes()).padStart(2, '0')}`
+}
+/** 与主进程 distributeByProject 同口径：区间分钟数扣午休、0.5h 向下取整 */
+function previewMinutes(start, end, crossDay) {
+  const s = hmOf(start)
+  let e = hmOf(end)
+  if (crossDay) e += 24 * 60
+  if (e <= s) return 0
+  const lunchS = hmOf(state.config.zentao?.lunchStart || '12:00')
+  const lunchE = hmOf(state.config.zentao?.lunchEnd || '13:00')
+  return (e - s) - Math.max(0, Math.min(e, lunchE) - Math.max(s, lunchS))
+}
+/** 工具条实时预览：区间与预计工时，让跨夜/误填立刻可见 */
+const rangePreview = computed(() => {
+  const start = startTime.value || '08:30'
+  const auto = fillDate.value === todayStr() ? nowHM() : configWorkEnd.value
+  const end = endTime.value || auto
+  const crossDay = !!endTime.value && hmOf(end) < hmOf(start)
+  const min = previewMinutes(start, end, crossDay)
+  const hours = (Math.floor(min / 30) * 30 / 60).toFixed(1)
+  return `${start}–${crossDay ? '次日 ' : ''}${end} · 预计 ${hours}h`
+})
 const plan = computed(() => state.fillReport.plan)
 
 const zentaoConfigured = computed(() => {
@@ -362,6 +410,7 @@ async function generate() {
     const payload = {
       date: fillDate.value,
       startTime: startTime.value,
+      endTime: endTime.value,
       projects: chosen.map((p) => ({
         id: p.id,
         name: p.name,
@@ -518,7 +567,7 @@ async function submitFill(preview) {
 
 function buildReportText() {
   const p = plan.value
-  const lines = [`一键填报 · ${p.date}`, `${p.rangeStart}–${p.rangeEnd} · 共 ${p.commitCount} 条提交 · ${p.planned.length} 个项目 · 合计 ${totalHours.value}h`, '']
+  const lines = [`一键填报 · ${p.date}`, `${p.rangeStart}–${p.crossDay ? '次日 ' : ''}${p.rangeEnd} · 共 ${p.commitCount} 条提交 · ${p.planned.length} 个项目 · 合计 ${totalHours.value}h`, '']
   for (const item of p.planned) {
     lines.push(`${item.hours}h  [${item.projectName}]（${item.commitCount} 条提交）`)
     lines.push(item.work)
@@ -547,6 +596,11 @@ async function copyReport() {
   gap: 10px;
   align-items: center;
   flex-wrap: wrap;
+}
+.fill-range-tip {
+  font-size: 12px;
+  color: var(--el-text-color-secondary);
+  white-space: nowrap;
 }
 .project-select { width: 420px; }
 .project-option {
