@@ -30,8 +30,8 @@
     "concurrently": "^9.1.2",
     "cross-env": "^7.0.3",
     "echarts": "^5.6.0",
-    "electron": "^33.3.1",
-    "electron-builder": "^25.1.8",
+    "electron": "^43.6.0",
+    "electron-builder": "^26.15.3",
     "element-plus": "^2.9.3",
     "vite": "^6.0.7",
     "vue": "^3.5.13",
@@ -52,6 +52,7 @@
       }
     ],
     "beforePack": "scripts/prepare-harness-runtime.cjs",
+    "electronDist": "node_modules/electron/dist",
     "directories": {
       "output": "release/${version}"
     },
@@ -92,6 +93,7 @@
     "archiver": "^7.0.1",
     "dompurify": "^3.4.13",
     "marked": "^18.0.9",
-    "ssh2": "^1.17.0"
+    "ssh2": "^1.17.0",
+    "yaml": "^2.9.0"
   }
 }

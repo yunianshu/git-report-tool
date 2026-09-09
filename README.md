@@ -42,7 +42,7 @@
 
 把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh` CLI）作为应用内置能力：**打开软件自动开启本地服务，关闭软件自动关闭服务**，无需手动敲命令，**目标机器无需安装 dsh 或 Node**。
 
-- **运行时内置**：安装包内自带独立 Node 运行时（v24.x，dsh 需 Node ≥22.18 的 `node:sqlite` 与 `import.meta.main`，Electron 33 内置的 Node 20 不满足）与固定版本 `@deepseek-ai/dsh` 依赖树，位于 `resources/harness-runtime/`；首次启动在用户主目录自动生成 `~/.dsh`，离线可用
+- **运行时内置**：安装包内自带固定版本 `@deepseek-ai/dsh` 依赖树，位于 `resources/harness-runtime/`，由 **Electron 自带的 Node** 执行（`ELECTRON_RUN_AS_NODE=1` + `--expose-internals`；Electron 40+ 内置 Node 24，具备 dsh 需要的 `node:sqlite` 与 `import.meta.main`），目标机器无需安装 dsh 或 Node；首次启动在用户主目录自动生成 `~/.dsh`，离线可用
 - **自动启停**：应用启动时自动拉起 `dsh web`（监听 `127.0.0.1`，默认端口 3080，被占用时自动改用系统分配的空闲端口）；退出应用时连同子进程树一起结束，不留残留服务；异常退出遗留的进程会在下次启动时清理
 - **内嵌进入**：侧栏「DeepSeek Harness」直接内嵌完整 Harness GUI（会话、工作区、模型选择、设置），也可一键用系统浏览器打开
 - **鉴权闭环**：`dsh web` 就绪后输出的一次性 token 由主进程捕获，内嵌页首次导航用它换取 HttpOnly + SameSite=Strict 登录 cookie 后落到干净根地址——token 不写日志、不落盘
@@ -52,7 +52,7 @@
 
 运行时解析优先级：内置运行时 → 本机全局安装的 `dsh` → PATH。开发/调试可用 `DSH_RUNTIME_DIR` 指定运行时目录，或用 `DSH_CLI` 指定可执行文件。
 
-构建：`scripts/prepare-harness-runtime.cjs` 在打包前（`beforePack`）下载 Node 运行时并安装固定版本 dsh 到 `build/harness-runtime/`（已缓存，约 300MB，不入库；版本用 `NODE_RUNTIME_VERSION` / `DSH_VERSION` 覆盖）。因此安装包体积会明显增大（Windows 约 +350MB 解压后）。
+构建：`scripts/prepare-harness-runtime.cjs` 在打包前（`beforePack`）安装固定版本 dsh 到 `build/harness-runtime/`（已缓存，约 260MB，不入库；版本用 `DSH_VERSION` 覆盖）。安装包体积因此增大（Windows 约 +220MB 解压后）。
 
 ## 活动报告
 
@@ -127,7 +127,7 @@
 
 ## 技术栈
 
-Electron 33 · Vue 3 · Element Plus · ECharts · Vite 6 · electron-builder · ssh2 · archiver
+Electron 43 · Vue 3 · Element Plus · ECharts · Vite 6 · electron-builder 26 · ssh2 · archiver
 
 ## 开发
 

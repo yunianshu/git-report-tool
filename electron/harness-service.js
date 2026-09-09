@@ -5,12 +5,14 @@
  * 使本应用成为 Harness 的唯一入口：开软件即有服务，关软件即无残留。
  *
  * 关键约束：
+ * - 内置 dsh 依赖树由 **Electron 自带的 Node** 执行（`ELECTRON_RUN_AS_NODE=1`），
+ *   目标机器无需安装 dsh 或 Node；dsh 的 HMR 服务要求 `--expose-internals`。
  * - `dsh web` 就绪后会打印一行 `dsh web: http://127.0.0.1:<port>/?token=...`，
  *   该 token 是**一次性进程凭据**：浏览器首次访问它才会换取 HttpOnly +
  *   SameSite=Strict 的登录 cookie。因此内嵌 webview 必须先用这条带 token 的 URL
  *   导航（跨站导航不会带上 Strict cookie，直接开根地址会 401）。
  * - token 只在本进程与本应用渲染层之间流转，不写日志、不落盘。
- * - 子进程由 cmd/sh 包裹，普通 kill 杀不掉 node 子进程，Windows 用 taskkill /T，
+ * - 子进程由 cmd/sh 包裹时，普通 kill 杀不掉真正的服务进程，Windows 用 taskkill /T，
  *   POSIX 用进程组负号信号；同时把 pid 落到 userData，异常退出后可清理残留。
  */
 const { spawn, spawnSync } = require('child_process')
@@ -18,6 +20,7 @@ const fs = require('fs')
 const net = require('net')
 const os = require('os')
 const path = require('path')
+const { ensureDefaultSettings } = require('./harness-defaults')
 
 /** 默认监听端口（被占用时自动改用系统分配的空闲端口） */
 const DEFAULT_PORT = 3080
@@ -43,6 +46,7 @@ let state = {
   runtime: '',      // bundled（安装包内置）| system（本机全局安装）| path（PATH 解析）
   runtimeDir: '',   // 内置运行时目录
   home: '',
+  defaults: '',     // 内置默认配置注入结果（诊断用）
   startedAt: 0,
 }
 
@@ -76,7 +80,7 @@ function resolveCli() {
 /**
  * 内置运行时目录（随安装包分发）：
  * 打包后为 <resources>/harness-runtime，开发态为 <repo>/build/harness-runtime。
- * 内含 node/（独立 Node 运行时，dsh 需 Node ≥22.18）与 dsh/（固定版本的依赖树），
+ * 内含 dsh/（固定版本的依赖树），由 Electron 自带的 Node 执行，
  * 使目标机器无需安装 dsh 或 Node。
  */
 function bundledRuntimeDir() {
@@ -101,22 +105,29 @@ function bundledEntry(dir) {
   return fs.existsSync(entry) ? entry : ''
 }
 
-function bundledNode(dir) {
-  const exe = path.join(dir, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
-  return fs.existsSync(exe) ? exe : ''
-}
-
 /**
- * 解析启动方式，优先级：内置运行时 → 系统全局 dsh → PATH。
- * @returns {{runtime: string, command: string, prefixArgs: string[], shell: boolean}}
+ * 解析启动方式，优先级：内置依赖树 → 系统全局 dsh → PATH。
+ *
+ * 内置依赖树用 **Electron 自带的 Node** 运行（`ELECTRON_RUN_AS_NODE=1`），
+ * 目标机器无需另装 Node。Electron 40+ 内置 Node 24，具备 dsh 需要的
+ * `node:sqlite` 与 `import.meta.main`；dsh 的 HMR 服务还要求 `--expose-internals`
+ * （不加会在加载 cordis-plugin-hmr 时抛错退出）。
+ *
+ * @returns {{runtime: string, command: string, prefixArgs: string[], shell: boolean, runtimeDir: string, extraEnv?: object}}
  */
 function resolveLaunch() {
   const dir = bundledRuntimeDir()
   if (dir) {
     const entry = bundledEntry(dir)
-    const node = bundledNode(dir)
-    if (entry && node) {
-      return { runtime: 'bundled', command: node, prefixArgs: [entry], shell: false, runtimeDir: dir }
+    if (entry) {
+      return {
+        runtime: 'bundled',
+        command: process.execPath,
+        prefixArgs: ['--expose-internals', entry],
+        shell: false,
+        runtimeDir: dir,
+        extraEnv: { ELECTRON_RUN_AS_NODE: '1' },
+      }
     }
   }
   const cli = resolveCli()
@@ -230,14 +241,19 @@ function setEmitter(fn) {
 
 /**
  * 拉起子进程：
- * - 内置运行时：直接以独立 node 执行 dsh 的 bin.js（无 shell，无 .cmd shim）
+ * - 内置依赖树：用 Electron 自身以 Node 模式执行 dsh 的 bin.js（无 shell、无需外部 Node）
  * - 系统 dsh：Windows 的 .cmd shim 必须经 cmd.exe；POSIX 用独立进程组以便整组关闭
  */
 function spawnHarness(launch, args, cwd) {
   // cwd 不存在会让 spawn 直接 ENOENT：兜底到确实存在的目录
   let workdir = cwd
   try { if (!workdir || !fs.existsSync(workdir)) workdir = os.homedir() } catch { workdir = undefined }
-  const options = { cwd: workdir, env: buildEnv(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+  const options = {
+    cwd: workdir,
+    env: { ...buildEnv(), ...(launch.extraEnv || {}) },
+    windowsHide: true,
+    stdio: ['ignore', 'pipe', 'pipe'],
+  }
   if (!launch.shell) {
     return spawn(launch.command, [...launch.prefixArgs, ...args], {
       ...options,
@@ -265,6 +281,17 @@ async function doStart(opts = {}) {
   await cleanupStale()
 
   const home = homeDir()
+  // 内置默认 provider/模型（不含密钥）：只补缺失项、一次性注入，失败不阻塞启动
+  let defaultsNote = ''
+  try {
+    const defaults = ensureDefaultSettings({ home })
+    if (defaults.injected.length) defaultsNote = `已注入内置默认配置：${defaults.injected.join('、')}`
+    else if (defaults.reason && defaults.reason !== 'already-injected') defaultsNote = `内置默认配置未注入（${defaults.reason}）`
+  } catch (err) {
+    defaultsNote = `内置默认配置注入失败：${(err && err.message) || String(err)}`
+  }
+  if (defaultsNote) console.log('[harness]', defaultsNote)
+
   const preferred = Number.isInteger(opts.port) && opts.port > 0 && opts.port < 65536 ? opts.port : DEFAULT_PORT
   const port = (await isPortFree(preferred)) ? preferred : 0 // 端口被占用时交给系统分配，地址以启动输出为准
   const args = ['web', '--no-open', '--host', '127.0.0.1', '--port', String(port)]
@@ -274,6 +301,7 @@ async function doStart(opts = {}) {
     status: 'starting', error: '', port, pid: 0, url: '', displayUrl: '', home, startedAt: Date.now(),
     runtime: launch.runtime,
     runtimeDir: launch.runtimeDir,
+    defaults: defaultsNote,
     cli: bundled ? launch.prefixArgs[0] : launch.command,
   })
 

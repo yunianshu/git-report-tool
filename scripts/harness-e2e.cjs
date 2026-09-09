@@ -7,6 +7,8 @@
  *   H3 服务可达且鉴权正确 —— 内嵌页经 token 握手后落到干净根地址（非 401）
  *   H4 关闭软件关闭服务 —— 应用退出后 dsh 子进程树消失、端口释放
  *   H5 无需用户安装 —— 使用安装包内置运行时（bundled），并在全新主目录下自举
+ *   H6 无需手工配置 —— 全新机器首次启动即写入内置 provider 配置（不含密钥）
+ *   H7 配置真实生效 —— dsh 模型设置页出现内置 provider（汉印 / zai-coding-cn）
  *
  * 前置：npm run build:renderer（打包产物验证还需 npm run build:dir）
  * 用法：node scripts/harness-e2e.cjs
@@ -16,6 +18,7 @@ const { spawnSync, execFileSync } = require('child_process')
 const fs = require('fs')
 const os = require('os')
 const path = require('path')
+const { parseDocument } = require('yaml')
 
 const ROOT = path.resolve(__dirname, '..')
 const USER_DATA = path.join(os.tmpdir(), `pm-harness-e2e-${Date.now()}`)
@@ -47,6 +50,7 @@ const EVAL = `(async () => {
   r.webviewAttached = !!wv
   r.pill = (q('.harness-pill') || {}).textContent?.trim() || ''
   r.footer = (q('.harness-footer') || {}).textContent?.replace(/\\s+/g, ' ').trim() || ''
+  r.pid = Number((r.footer.match(/PID (\\d+)/) || [])[1] || 0)
   r.placeholder = (q('.harness-placeholder') || {}).textContent?.replace(/\\s+/g, ' ').trim().slice(0, 300) || ''
 
   if (wv) {
@@ -61,8 +65,22 @@ const EVAL = `(async () => {
     r.guestUrl = guestUrl
     r.guestTitle = wv.getTitle() || ''
     try {
-      r.guestBody = String(await wv.executeJavaScript('document.body.innerText.slice(0, 160)')).replace(/\\s+/g, ' ').trim()
+      r.guestBody = String(await wv.executeJavaScript('document.body.innerText.slice(0, 4000)')).replace(/\\s+/g, ' ').trim()
     } catch (e) { r.guestBodyError = String(e && e.message || e) }
+
+    // 进设置页 → 模型：内置 provider 若被 dsh 加载，会出现在模型设置里
+    try {
+      const clickText = async (text) => String(await wv.executeJavaScript(
+        "(() => {const els=[...document.querySelectorAll('button, [role=button], a, div, span, li')];"
+        + "const el=els.reverse().find((e)=>{const b=e.getBoundingClientRect();"
+        + "return b.width>0 && b.height>0 && e.textContent.trim()===" + JSON.stringify(text) + "});"
+        + "if(!el)return 'NO_BUTTON';el.click();return 'CLICKED';})()"))
+      r.settingsClick = await clickText('设置')
+      await sleep(2500)
+      r.modelsClick = await clickText('模型')
+      await sleep(2500)
+      r.modelsText = String(await wv.executeJavaScript('document.body.innerText.slice(0, 3000)')).replace(/\\s+/g, ' ').trim()
+    } catch (e) { r.settingsError = String(e && e.message || e) }
   }
   return r
 })()`
@@ -74,7 +92,7 @@ const env = {
   USERPROFILE: HOME_SANDBOX,
   HOME: HOME_SANDBOX,
   SMOKE_HARNESS: '1',
-  SMOKE_EXIT_MS: '100000',
+  SMOKE_EXIT_MS: process.env.SMOKE_EXIT_MS || '100000',
   SMOKE_EVAL: EVAL,
   SMOKE_EVAL_MS: '1000',
   SMOKE_CLICK_MS: '600000', // 禁用冒烟默认切页，交由 EVAL 自己点击
@@ -88,16 +106,38 @@ console.log(`=== DeepSeek Harness 内置服务 E2E（${label}） ===`)
 console.log(`userData=${USER_DATA}`)
 console.log(`全新主目录=${HOME_SANDBOX}`)
 
-/** 统计仍存活的 dsh web 进程数 */
+/**
+ * 统计仍存活的 dsh web 进程数（内置模式下由 Electron 自身以 Node 模式运行，不能按 node.exe 过滤）。
+ * 只统计本次被测形态（开发态 electron.exe / 打包产物 exe），避免把同时运行的另一形态计入。
+ */
 function dshProcessCount() {
   try {
     if (process.platform === 'win32') {
-      const out = execFileSync('wmic', ['process', 'where', "name='node.exe'", 'get', 'ProcessId,CommandLine', '/format:csv'], { encoding: 'utf8' })
-      return out.split(/\r?\n/).filter((l) => l.includes('dsh') && l.includes('web')).length
+      const marker = (EXE ? path.basename(EXE) : 'electron.exe').toLowerCase()
+      const out = execFileSync('wmic', ['process', 'get', 'ProcessId,CommandLine', '/format:csv'], { encoding: 'utf8' })
+      return out.split(/\r?\n/).filter((l) => /bin\.js/i.test(l) && /dsh/i.test(l) && /\bweb\b/.test(l)
+        && l.toLowerCase().includes(marker)).length
     }
-    const out = execFileSync('bash', ['-lc', "ps -eo args | grep -c '[d]sh web'"], { encoding: 'utf8' })
+    const out = execFileSync('bash', ['-lc', "ps -eo args | grep -c '[b]in.js.*dsh.*web'"], { encoding: 'utf8' })
     return Number(out.trim()) || 0
   } catch { return -1 }
+}
+
+/** 查询进程可执行文件路径（用于确认 dsh 跑在 Electron 自身而非额外 Node 上） */
+function exePathOf(pid) {
+  if (!pid) return ''
+  try {
+    if (process.platform === 'win32') {
+      const out = execFileSync('wmic', ['process', 'where', `ProcessId=${pid}`, 'get', 'ExecutablePath', '/format:csv'], { encoding: 'utf8' })
+      return out.split(/\r?\n/).map((l) => l.split(',').pop().trim()).filter(Boolean)[1] || ''
+    }
+    return execFileSync('bash', ['-lc', `ps -p ${pid} -o args= | head -1`], { encoding: 'utf8' }).trim()
+  } catch { return '' }
+}
+
+function alive(pid) {
+  if (!pid) return false
+  try { process.kill(pid, 0); return true } catch { return false }
 }
 
 function portBusy(port) {
@@ -148,11 +188,34 @@ assert('H5 使用安装包内置运行时（用户机器无需安装 dsh/Node）
 assert('H5b 全新主目录下自动完成首次自举（生成 ~/.dsh）',
   fs.existsSync(path.join(HOME_SANDBOX, '.dsh')),
   `home=${HOME_SANDBOX} 内容=${fs.existsSync(HOME_SANDBOX) ? fs.readdirSync(HOME_SANDBOX).join(',') : '(不存在)'}`)
+const runtimeDir = EXE
+  ? path.join(path.dirname(EXE), 'resources', 'harness-runtime')
+  : path.join(ROOT, 'build', 'harness-runtime')
+assert('H5c 不再内置独立 Node 运行时（复用 Electron 自带 Node）',
+  fs.existsSync(path.join(runtimeDir, 'dsh')) && !fs.existsSync(path.join(runtimeDir, 'node')),
+  `runtimeDir=${runtimeDir} 内容=${fs.existsSync(runtimeDir) ? fs.readdirSync(runtimeDir).join(',') : '(不存在)'}`)
+
+// H6/H7：内置默认 provider 配置（不含密钥）随安装包分发到全新机器
+const sandboxSettings = path.join(HOME_SANDBOX, '.dsh', 'settings.yaml')
+const sandboxText = fs.existsSync(sandboxSettings) ? fs.readFileSync(sandboxSettings, 'utf8') : ''
+let sandboxProviders = null
+try { sandboxProviders = parseDocument(sandboxText).toJS()['llm-pi-ai'].providers } catch { /* 解析失败下面断言会报 */ }
+assert('H6 全新机器首次启动即写入内置 provider 配置',
+  !!(sandboxProviders && sandboxProviders.hprt && sandboxProviders['zai-coding-cn']),
+  `file=${sandboxSettings} providers=${sandboxProviders ? Object.keys(sandboxProviders).join(',') : '(无)'}`)
+assert('H6b 内置配置只写凭据名、不含任何密钥值',
+  /apiKeyEnv:\s*(HPRT|ZAI_CODING_CN)_API_KEY/.test(sandboxText) && !/sk-[A-Za-z0-9]|7aa4e4cf/.test(sandboxText))
+assert('H7 dsh 模型设置页出现内置 provider（汉印 / zai-coding-cn）',
+  /汉印/.test(r.modelsText || '') && /zai-coding-cn/.test(r.modelsText || ''),
+  `modelsText=${(r.modelsText || r.settingsError || '').slice(0, 200)}`)
 
 // H4：退出后服务消失
 const after = dshProcessCount()
 assert('H4 关闭软件后 dsh 服务进程消失', after >= 0 && after <= before, `before=${before} after=${after}`)
-assert('H4b 监听端口已释放', !portBusy(PORT), `port ${PORT} 仍在监听`)
+assert('H4a 状态栏所报服务进程已退出', r.pid > 0 && !alive(r.pid), `pid=${r.pid} alive=${alive(r.pid)}`)
+// 端口以实际监听为准：3080 被其他实例占用时服务会回退到系统分配的空闲端口
+const actualPort = Number((String(r.footer || '').match(/127\.0\.0\.1:(\d+)/) || [])[1] || PORT)
+assert('H4b 监听端口已释放', !portBusy(actualPort), `port ${actualPort} 仍在监听`)
 
 if (failed) {
   console.log('--- stdout 尾部 ---')
