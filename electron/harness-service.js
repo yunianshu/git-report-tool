@@ -1,0 +1,320 @@
+/**
+ * DeepSeek Harness（dsh web）服务 —— 生命周期管理
+ *
+ * 应用启动时自动拉起 `dsh web`（本地浏览器 GUI），退出时连同子进程树一起关闭，
+ * 使本应用成为 Harness 的唯一入口：开软件即有服务，关软件即无残留。
+ *
+ * 关键约束：
+ * - `dsh web` 就绪后会打印一行 `dsh web: http://127.0.0.1:<port>/?token=...`，
+ *   该 token 是**一次性进程凭据**：浏览器首次访问它才会换取 HttpOnly +
+ *   SameSite=Strict 的登录 cookie。因此内嵌 webview 必须先用这条带 token 的 URL
+ *   导航（跨站导航不会带上 Strict cookie，直接开根地址会 401）。
+ * - token 只在本进程与本应用渲染层之间流转，不写日志、不落盘。
+ * - 子进程由 cmd/sh 包裹，普通 kill 杀不掉 node 子进程，Windows 用 taskkill /T，
+ *   POSIX 用进程组负号信号；同时把 pid 落到 userData，异常退出后可清理残留。
+ */
+const { spawn, spawnSync } = require('child_process')
+const fs = require('fs')
+const net = require('net')
+const os = require('os')
+const path = require('path')
+
+/** 默认监听端口（被占用时自动改用系统分配的空闲端口） */
+const DEFAULT_PORT = 3080
+/** 就绪等待上限：首次启动要加载插件与前端资源，留足时间 */
+const READY_TIMEOUT_MS = 90000
+/** 服务就绪标志行 */
+const URL_LINE = /dsh web:\s*(http:\/\/\S+)/
+/** 诊断输出保留长度（出错时回传渲染层展示） */
+const MAX_LOG_CHARS = 4000
+
+let child = null
+let starting = null
+let emitter = () => {}
+let logBuffer = ''
+let state = {
+  status: 'stopped', // stopped | starting | running | error
+  port: 0,
+  pid: 0,
+  url: '',          // 带 token，仅供内嵌 webview 首次导航
+  displayUrl: '',   // 脱敏后的地址，供界面展示
+  error: '',
+  cli: '',
+  home: '',
+  startedAt: 0,
+}
+
+/** Harness 主目录（dsh 的 $DSH_HOME，默认 ~/.dsh） */
+function homeDir() {
+  return (process.env.DSH_HOME || '').trim() || path.join(os.homedir(), '.dsh')
+}
+
+/** 定位 dsh 可执行文件；找不到返回空串（交由 PATH 解析） */
+function resolveCli() {
+  const override = (process.env.DSH_CLI || '').trim()
+  if (override) return override
+  const candidates = []
+  if (process.platform === 'win32') {
+    if (process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, 'npm', 'dsh.cmd'))
+    if (process.env.ProgramFiles) candidates.push(path.join(process.env.ProgramFiles, 'nodejs', 'dsh.cmd'))
+  } else {
+    candidates.push(
+      '/usr/local/bin/dsh',
+      '/usr/bin/dsh',
+      path.join(os.homedir(), '.npm-global', 'bin', 'dsh'),
+      path.join(os.homedir(), '.local', 'bin', 'dsh'),
+    )
+  }
+  for (const candidate of candidates) {
+    try { if (fs.existsSync(candidate)) return candidate } catch { /* noop */ }
+  }
+  return ''
+}
+
+/** dsh 的 npm shim 内部依赖 PATH 中的 node，尽量把 node 目录补进子进程环境 */
+function resolveNodeDir() {
+  if (process.platform !== 'win32') return ''
+  const candidates = []
+  if (process.env.APPDATA) candidates.push(path.join(process.env.APPDATA, 'npm', 'node.exe'))
+  if (process.env.ProgramFiles) candidates.push(path.join(process.env.ProgramFiles, 'nodejs', 'node.exe'))
+  for (const candidate of candidates) {
+    try { if (fs.existsSync(candidate)) return path.dirname(candidate) } catch { /* noop */ }
+  }
+  try {
+    const result = spawnSync('where', ['node'], { windowsHide: true, encoding: 'utf8' })
+    const first = String(result.stdout || '').split(/\r?\n/).map((s) => s.trim()).filter(Boolean)[0]
+    if (first) return path.dirname(first)
+  } catch { /* noop */ }
+  return ''
+}
+
+function buildEnv() {
+  const env = { ...process.env }
+  const nodeDir = resolveNodeDir()
+  if (nodeDir) env.PATH = `${nodeDir}${path.delimiter}${env.PATH || ''}`
+  return env
+}
+
+/** 是否已安装 Harness（有 CLI 或已有 ~/.dsh 主目录） */
+function isInstalled() {
+  if (resolveCli()) return true
+  try { return fs.existsSync(homeDir()) } catch { return false }
+}
+
+/** 残留进程记录文件（Electron 未就绪时退回临时目录，便于脱离 Electron 单测） */
+function pidFile() {
+  try {
+    const { app } = require('electron')
+    if (app && typeof app.getPath === 'function') return path.join(app.getPath('userData'), 'harness.json')
+  } catch { /* 非 Electron 环境 */ }
+  return path.join(os.tmpdir(), 'dev-project-manager-harness.json')
+}
+
+function readPidFile() {
+  try { return JSON.parse(fs.readFileSync(pidFile(), 'utf8')) } catch { return null }
+}
+
+function writePidFile(payload) {
+  try { fs.writeFileSync(pidFile(), JSON.stringify(payload), { encoding: 'utf8', mode: 0o600 }) } catch { /* noop */ }
+}
+
+function clearPidFile() {
+  try { fs.rmSync(pidFile(), { force: true }) } catch { /* noop */ }
+}
+
+function isAlive(pid) {
+  if (!pid) return false
+  try { process.kill(pid, 0); return true } catch { return false }
+}
+
+function isPortFree(port) {
+  return new Promise((resolve) => {
+    if (!port) return resolve(true)
+    const server = net.createServer()
+    const done = (free) => { try { server.close() } catch { /* noop */ } resolve(free) }
+    server.once('error', () => resolve(false))
+    server.once('listening', () => done(true))
+    server.listen(port, '127.0.0.1')
+  })
+}
+
+/** 结束整棵子进程树（Windows 必须 /T，否则 node 子进程会残留） */
+function killTree(pid) {
+  if (!pid) return
+  if (process.platform === 'win32') {
+    try { spawnSync('taskkill', ['/PID', String(pid), '/T', '/F'], { windowsHide: true, stdio: 'ignore' }) } catch { /* noop */ }
+    return
+  }
+  try { process.kill(-pid, 'SIGTERM') } catch { try { process.kill(pid, 'SIGTERM') } catch { /* noop */ } }
+}
+
+/** 清理上次异常退出遗留的 Harness 进程（需 pid 存活且记录端口仍被占用，避免误杀复用的 PID） */
+async function cleanupStale() {
+  const record = readPidFile()
+  if (!record || !record.pid) return
+  if (!isAlive(record.pid)) { clearPidFile(); return }
+  if (record.port && !(await isPortFree(record.port))) killTree(record.pid)
+  clearPidFile()
+}
+
+function snapshot() {
+  return {
+    ...state,
+    installed: isInstalled(),
+    detail: logBuffer.slice(-MAX_LOG_CHARS),
+  }
+}
+
+function setState(patch) {
+  state = { ...state, ...patch }
+  try { emitter(snapshot()) } catch { /* 渲染层可能已销毁 */ }
+}
+
+function setEmitter(fn) {
+  emitter = typeof fn === 'function' ? fn : () => {}
+}
+
+/** 拉起子进程；Windows 的 .cmd shim 必须经 cmd.exe，POSIX 独立进程组以便整组关闭 */
+function spawnHarness(cli, args, cwd) {
+  const options = { cwd, env: buildEnv(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+  if (process.platform === 'win32') {
+    // 显式走 cmd /d /s /c：比 shell:true 少一层隐式拼接（避免 DEP0190），
+    // 参数均为固定字面量，不引入外部输入
+    const comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe'
+    const line = [cli || 'dsh', ...args].join(' ')
+    return spawn(comspec, ['/d', '/s', '/c', line], options)
+  }
+  return spawn(cli || 'dsh', args, { ...options, detached: true })
+}
+
+async function doStart(opts = {}) {
+  if (!isInstalled()) {
+    setState({
+      status: 'error',
+      error: '未检测到 DeepSeek Harness（dsh）。请先安装：npm i -g @deepseek-ai/dsh',
+      cli: '', home: homeDir(),
+    })
+    return snapshot()
+  }
+  await cleanupStale()
+
+  const cli = resolveCli()
+  const home = homeDir()
+  const preferred = Number.isInteger(opts.port) && opts.port > 0 && opts.port < 65536 ? opts.port : DEFAULT_PORT
+  const port = (await isPortFree(preferred)) ? preferred : 0 // 端口被占用时交给系统分配，地址以启动输出为准
+  const args = ['web', '--no-open', '--host', '127.0.0.1', '--port', String(port)]
+
+  logBuffer = ''
+  setState({ status: 'starting', error: '', port, pid: 0, url: '', displayUrl: '', cli: cli || 'dsh', home, startedAt: Date.now() })
+
+  return await new Promise((resolve) => {
+    let settled = false
+    let timer = null
+    const finish = (patch) => {
+      if (settled) return
+      settled = true
+      if (timer) clearTimeout(timer)
+      setState(patch)
+      resolve(snapshot())
+    }
+
+    let proc
+    try {
+      proc = spawnHarness(cli, args, os.homedir())
+    } catch (err) {
+      finish({ status: 'error', error: `启动 dsh 失败：${(err && err.message) || String(err)}` })
+      return
+    }
+    child = proc
+    setState({ pid: proc.pid })
+
+    timer = setTimeout(() => {
+      // 超时不清进程：插件加载可能仍在继续，保留现场供用户重试/查看日志
+      finish({
+        status: 'error',
+        error: `启动超时（${Math.round(READY_TIMEOUT_MS / 1000)} 秒内未输出服务地址）`,
+      })
+    }, READY_TIMEOUT_MS)
+    if (timer.unref) timer.unref()
+
+    const onChunk = (chunk) => {
+      const text = String(chunk)
+      logBuffer = (logBuffer + text).slice(-MAX_LOG_CHARS)
+      if (state.status !== 'starting') return
+      const matched = text.match(URL_LINE) || logBuffer.match(URL_LINE)
+      if (!matched) return
+      const url = matched[1]
+      let actualPort = preferred
+      try { actualPort = Number(new URL(url).port) || actualPort } catch { /* 保留预期端口 */ }
+      writePidFile({ pid: proc.pid, port: actualPort, startedAt: Date.now() })
+      finish({
+        status: 'running',
+        url,
+        displayUrl: `http://127.0.0.1:${actualPort}`,
+        port: actualPort,
+        pid: proc.pid,
+        error: '',
+      })
+    }
+    proc.stdout.on('data', onChunk)
+    proc.stderr.on('data', onChunk)
+
+    proc.on('error', (err) => {
+      if (child === proc) child = null
+      finish({ status: 'error', error: `启动 dsh 失败：${(err && err.message) || String(err)}` })
+    })
+
+    proc.on('exit', (code, signal) => {
+      if (child === proc) child = null
+      clearPidFile()
+      const reason = `Harness 服务已退出（code=${code === null ? 'null' : code}${signal ? `, signal=${signal}` : ''}）`
+      if (settled && state.status === 'running') {
+        // 运行中崩溃：更新状态供界面提示并允许重启
+        setState({ status: 'error', url: '', displayUrl: '', pid: 0, error: reason })
+        return
+      }
+      finish({ status: 'error', url: '', displayUrl: '', pid: 0, error: reason })
+    })
+  })
+}
+
+/** 启动服务（幂等：运行中直接返回当前状态，启动中复用同一个 Promise） */
+async function start(opts = {}) {
+  if (state.status === 'running' && child && child.exitCode === null) return snapshot()
+  if (starting) return starting
+  starting = doStart(opts).finally(() => { starting = null })
+  return starting
+}
+
+/** 关闭服务：连同子进程树一起结束，并清理残留记录 */
+function stop() {
+  const proc = child
+  child = null
+  if (proc) killTree(proc.pid)
+  clearPidFile()
+  logBuffer = '' // 主动停止时清空日志，避免下次进入页面残留旧输出
+  setState({ status: 'stopped', port: 0, pid: 0, url: '', displayUrl: '', error: '' })
+  return snapshot()
+}
+
+/** 重启：先关后开（返回新状态） */
+async function restart(opts = {}) {
+  stop()
+  return start(opts)
+}
+
+function status() {
+  return snapshot()
+}
+
+module.exports = {
+  start,
+  stop,
+  restart,
+  status,
+  setEmitter,
+  resolveCli,
+  isInstalled,
+  homeDir,
+  DEFAULT_PORT,
+}

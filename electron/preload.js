@@ -125,4 +125,11 @@ contextBridge.exposeInMainWorld('gitReport', {
   fillBind: (projectId, taskId, taskName) =>
     ipcRenderer.invoke('fill:bind', { projectId, taskId, taskName }),
   fillUnbind: (projectId) => ipcRenderer.invoke('fill:unbind', projectId),
+  // ─── DeepSeek Harness（内置 dsh web 服务） ───
+  harnessStatus: () => ipcRenderer.invoke('harness:status'),
+  harnessStart: (opts) => ipcRenderer.invoke('harness:start', toPlain(opts)),
+  harnessStop: () => ipcRenderer.invoke('harness:stop'),
+  harnessRestart: (opts) => ipcRenderer.invoke('harness:restart', toPlain(opts)),
+  harnessOpenExternal: () => ipcRenderer.invoke('harness:openExternal'),
+  onHarnessStatus: (cb) => subscribe('harness:status', cb),
 })

@@ -40,6 +40,11 @@ const DEFAULTS = {
     clientId: '1',        // 1=厦门汉印 2=江西外协（默认 1）
     account: '',          // 工号
   },
+  // 内置 DeepSeek Harness（dsh web 本地服务）：启动应用时自动拉起，关闭应用时一并关闭
+  harness: {
+    port: 3080,       // 期望端口；被占用时自动改用系统分配的空闲端口
+    autoStart: true,  // 随应用启动自动开启
+  },
 }
 
 /** 从 AI 配置对象解密出明文 Key（keyEnc 优先，兼容旧版明文 apiKey） */
@@ -90,6 +95,7 @@ function load() {
     cfg.hanprint.pwdConfigured = !!hpPwd
     cfg.hanprint.pwdMasked = hpPwd ? maskKey(hpPwd) : ''
     delete cfg.hanprint.pwdEnc
+    cfg.harness = { ...DEFAULTS.harness, ...(cfg.harness || {}) }
     return cfg
   } catch {
     return {

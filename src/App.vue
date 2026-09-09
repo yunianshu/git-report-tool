@@ -7,11 +7,12 @@
         :current-id="state.projects.currentId"
         @select-project="selectProject"
       />
-      <main class="content-area">
+      <main class="content-area" :class="{ 'content-area--flush': view === 'harness' }">
         <transition name="view-fade" mode="out-in">
           <DashboardView v-if="view === 'dashboard'" key="dashboard" @navigate="navigate" @create-project="openProjectEditor()" />
           <ProjectsView v-else-if="view === 'projects'" key="projects" @navigate="navigate" @create-project="openProjectEditor()" @edit-project="openProjectEditor" />
           <ChatView v-else-if="view === 'chat'" key="chat" @navigate="navigate" />
+          <HarnessView v-else-if="view === 'harness'" key="harness" />
           <ReportView v-else-if="view === 'report'" key="report" @navigate="navigate" />
           <FillReportView v-else-if="view === 'fillreport'" key="fillreport" @navigate="navigate" />
           <DeployView v-else-if="view === 'deploy'" key="deploy" @navigate="navigate" />
@@ -34,6 +35,7 @@ import ProjectEditor from './components/ProjectEditor.vue'
 import DashboardView from './views/DashboardView.vue'
 import ProjectsView from './views/ProjectsView.vue'
 import ChatView from './views/ChatView.vue'
+import HarnessView from './views/HarnessView.vue'
 import ReportView from './views/ReportView.vue'
 import FillReportView from './views/FillReportView.vue'
 import DeployView from './views/DeployView.vue'

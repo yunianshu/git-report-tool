@@ -4,10 +4,10 @@
 
 在本应用中，**项目是一等领域对象**：只填写项目名称即可创建，不要求必须是 Git 仓库，也不要求配置部署。Git 活动、AI 助手和部署都是项目的**可选能力**——Git 只是报告的数据来源之一，而不是产品的中心。
 
-侧栏导航分三组、七个入口：
+侧栏导航分三组、八个入口：
 
 - **工作区**：工作台、项目
-- **项目能力**：AI 助手、活动报告、一键填报、部署
+- **项目能力**：AI 助手、DeepSeek Harness、活动报告、一键填报、部署
 - **系统**：扩展管理、设置
 
 应用顶部提供统一的当前项目选择器，切换项目后 AI、报告和部署自动使用同一项目上下文。
@@ -37,6 +37,19 @@
 - 在「设置 → AI 服务」配置接口地址 / API Key / 模型（支持 OpenAI、DeepSeek、Kimi、通义千问、Ollama 等兼容接口）
 - 支持流式输出、停止、复制、保存为 Markdown 文件
 - API Key 明文仅存主进程（safeStorage 加密落盘），渲染层仅显示脱敏片段；项目备注、提交文本等外部上下文均按不可信数据处理并受字符预算限制
+
+## DeepSeek Harness（内置 dsh web）
+
+把本机的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh` CLI）作为应用内置能力：**打开软件自动开启本地服务，关闭软件自动关闭服务**，无需手动敲命令。
+
+- **自动启停**：应用启动时自动拉起 `dsh web`（监听 `127.0.0.1`，默认端口 3080，被占用时自动改用系统分配的空闲端口）；退出应用时连同子进程树一起结束，不留残留服务；异常退出遗留的进程会在下次启动时清理
+- **内嵌进入**：侧栏「DeepSeek Harness」直接内嵌完整 Harness GUI（会话、工作区、模型选择、设置），也可一键用系统浏览器打开
+- **鉴权闭环**：`dsh web` 就绪后输出的一次性 token 由主进程捕获，内嵌页首次导航用它换取 HttpOnly 登录 cookie 后落到干净根地址——token 不写日志、不落盘
+- **状态可见**：页面顶部显示运行状态，底部信息条显示服务地址、PID 与启动时刻；支持「刷新 / 重启服务 / 停止服务」，服务异常退出时展示诊断输出与重试入口
+- **服务设置**：端口与「是否随应用自动启动」可配置；未安装 `dsh` 时给出 `npm i -g @deepseek-ai/dsh` 安装指引
+- **实现要点**：主进程 `electron/harness-service.js` 负责定位 CLI、拉起与整树关闭；渲染层通过 `<webview>`（独立 guest，不受父页 CSP / X-Frame-Options 限制）承载 GUI
+
+前置：本机需已安装 `dsh`（`npm i -g @deepseek-ai/dsh`）；也可用 `DSH_CLI` 环境变量指定可执行文件路径。
 
 ## 活动报告
 
@@ -147,6 +160,7 @@ npm run build:linux     # Linux（AppImage + deb）
 │   ├── extensions-service.js # 四平台技能/插件扫描与启停（Claude Code/Codex/Kimi CLI/Zcode）
 │   ├── git-service.js     #   Git 扫描/收集/仓库信息（纯 Node）
 │   ├── ai-service.js      #   AI 对话（流式）
+│   ├── harness-service.js #   内置 DeepSeek Harness（dsh web）启停与进程树管理
 │   ├── report-history.js  #   报告历史
 │   ├── zentao-service.js  #   禅道客户端（登录/我的任务/工时写入）
 │   ├── hanprint-service.js #  汉印工时平台客户端（登录/任务字典/占比提交）
@@ -161,7 +175,7 @@ npm run build:linux     # Linux（AppImage + deb）
 │       ├── history.js           #   发布历史
 │       └── scripts/deploy.sh    #   服务器端部署脚本
 ├── src/                   # 渲染进程（Vue 3）
-│   ├── views/             #   工作台 / 项目 / AI 助手 / 活动报告 / 一键填报 / 部署 / 扩展管理 / 设置
+│   ├── views/             #   工作台 / 项目 / AI 助手 / DeepSeek Harness / 活动报告 / 一键填报 / 部署 / 扩展管理 / 设置
 │   ├── components/        #   导航、页头、项目编辑、对话面板、图表等
 │   ├── composables/       #   项目加载与当前项目选择
 │   └── utils/             #   项目上下文 / AI 上下文 / 报告生成 / 日期
@@ -172,6 +186,7 @@ npm run build:linux     # Linux（AppImage + deb）
 
 - 项目数据与配置保存在 `userData/config.json`、`userData/deploy-projects.json`（兼容旧部署项目数据）
 - 一键填报的项目-禅道任务绑定保存在 `userData/fill-bindings.json`
+- 内置 Harness 服务的进程记录保存在 `userData/harness.json`（用于清理异常退出遗留的服务进程）
 - 发布历史保存在 `userData/deploy-history.json`（完整日志在 `userData/deploy-logs/`）
 - API Key、SSH 凭据与禅道/汉印密码经 safeStorage 加密落盘
 

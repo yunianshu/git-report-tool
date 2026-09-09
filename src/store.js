@@ -45,6 +45,11 @@ export const state = reactive({
       clientId: '1',
       account: '',
     },
+    /** 内置 DeepSeek Harness 本地服务（端口 / 是否随应用自动启动） */
+    harness: {
+      port: 3080,
+      autoStart: true,
+    },
   },
   /** 报告生成过程（跨视图保留，切换 tab 不中断） */
   report: {

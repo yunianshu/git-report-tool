@@ -18,6 +18,7 @@ const deployHistory = require('./deploy/history')
 const fillService = require('./fill-service')
 const zentaoService = require('./zentao-service')
 const hanprintService = require('./hanprint-service')
+const harnessService = require('./harness-service')
 
 // 统一数据目录为 ASCII 固定值，与产品显示名（productName，可中文）解耦：
 // dev / 打包 GUI / 无头 CLI 三模式共用同一份配置，改名或换产品名不丢数据
@@ -74,6 +75,9 @@ function createWindow() {
       contextIsolation: true,
       nodeIntegration: false,
       sandbox: false,
+      // DeepSeek Harness 内嵌页：webview 是独立的 guest WebContents，
+      // 不受父页 CSP / X-Frame-Options 限制，且能带上 SameSite=Strict 的登录 cookie
+      webviewTag: true,
     },
   })
 
@@ -469,6 +473,37 @@ function registerIpc() {
     }
   })
   ipcMain.handle('fill:unbind', (_e, projectId) => ({ ok: fillService.unbindProject(projectId) }))
+
+  // ─── DeepSeek Harness（内置 dsh web 服务） ───
+  // 状态变化（启动/就绪/崩溃/关闭）经 broadcast 推送，界面无需轮询
+  harnessService.setEmitter((snapshot) => broadcast('harness:status', snapshot))
+  ipcMain.handle('harness:status', () => harnessService.status())
+  ipcMain.handle('harness:start', async (_e, opts) => {
+    try {
+      return { ok: true, ...(await harnessService.start(opts || {})) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('harness:stop', () => ({ ok: true, ...harnessService.stop() }))
+  ipcMain.handle('harness:restart', async (_e, opts) => {
+    try {
+      return { ok: true, ...(await harnessService.restart(opts || {})) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  // 系统浏览器打开：必须用带 token 的地址完成一次握手换取登录 cookie
+  ipcMain.handle('harness:openExternal', async () => {
+    const snapshot = harnessService.status()
+    if (!snapshot.url) return { ok: false, error: 'Harness 服务未运行' }
+    try {
+      await shell.openExternal(snapshot.url)
+      return { ok: true }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
 }
 
 app.whenReady().then(() => {
@@ -478,6 +513,19 @@ app.whenReady().then(() => {
   createWindow()
   // 启动即后台预热（扫描 + 预收集今天），用户点生成时近乎秒出
   warmupPipeline()
+  // 内置 DeepSeek Harness：启动应用即拉起本地 dsh web 服务。
+  // 冒烟模式默认跳过（服务启动会占用 90s 级时序），需要时用 SMOKE_HARNESS=1 显式开启。
+  if (!process.env.SMOKE_EXIT_MS || process.env.SMOKE_HARNESS === '1') {
+    const cfg = store.load()
+    if (!cfg.harness || cfg.harness.autoStart !== false) {
+      harnessService.start({ port: cfg.harness && cfg.harness.port })
+        .then((snapshot) => {
+          if (snapshot.status === 'running') console.log('[harness] 已启动', snapshot.displayUrl)
+          else console.log('[harness] 启动未就绪：', snapshot.error || snapshot.status)
+        })
+        .catch((err) => console.log('[harness] 启动失败：', (err && err.message) || String(err)))
+    }
+  }
   // 冒烟测试钩子（仅供自动化验证）：设置 SMOKE_EXIT_MS 后自动退出，
   // 并将渲染层 error/warning 控制台消息转发到 stdout 以便断言
   if (process.env.SMOKE_EXIT_MS) {
@@ -551,3 +599,8 @@ app.whenReady().then(() => {
 app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
+
+// 关闭软件即关闭内置 Harness 服务（stop 为同步的进程树终止，可安全用于退出钩子）
+app.on('before-quit', () => { harnessService.stop() })
+app.on('will-quit', () => { harnessService.stop() })
+process.on('exit', () => { harnessService.stop() })
