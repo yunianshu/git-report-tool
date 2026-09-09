@@ -26,6 +26,11 @@ async function occupy(port) {
   // ── B1 端口占用 → 自动改用空闲端口 ──
   const blocker = await occupy(3080)
   const svc = require('../electron/harness-service')
+
+  // ── B5 运行时优先级：内置优先于本机全局安装 ──
+  const launch = svc.resolveLaunch()
+  check('B5 优先使用内置运行时', launch.runtime === 'bundled', `runtime=${launch.runtime} dir=${launch.runtimeDir}`)
+
   const s1 = await svc.start({ port: 3080 })
   check('B1 端口被占用时自动换端口', s1.status === 'running' && s1.port !== 3080,
     `status=${s1.status} port=${s1.port} error=${s1.error}`)
@@ -44,12 +49,13 @@ async function occupy(port) {
   blocker.close()
   await sleep(500)
 
-  // ── B2 未安装 → 明确安装提示（用临时空环境屏蔽本机 dsh）──
+  // ── B2 未安装 → 明确安装提示（屏蔽内置运行时 + 临时空环境屏蔽本机 dsh）──
   const empty = path.join(os.tmpdir(), `pm-harness-empty-${Date.now()}`)
   process.env.APPDATA = empty
   process.env.ProgramFiles = empty
   process.env.USERPROFILE = empty
   process.env.DSH_HOME = path.join(empty, '.dsh')
+  process.env.DSH_RUNTIME_DIR = path.join(empty, 'runtime') // 指向空目录 = 无内置运行时
   delete process.env.DSH_CLI
   // 重新加载模块以清空内部状态
   delete require.cache[require.resolve('../electron/harness-service')]

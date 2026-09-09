@@ -60,6 +60,7 @@
       <footer v-if="running" class="harness-footer">
         <span class="harness-dot" />
         <span>服务运行中</span>
+        <span v-if="runtimeLabel" class="harness-meta">{{ runtimeLabel }}</span>
         <span class="harness-meta">{{ snapshot.displayUrl }}</span>
         <span class="harness-meta">PID {{ snapshot.pid }}</span>
         <span v-if="snapshot.startedAt" class="harness-meta">启动于 {{ startedAtText }}</span>
@@ -115,6 +116,9 @@ const startedAtText = computed(() => {
 })
 const STATUS_TEXT = { stopped: '未运行', starting: '启动中', running: '运行中', error: '异常' }
 const statusLabel = computed(() => STATUS_TEXT[snapshot.value.status] || '未运行')
+/** 运行时来源：内置（随安装包分发，目标机器无需装 dsh/Node）/ 本机安装 / PATH */
+const RUNTIME_TEXT = { bundled: '内置运行时', system: '本机安装', path: 'PATH' }
+const runtimeLabel = computed(() => RUNTIME_TEXT[snapshot.value.runtime] || '')
 
 let unsubscribe = null
 

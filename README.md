@@ -40,16 +40,19 @@
 
 ## DeepSeek Harness（内置 dsh web）
 
-把本机的 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh` CLI）作为应用内置能力：**打开软件自动开启本地服务，关闭软件自动关闭服务**，无需手动敲命令。
+把 [DeepSeek Harness](https://github.com/deepseek-ai/deepseek-harness)（`dsh` CLI）作为应用内置能力：**打开软件自动开启本地服务，关闭软件自动关闭服务**，无需手动敲命令，**目标机器无需安装 dsh 或 Node**。
 
+- **运行时内置**：安装包内自带独立 Node 运行时（v24.x，dsh 需 Node ≥22.18 的 `node:sqlite` 与 `import.meta.main`，Electron 33 内置的 Node 20 不满足）与固定版本 `@deepseek-ai/dsh` 依赖树，位于 `resources/harness-runtime/`；首次启动在用户主目录自动生成 `~/.dsh`，离线可用
 - **自动启停**：应用启动时自动拉起 `dsh web`（监听 `127.0.0.1`，默认端口 3080，被占用时自动改用系统分配的空闲端口）；退出应用时连同子进程树一起结束，不留残留服务；异常退出遗留的进程会在下次启动时清理
 - **内嵌进入**：侧栏「DeepSeek Harness」直接内嵌完整 Harness GUI（会话、工作区、模型选择、设置），也可一键用系统浏览器打开
-- **鉴权闭环**：`dsh web` 就绪后输出的一次性 token 由主进程捕获，内嵌页首次导航用它换取 HttpOnly 登录 cookie 后落到干净根地址——token 不写日志、不落盘
-- **状态可见**：页面顶部显示运行状态，底部信息条显示服务地址、PID 与启动时刻；支持「刷新 / 重启服务 / 停止服务」，服务异常退出时展示诊断输出与重试入口
-- **服务设置**：端口与「是否随应用自动启动」可配置；未安装 `dsh` 时给出 `npm i -g @deepseek-ai/dsh` 安装指引
-- **实现要点**：主进程 `electron/harness-service.js` 负责定位 CLI、拉起与整树关闭；渲染层通过 `<webview>`（独立 guest，不受父页 CSP / X-Frame-Options 限制）承载 GUI
+- **鉴权闭环**：`dsh web` 就绪后输出的一次性 token 由主进程捕获，内嵌页首次导航用它换取 HttpOnly + SameSite=Strict 登录 cookie 后落到干净根地址——token 不写日志、不落盘
+- **状态可见**：页面顶部显示运行状态，底部信息条显示运行时来源（内置 / 本机）、服务地址、PID 与启动时刻；支持「刷新 / 重启服务 / 停止服务」，服务异常退出时展示诊断输出与重试入口
+- **服务设置**：端口与「是否随应用自动启动」可配置
+- **实现要点**：主进程 `electron/harness-service.js` 负责解析运行时、拉起与整树关闭；渲染层通过 `<webview>`（独立 guest，不受父页 CSP / X-Frame-Options 限制）承载 GUI
 
-前置：本机需已安装 `dsh`（`npm i -g @deepseek-ai/dsh`）；也可用 `DSH_CLI` 环境变量指定可执行文件路径。
+运行时解析优先级：内置运行时 → 本机全局安装的 `dsh` → PATH。开发/调试可用 `DSH_RUNTIME_DIR` 指定运行时目录，或用 `DSH_CLI` 指定可执行文件。
+
+构建：`scripts/prepare-harness-runtime.cjs` 在打包前（`beforePack`）下载 Node 运行时并安装固定版本 dsh 到 `build/harness-runtime/`（已缓存，约 300MB，不入库；版本用 `NODE_RUNTIME_VERSION` / `DSH_VERSION` 覆盖）。因此安装包体积会明显增大（Windows 约 +350MB 解压后）。
 
 ## 活动报告
 
@@ -179,7 +182,7 @@ npm run build:linux     # Linux（AppImage + deb）
 │   ├── components/        #   导航、页头、项目编辑、对话面板、图表等
 │   ├── composables/       #   项目加载与当前项目选择
 │   └── utils/             #   项目上下文 / AI 上下文 / 报告生成 / 日期
-└── scripts/               # 构建与部署辅助脚本
+└── scripts/               # 构建与部署辅助脚本（含 prepare-harness-runtime.cjs：打包前准备内置 Harness 运行时）
 ```
 
 ## 数据存储

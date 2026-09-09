@@ -39,7 +39,9 @@ let state = {
   url: '',          // 带 token，仅供内嵌 webview 首次导航
   displayUrl: '',   // 脱敏后的地址，供界面展示
   error: '',
-  cli: '',
+  cli: '',          // 实际使用的 dsh 入口
+  runtime: '',      // bundled（安装包内置）| system（本机全局安装）| path（PATH 解析）
+  runtimeDir: '',   // 内置运行时目录
   home: '',
   startedAt: 0,
 }
@@ -71,6 +73,57 @@ function resolveCli() {
   return ''
 }
 
+/**
+ * 内置运行时目录（随安装包分发）：
+ * 打包后为 <resources>/harness-runtime，开发态为 <repo>/build/harness-runtime。
+ * 内含 node/（独立 Node 运行时，dsh 需 Node ≥22.18）与 dsh/（固定版本的依赖树），
+ * 使目标机器无需安装 dsh 或 Node。
+ */
+function bundledRuntimeDir() {
+  // DSH_RUNTIME_DIR 显式指定运行时目录（不设时按安装包/开发态默认位置查找）
+  const override = (process.env.DSH_RUNTIME_DIR || '').trim()
+  if (override) {
+    try { return fs.existsSync(path.join(override, 'dsh')) ? override : '' } catch { return '' }
+  }
+  const candidates = []
+  try {
+    if (process.resourcesPath) candidates.push(path.join(process.resourcesPath, 'harness-runtime'))
+  } catch { /* noop */ }
+  candidates.push(path.join(__dirname, '..', 'build', 'harness-runtime'))
+  for (const dir of candidates) {
+    try { if (fs.existsSync(path.join(dir, 'dsh'))) return dir } catch { /* noop */ }
+  }
+  return ''
+}
+
+function bundledEntry(dir) {
+  const entry = path.join(dir, 'dsh', 'node_modules', '@deepseek-ai', 'dsh', 'lib', 'bin.js')
+  return fs.existsSync(entry) ? entry : ''
+}
+
+function bundledNode(dir) {
+  const exe = path.join(dir, 'node', process.platform === 'win32' ? 'node.exe' : 'node')
+  return fs.existsSync(exe) ? exe : ''
+}
+
+/**
+ * 解析启动方式，优先级：内置运行时 → 系统全局 dsh → PATH。
+ * @returns {{runtime: string, command: string, prefixArgs: string[], shell: boolean}}
+ */
+function resolveLaunch() {
+  const dir = bundledRuntimeDir()
+  if (dir) {
+    const entry = bundledEntry(dir)
+    const node = bundledNode(dir)
+    if (entry && node) {
+      return { runtime: 'bundled', command: node, prefixArgs: [entry], shell: false, runtimeDir: dir }
+    }
+  }
+  const cli = resolveCli()
+  if (cli) return { runtime: 'system', command: cli, prefixArgs: [], shell: process.platform === 'win32', runtimeDir: '' }
+  return { runtime: 'path', command: 'dsh', prefixArgs: [], shell: process.platform === 'win32', runtimeDir: '' }
+}
+
 /** dsh 的 npm shim 内部依赖 PATH 中的 node，尽量把 node 目录补进子进程环境 */
 function resolveNodeDir() {
   if (process.platform !== 'win32') return ''
@@ -95,8 +148,9 @@ function buildEnv() {
   return env
 }
 
-/** 是否已安装 Harness（有 CLI 或已有 ~/.dsh 主目录） */
+/** 是否已安装 Harness（内置运行时 / CLI / 已有 ~/.dsh 主目录任一存在） */
 function isInstalled() {
+  if (bundledRuntimeDir()) return true
   if (resolveCli()) return true
   try { return fs.existsSync(homeDir()) } catch { return false }
 }
@@ -174,38 +228,54 @@ function setEmitter(fn) {
   emitter = typeof fn === 'function' ? fn : () => {}
 }
 
-/** 拉起子进程；Windows 的 .cmd shim 必须经 cmd.exe，POSIX 独立进程组以便整组关闭 */
-function spawnHarness(cli, args, cwd) {
-  const options = { cwd, env: buildEnv(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
-  if (process.platform === 'win32') {
-    // 显式走 cmd /d /s /c：比 shell:true 少一层隐式拼接（避免 DEP0190），
-    // 参数均为固定字面量，不引入外部输入
-    const comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe'
-    const line = [cli || 'dsh', ...args].join(' ')
-    return spawn(comspec, ['/d', '/s', '/c', line], options)
+/**
+ * 拉起子进程：
+ * - 内置运行时：直接以独立 node 执行 dsh 的 bin.js（无 shell，无 .cmd shim）
+ * - 系统 dsh：Windows 的 .cmd shim 必须经 cmd.exe；POSIX 用独立进程组以便整组关闭
+ */
+function spawnHarness(launch, args, cwd) {
+  // cwd 不存在会让 spawn 直接 ENOENT：兜底到确实存在的目录
+  let workdir = cwd
+  try { if (!workdir || !fs.existsSync(workdir)) workdir = os.homedir() } catch { workdir = undefined }
+  const options = { cwd: workdir, env: buildEnv(), windowsHide: true, stdio: ['ignore', 'pipe', 'pipe'] }
+  if (!launch.shell) {
+    return spawn(launch.command, [...launch.prefixArgs, ...args], {
+      ...options,
+      detached: process.platform !== 'win32',
+    })
   }
-  return spawn(cli || 'dsh', args, { ...options, detached: true })
+  // 显式走 cmd /d /s /c：比 shell:true 少一层隐式拼接（避免 DEP0190），
+  // 参数均为固定字面量，不引入外部输入
+  const comspec = process.env.ComSpec || process.env.COMSPEC || 'cmd.exe'
+  const line = [launch.command, ...args].join(' ')
+  return spawn(comspec, ['/d', '/s', '/c', line], options)
 }
 
 async function doStart(opts = {}) {
-  if (!isInstalled()) {
+  const launch = resolveLaunch()
+  const bundled = launch.runtime === 'bundled'
+  if (!bundled && !resolveCli() && !fs.existsSync(homeDir())) {
     setState({
       status: 'error',
       error: '未检测到 DeepSeek Harness（dsh）。请先安装：npm i -g @deepseek-ai/dsh',
-      cli: '', home: homeDir(),
+      cli: '', runtime: launch.runtime, runtimeDir: '', home: homeDir(),
     })
     return snapshot()
   }
   await cleanupStale()
 
-  const cli = resolveCli()
   const home = homeDir()
   const preferred = Number.isInteger(opts.port) && opts.port > 0 && opts.port < 65536 ? opts.port : DEFAULT_PORT
   const port = (await isPortFree(preferred)) ? preferred : 0 // 端口被占用时交给系统分配，地址以启动输出为准
   const args = ['web', '--no-open', '--host', '127.0.0.1', '--port', String(port)]
 
   logBuffer = ''
-  setState({ status: 'starting', error: '', port, pid: 0, url: '', displayUrl: '', cli: cli || 'dsh', home, startedAt: Date.now() })
+  setState({
+    status: 'starting', error: '', port, pid: 0, url: '', displayUrl: '', home, startedAt: Date.now(),
+    runtime: launch.runtime,
+    runtimeDir: launch.runtimeDir,
+    cli: bundled ? launch.prefixArgs[0] : launch.command,
+  })
 
   return await new Promise((resolve) => {
     let settled = false
@@ -220,7 +290,7 @@ async function doStart(opts = {}) {
 
     let proc
     try {
-      proc = spawnHarness(cli, args, os.homedir())
+      proc = spawnHarness(launch, args, os.homedir())
     } catch (err) {
       finish({ status: 'error', error: `启动 dsh 失败：${(err && err.message) || String(err)}` })
       return
@@ -314,6 +384,8 @@ module.exports = {
   status,
   setEmitter,
   resolveCli,
+  resolveLaunch,
+  bundledRuntimeDir,
   isInstalled,
   homeDir,
   DEFAULT_PORT,

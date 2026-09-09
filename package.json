@@ -45,6 +45,13 @@
       "dist/**/*",
       "electron/**/*"
     ],
+    "extraResources": [
+      {
+        "from": "build/harness-runtime",
+        "to": "harness-runtime"
+      }
+    ],
+    "beforePack": "scripts/prepare-harness-runtime.cjs",
     "directories": {
       "output": "release/${version}"
     },

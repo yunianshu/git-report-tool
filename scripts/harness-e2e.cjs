@@ -6,8 +6,9 @@
  *   H2 进入 harness —— 侧栏「DeepSeek Harness」可进入，内嵌 webview 真实加载 GUI
  *   H3 服务可达且鉴权正确 —— 内嵌页经 token 握手后落到干净根地址（非 401）
  *   H4 关闭软件关闭服务 —— 应用退出后 dsh 子进程树消失、端口释放
+ *   H5 无需用户安装 —— 使用安装包内置运行时（bundled），并在全新主目录下自举
  *
- * 前置：npm run build:renderer
+ * 前置：npm run build:renderer（打包产物验证还需 npm run build:dir）
  * 用法：node scripts/harness-e2e.cjs
  *      E2E_EXE=<win-unpacked 可执行文件> node scripts/harness-e2e.cjs   # 验证打包产物
  */
@@ -18,6 +19,8 @@ const path = require('path')
 
 const ROOT = path.resolve(__dirname, '..')
 const USER_DATA = path.join(os.tmpdir(), `pm-harness-e2e-${Date.now()}`)
+/** 全新主目录：模拟「用户机器从未用过 dsh」——~/.dsh 不存在，需由内置运行时自举 */
+const HOME_SANDBOX = path.join(os.tmpdir(), `pm-harness-home-${Date.now()}`)
 const PORT = Number(process.env.HARNESS_E2E_PORT) || 3080
 
 const EVAL = `(async () => {
@@ -67,6 +70,9 @@ const EVAL = `(async () => {
 const env = {
   ...process.env,
   PROJECT_MANAGER_USER_DATA: USER_DATA,
+  // 全新主目录（Windows 用 USERPROFILE，POSIX 用 HOME）：保证 ~/.dsh 不存在
+  USERPROFILE: HOME_SANDBOX,
+  HOME: HOME_SANDBOX,
   SMOKE_HARNESS: '1',
   SMOKE_EXIT_MS: '100000',
   SMOKE_EVAL: EVAL,
@@ -76,8 +82,11 @@ const env = {
 
 const EXE = process.env.E2E_EXE || ''
 const label = EXE ? '打包产物' : '开发版'
+// 全新主目录（空目录，模拟从未用过 dsh 的机器）
+fs.mkdirSync(HOME_SANDBOX, { recursive: true })
 console.log(`=== DeepSeek Harness 内置服务 E2E（${label}） ===`)
 console.log(`userData=${USER_DATA}`)
+console.log(`全新主目录=${HOME_SANDBOX}`)
 
 /** 统计仍存活的 dsh web 进程数 */
 function dshProcessCount() {
@@ -133,6 +142,12 @@ assert('H3 内嵌页握手后落到干净根地址（token 已换取 cookie）',
 assert('H3b GUI 真实渲染（非 401 空白页）',
   !!r.guestBody && !/401/.test(r.guestBody) && r.guestBody.length > 5,
   `body="${(r.guestBody || r.guestBodyError || '').slice(0, 120)}"`)
+assert('H5 使用安装包内置运行时（用户机器无需安装 dsh/Node）',
+  /内置运行时/.test(r.footer || ''),
+  `footer="${r.footer}"`)
+assert('H5b 全新主目录下自动完成首次自举（生成 ~/.dsh）',
+  fs.existsSync(path.join(HOME_SANDBOX, '.dsh')),
+  `home=${HOME_SANDBOX} 内容=${fs.existsSync(HOME_SANDBOX) ? fs.readdirSync(HOME_SANDBOX).join(',') : '(不存在)'}`)
 
 // H4：退出后服务消失
 const after = dshProcessCount()
