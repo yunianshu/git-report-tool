@@ -282,10 +282,11 @@ function save(input) {
   let copiedInfo = null
   if (idx >= 0) projects[idx] = { ...old, ...incoming }
   else {
-    // 新建项目默认带入（spec R6）：从最近配置过的其他项目整套复制部署配置
+    // 新建项目默认带入（spec R6）：从最近配置过的其他项目复制部署配置；
+    // 部分复制——只继承未显式配置的段，不覆盖调用方已填写的 scriptMode/deploy 等
     const source = pickCopySource(projects, incoming.id)
     if (source) {
-      copiedInfo = { copiedFrom: source.name, copiedTargets: applyCopyConfig(source, incoming) }
+      copiedInfo = { copiedFrom: source.name, copiedTargets: applyCopyConfigPartial(source, incoming) }
     }
     projects.push(incoming)
   }
@@ -311,6 +312,41 @@ function applyCopyConfig(from, to) {
   to.version = JSON.parse(JSON.stringify(from.version || { strategy: 'auto', manual: '' }))
   to.deploy = JSON.parse(JSON.stringify(from.deploy || defaultProject().deploy))
   to.scriptMode = JSON.parse(JSON.stringify(from.scriptMode || defaultProject().scriptMode))
+  const copied = (from.targets || []).map((t) => ({ ...JSON.parse(JSON.stringify(t)), id: genId() }))
+  to.targets.push(...copied)
+  to.updatedAt = Date.now()
+  return copied.length
+}
+
+/** 配置段是否仍为默认值：所有键的值都与默认一致且无默认之外的键（用户未显式修改） */
+function sectionUntouched(provided, defaults) {
+  const p = provided || {}
+  const keys = Object.keys(p)
+  for (const k of keys) {
+    if (!(k in defaults)) return false
+    if (JSON.stringify(p[k]) !== JSON.stringify(defaults[k])) return false
+  }
+  return true
+}
+
+/**
+ * 新建项目默认带入（spec R6）的部分复制：只继承用户未显式配置的段。
+ * 整段覆盖会静默丢弃调用方/界面已填写的 scriptMode（如打包命令）、deploy 选项等，
+ * 表现为「保存后配置消失」——显式设置过的段必须原样保留。
+ */
+function applyCopyConfigPartial(from, to) {
+  const d = defaultProject()
+  if (to.deployMode === d.deployMode) to.deployMode = from.deployMode
+  if (String(to.composeFile || '') === d.composeFile) to.composeFile = from.composeFile
+  if (sectionUntouched(to.version, d.version) && from.version) {
+    to.version = JSON.parse(JSON.stringify(from.version))
+  }
+  if (sectionUntouched(to.deploy, d.deploy)) {
+    to.deploy = JSON.parse(JSON.stringify(from.deploy || d.deploy))
+  }
+  if (sectionUntouched(to.scriptMode, d.scriptMode)) {
+    to.scriptMode = JSON.parse(JSON.stringify(from.scriptMode || d.scriptMode))
+  }
   const copied = (from.targets || []).map((t) => ({ ...JSON.parse(JSON.stringify(t)), id: genId() }))
   to.targets.push(...copied)
   to.updatedAt = Date.now()

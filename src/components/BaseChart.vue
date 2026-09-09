@@ -48,5 +48,6 @@ onBeforeUnmount(() => {
   }
 })
 
-watch(() => props.option, render, { deep: true })
+// option 为每次整体重建的 computed 对象，浅层比较即可感知变化；deep 遍历大配置纯属浪费
+watch(() => props.option, render)
 </script>

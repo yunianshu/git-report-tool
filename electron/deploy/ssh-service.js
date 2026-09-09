@@ -15,6 +15,15 @@ function connect(config) {
     const conn = new Client()
     let settled = false
     const finish = (fn) => (v) => { if (!settled) { settled = true; fn(v) } }
+    /** 连接断开（close/error/end 任一）时拒绝所有登记中的操作（exec/upload 可能悬挂数分钟） */
+    const dropWaiters = new Set()
+    const notifyDropped = (msg) => {
+      for (const fn of dropWaiters) {
+        try { fn(new Error(msg)) } catch { /* noop */ }
+      }
+      dropWaiters.clear()
+    }
+    conn.__dropWaiters = dropWaiters
 
     conn.on('ready', () => finish(resolve)(conn))
     conn.on('error', (e) => {
@@ -24,9 +33,19 @@ function connect(config) {
           + '若 FinalShell 等工具可连而本工具超时，常见原因是服务器只放行了其他机器的 IP，'
           + '或 FinalShell 配置了跳板机/代理，或其连接端口并非 22）'
       }
+      notifyDropped(`SSH 连接错误：${msg}`)
       finish(reject)(new Error(msg))
     })
-    conn.on('end', () => finish(reject)(new Error('SSH 连接已断开')))
+    conn.on('end', () => {
+      notifyDropped('SSH 连接已断开')
+      finish(reject)(new Error('SSH 连接已断开'))
+    })
+    // 网络异常断开只触发 close（不触发 error/end）：不监听会让进行中的操作永远不落定，
+    // 表现为发布卡死、界面 running 永久挂起
+    conn.on('close', () => {
+      notifyDropped('SSH 连接已被服务器或网络关闭')
+      finish(reject)(new Error('SSH 连接已被服务器或网络关闭'))
+    })
 
     const cfg = {
       host: config.host,
@@ -80,12 +99,17 @@ function enhanceExecError(e) {
  * chunk 边界可能切断多字节字符，展示用途可接受；完整结果以返回值的 stdout/stderr 为准）。
  * stdout/stderr 先按 Buffer 累积、结束时一次性按 UTF-8 解码——大数据量（如 psql 导出
  * 数十 MB 含中文/多字节文本）时逐 chunk toString 会把跨界多字节字符损坏成替换符。
+ * 连接中途断开时立即拒绝（发布脚本可运行数分钟，不能等到超时）。
  * @returns {Promise<{code: number, stdout: string, stderr: string}>}
  */
 function exec(conn, command, onLine) {
   return new Promise((resolve, reject) => {
+    const dropWaiters = conn.__dropWaiters
+    const onDrop = (e) => reject(e)
+    const off = () => { if (dropWaiters) dropWaiters.delete(onDrop) }
+    if (dropWaiters) dropWaiters.add(onDrop)
     conn.exec(command, (err, stream) => {
-      if (err) return reject(enhanceExecError(err))
+      if (err) { off(); return reject(enhanceExecError(err)) }
       const outBufs = []
       const errBufs = []
       stream.on('data', (d) => {
@@ -96,26 +120,35 @@ function exec(conn, command, onLine) {
         errBufs.push(d)
         if (onLine) onLine(d.toString('utf8'), 'stderr')
       })
-      stream.on('close', (code) => resolve({
-        code: code || 0,
-        stdout: Buffer.concat(outBufs).toString('utf8'),
-        stderr: Buffer.concat(errBufs).toString('utf8'),
-      }))
+      stream.on('error', (e) => { off(); reject(e) })
+      stream.on('close', (code) => {
+        off()
+        resolve({
+          code: code || 0,
+          stdout: Buffer.concat(outBufs).toString('utf8'),
+          stderr: Buffer.concat(errBufs).toString('utf8'),
+        })
+      })
     })
   })
 }
 
 /**
- * SFTP 上传文件。onProgress(uploadedBytes, totalBytes) 持续回调。
+ * SFTP 上传文件。onProgress(uploadedBytes, totalBytes) 持续回调；断连立即拒绝。
  * @returns {Promise<{remotePath: string}>}
  */
 function upload(conn, localPath, remotePath, onProgress) {
   return new Promise((resolve, reject) => {
+    const dropWaiters = conn.__dropWaiters
+    const onDrop = (e) => reject(e)
+    const off = () => { if (dropWaiters) dropWaiters.delete(onDrop) }
+    if (dropWaiters) dropWaiters.add(onDrop)
     conn.sftp((err, sftp) => {
-      if (err) return reject(err)
+      if (err) { off(); return reject(err) }
       sftp.fastPut(localPath, remotePath, {
         step: (transferred, chunk, total) => { if (onProgress) onProgress(transferred, total) },
       }, (e2) => {
+        off()
         sftp.end() // 及时释放通道：sshd MaxSessions 较低的机器开多了会被拒
         e2 ? reject(e2) : resolve({ remotePath })
       })

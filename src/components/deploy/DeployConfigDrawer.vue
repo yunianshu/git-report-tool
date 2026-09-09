@@ -145,10 +145,14 @@
               type="password"
               show-password
               style="flex: 1"
-              :placeholder="activeTarget.server.secretConfigured ? `${activeTarget.server.secretMasked}（留空保持不变）` : 'SSH 登录密码'"
+              :placeholder="clearSecretPending ? '已标记清除（保存后生效）' : activeTarget.server.secretConfigured ? `${activeTarget.server.secretMasked}（留空保持不变）` : 'SSH 登录密码'"
+              @update:model-value="activeTarget.server.clearSecret = false"
             />
-            <el-button v-if="activeTarget.server.secretConfigured" text type="danger" size="small" @click="activeTarget.server.clearSecret = true">
+            <el-button v-if="activeTarget.server.secretConfigured && !clearSecretPending" text type="danger" size="small" @click="clearSecret">
               清除
+            </el-button>
+            <el-button v-else-if="clearSecretPending" text size="small" @click="undoClearSecret">
+              撤销清除
             </el-button>
           </div>
           <template v-else>
@@ -359,6 +363,9 @@ const activeTarget = computed(() => {
   return t || props.form.targets[0] || null
 })
 
+/** 密码清除标记（撤销入口与占位提示依赖） */
+const clearSecretPending = computed(() => activeTarget.value?.server?.clearSecret === true)
+
 // ─── 数据同步导入钩子：开关代理（写入 dataSync.importMode）───
 const importEnabled = computed({
   get: () => activeTarget.value?.dataSync?.importMode === 'command',
@@ -366,6 +373,19 @@ const importEnabled = computed({
     if (activeTarget.value?.dataSync) activeTarget.value.dataSync.importMode = v ? 'command' : 'none'
   },
 })
+
+// ─── SSH 凭据清除（标记制：保存时由主进程 mergeSecret 落地；此处同步界面状态）───
+function clearSecret() {
+  const s = activeTarget.value && activeTarget.value.server
+  if (!s) return
+  s.clearSecret = true
+  s.secret = ''
+}
+function undoClearSecret() {
+  const s = activeTarget.value && activeTarget.value.server
+  if (!s) return
+  s.clearSecret = false
+}
 
 // ─── 部署目标（多环境）管理 ───
 async function addTarget() {
