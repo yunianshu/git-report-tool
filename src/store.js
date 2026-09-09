@@ -8,12 +8,8 @@ export const state = reactive({
     currentId: '',
     loading: false,
   },
-  /** 已启用的仓库路径（扫描页勾选后用于报告生成） */
-  repos: [],
   /** 扫描发现的全部仓库（含 info，跨视图保留） */
   discoveredRepos: [],
-  /** 表格勾选的仓库路径（切换视图后保留） */
-  selectedRepoPaths: [],
   /** Git 扫描全局状态（启动预热/手动扫描共用，工作台实时展示进度） */
   scan: {
     scanning: false,    // 目录扫描进行中（预热或设置页手动扫描）
@@ -62,7 +58,6 @@ export const state = reactive({
     scanProgress: { scanned: 0 },
     collectProgress: { done: 0, total: 0 },
     rawCommits: [],
-    openProjects: [],
     /** rawCommits 实际对应的收集范围（until 为排他上界）。报告页与 AI 页共用
      *  rawCommits，展示、复制与导出必须以此范围为准，避免数据与标题错标 */
     collectedRange: null, // { since, until, repoPaths: string[] }

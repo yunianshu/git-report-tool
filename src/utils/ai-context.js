@@ -98,14 +98,7 @@ export function buildProjectContext({
   return text
 }
 
-/** 保留旧调用语义，供报告相关代码平滑过渡。 */
-export function buildReportContext({ commits = [], rangeLabel = '', onlyMine = false, authorFilter = [], identities = [] }) {
-  const scope = onlyMine ? `本人（${identities.length} 个账号）` : authorFilter.length ? `指定作者（${authorFilter.join('、')}）` : '全部作者'
-  const lines = [`作者范围：${scope}`]
-  appendGit(lines, commits, rangeLabel)
-  return lines.join('\n')
-}
-
+/** 聊天窗口历史截断：取最近 max 条消息 */
 export function windowHistory(messages, max = 20) {
   return (messages || []).slice(-max)
 }

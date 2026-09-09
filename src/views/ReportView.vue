@@ -377,7 +377,6 @@ async function doCollect() {
     })
     state.report.rawCommits = data
     state.report.collectedRange = { since: r.since, until: r.until, repoPaths: repos.slice() }
-    state.report.openProjects = []
     // 新一轮数据里可能没有旧勾选的作者：残留筛选会静默隐藏提交，必须重置
     authorFilter.value = []
     state.report.phase = 'done'

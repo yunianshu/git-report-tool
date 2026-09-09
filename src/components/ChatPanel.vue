@@ -88,6 +88,8 @@ async function scrollToEnd() {
 }
 watch(() => state.chat.messages.length, scrollToEnd)
 watch(() => state.chat.streaming, scrollToEnd)
+// 流式期间消息数量不变（最后一条内容在增长），必须跟随内容长度滚动才能自动跟随输出
+watch(() => state.chat.messages[state.chat.messages.length - 1]?.content?.length, scrollToEnd)
 
 unsubDelta = window.gitReport?.onAiDelta?.((full) => {
   const last = state.chat.messages[state.chat.messages.length - 1]

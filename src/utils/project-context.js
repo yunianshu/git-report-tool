@@ -27,17 +27,3 @@ export function deploymentConfigured(project) {
 export function projectStatusLabel(status) {
   return { active: '进行中', paused: '已暂停', archived: '已归档' }[status] || '进行中'
 }
-
-export function projectContextSummary(project, { repos = [], commits = [], reports = [], deployments = [] } = {}) {
-  const matchedRepos = reposForProject(project, repos)
-  const matchedCommits = commitsForProject(project, commits)
-  const matchedReports = reports.filter((item) => !item.projectId || item.projectId === project?.id)
-  const matchedDeployments = deployments.filter((item) => item.projectId === project?.id)
-  return {
-    repos: matchedRepos,
-    commits: matchedCommits,
-    reports: matchedReports,
-    deployments: matchedDeployments,
-    hasDeployment: deploymentConfigured(project),
-  }
-}

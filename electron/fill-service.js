@@ -168,6 +168,25 @@ function addDaysLocal(dateStr, days) {
  * 保护窗，拉回后按作者日期（%ad）在内存中精确过滤到目标日；--until 同理交给
  * 内存过滤，避免 committer date 与 author date 口径不一致造成误差。
  */
+/** 收集并发上限：仓库多时避免 Promise.all 同时 spawn 大量 git 进程（进程风暴） */
+const COLLECT_CONCURRENCY = 8
+
+/** 固定并发池：按序消费任务，保持结果顺序 */
+async function runPool(tasks, job) {
+  const results = new Array(tasks.length)
+  let next = 0
+  const workers = Math.max(1, Math.min(COLLECT_CONCURRENCY, tasks.length))
+  await Promise.all(Array.from({ length: workers }, async () => {
+    for (;;) {
+      const i = next
+      next += 1
+      if (i >= tasks.length) return
+      results[i] = await job(tasks[i]) // eslint-disable-line no-await-in-loop
+    }
+  }))
+  return results
+}
+
 async function collectTimedCommits(projects, { date, identities }) {
   const seen = new Set()
   const repos = []
@@ -181,18 +200,16 @@ async function collectTimedCommits(projects, { date, identities }) {
     }
   }
   const lookbackDate = addDaysLocal(date, -7)
-  const results = await Promise.all(
-    repos.map(async ({ repo, project }) => {
-      const res = await execGit(repo, [
-        'log', '--all',
-        `--since=${lookbackDate} 00:00:00`,
-        '--no-merges',
-        `--pretty=tformat:${TIMED_LOG_FMT}`,
-        '--date=format:%Y-%m-%d %H:%M',
-      ])
-      return res.ok ? parseTimedLines(project, repo, res.stdout) : []
-    }),
-  )
+  const results = await runPool(repos, async ({ repo, project }) => {
+    const res = await execGit(repo, [
+      'log', '--all',
+      `--since=${lookbackDate} 00:00:00`,
+      '--no-merges',
+      `--pretty=tformat:${TIMED_LOG_FMT}`,
+      '--date=format:%Y-%m-%d %H:%M',
+    ])
+    return res.ok ? parseTimedLines(project, repo, res.stdout) : []
+  })
   const all = results.flat().filter((c) => c.datetime.slice(0, 10) === date && c.time && isMine(c, identities))
   // 升序稳定排序：同时刻提交保持收集顺序（与 KnowMore parse_commits 的稳定排序一致）
   return all.sort((a, b) => (a.time < b.time ? -1 : a.time > b.time ? 1 : 0))

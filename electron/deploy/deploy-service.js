@@ -368,6 +368,13 @@ function preCheckLocal(project, target, version) {
     }
   }
   if (!version) problems.push('未识别到版本号（可改用手动输入）')
+  const d = project.deploy || {}
+  // 数据库备份参数缺失在客户端就拦截：否则要等发布到服务器备份阶段才失败
+  if (d.backupDatabase) {
+    if (!String(d.dbContainer || '').trim() || !String(d.dbName || '').trim()) {
+      problems.push('已启用「发布前备份数据库」但未配置数据库容器名或库名（部署设置中补全）')
+    }
+  }
   const s = target.server || {}
   if (!s.host) problems.push(`[${target.name}] 未配置服务器地址`)
   if (!target.remotePath) problems.push(`[${target.name}] 未配置远程部署目录`)

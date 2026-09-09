@@ -114,9 +114,19 @@ function load() {
  * - cfg.ai.clearKey=true → 显式清除 Key
  * 平台不支持 safeStorage 时回退明文（本地工具兜底，文件设 0o600）。
  */
+/** 读取磁盘上的旧配置（供保留既有密文用；读取失败返回空对象） */
+function readStored() {
+  try {
+    return JSON.parse(fs.readFileSync(file(), 'utf8'))
+  } catch {
+    return {}
+  }
+}
+
 function save(cfg) {
   try {
     const c = JSON.parse(JSON.stringify(cfg || {}))
+    const old = readStored() // ai/zentao/hanprint 三段共用一次读盘
     if (c.ai) {
       const newKey = c.ai.apiKey || ''
       const clear = !!c.ai.clearKey
@@ -126,12 +136,9 @@ function save(cfg) {
       delete c.ai.apiKey
       if (!clear && !newKey) {
         // 未输入新 Key 也未要求清除：保留磁盘既有 Key（字节原样，不触发解密）
-        try {
-          const old = JSON.parse(fs.readFileSync(file(), 'utf8'))
-          const oldAi = old.ai || {}
-          if (oldAi.keyEnc) c.ai.keyEnc = oldAi.keyEnc
-          else if (oldAi.apiKey) c.ai.apiKey = oldAi.apiKey
-        } catch { /* 无既有配置 */ }
+        const oldAi = old.ai || {}
+        if (oldAi.keyEnc) c.ai.keyEnc = oldAi.keyEnc
+        else if (oldAi.apiKey) c.ai.apiKey = oldAi.apiKey
       } else if (newKey) {
         try {
           if (safeStorage.isEncryptionAvailable()) {
@@ -154,10 +161,7 @@ function save(cfg) {
       delete c.zentao.pwdMasked
       delete c.zentao.password
       if (!clearPwd && !newPwd) {
-        try {
-          const old = JSON.parse(fs.readFileSync(file(), 'utf8'))
-          if (old.zentao && old.zentao.pwdEnc) c.zentao.pwdEnc = old.zentao.pwdEnc
-        } catch { /* 无既有配置 */ }
+        if (old.zentao && old.zentao.pwdEnc) c.zentao.pwdEnc = old.zentao.pwdEnc
       } else if (newPwd) {
         c.zentao.pwdEnc = encryptText(newPwd)
       }
@@ -172,10 +176,7 @@ function save(cfg) {
       delete c.hanprint.pwdMasked
       delete c.hanprint.password
       if (!clearPwd && !newPwd) {
-        try {
-          const old = JSON.parse(fs.readFileSync(file(), 'utf8'))
-          if (old.hanprint && old.hanprint.pwdEnc) c.hanprint.pwdEnc = old.hanprint.pwdEnc
-        } catch { /* 无既有配置 */ }
+        if (old.hanprint && old.hanprint.pwdEnc) c.hanprint.pwdEnc = old.hanprint.pwdEnc
       } else if (newPwd) {
         c.hanprint.pwdEnc = encryptText(newPwd)
       }
