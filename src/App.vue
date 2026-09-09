@@ -114,9 +114,10 @@ onMounted(async () => {
 
     // ─── Git 扫描全局接线：预热与手动扫描的事件都实时反映到工作台 ───
     const pathKey = (p) => String(p || '').replace(/\\/g, '/').toLowerCase()
-    /** 用权威仓库路径列表同步发现列表（保留已加载的 info，避免详情重复请求） */
+    /** 用权威仓库路径列表同步发现列表（保留已加载的 info，避免详情重复请求）。
+     *  空数组同样生效：根目录被删掉后列表要跟着收缩，否则报告/填报仍会查询已移除的仓库 */
     const syncDiscoveredRepos = (paths) => {
-      if (!Array.isArray(paths) || !paths.length) return
+      if (!Array.isArray(paths)) return
       const known = new Map(state.discoveredRepos.map((row) => [pathKey(row.path), row]))
       state.discoveredRepos = paths.map((path) => known.get(pathKey(path)) || { path, shortName: shortPath(path), info: null })
     }

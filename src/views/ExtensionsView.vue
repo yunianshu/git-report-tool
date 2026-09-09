@@ -304,8 +304,14 @@ function openPlatformDir() {
   if (currentPlatform.value) openPath(currentPlatform.value.dir)
 }
 
-function openPath(p) {
-  if (p) window.gitReport.openPath(p)
+async function openPath(p) {
+  if (!p) return
+  try {
+    const r = await window.gitReport.openPath(p)
+    if (r && r.ok === false) ElMessage.warning(`路径不存在：${p}`)
+  } catch {
+    ElMessage.warning(`路径不存在：${p}`)
+  }
 }
 
 function formatTime(value) {

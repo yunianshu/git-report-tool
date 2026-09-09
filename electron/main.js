@@ -393,7 +393,11 @@ function registerIpc() {
 
   // 系统
   ipcMain.handle('shell:openPath', (_e, p) => {
-    if (p && fs.existsSync(p)) shell.showItemInFolder(p)
+    if (p && fs.existsSync(p)) {
+      shell.showItemInFolder(p)
+      return { ok: true }
+    }
+    return { ok: false } // 目标不存在时必须告知调用方，否则点击「打开目录」毫无反馈
   })
 
   // ─── 一键部署模块（OneDeploy） ───

@@ -181,13 +181,20 @@ function quoteArg(v) {
   return `'${String(v).replace(/'/g, `'\\''`)}'`
 }
 
+/** 版本号安全字符（进入服务器端 releases/ 路径与 rm -rf，拒绝路径注入） */
+function safeVersion(v) {
+  return /^[\w][\w.+~-]*$/.test(String(v)) && String(v).length <= 64
+}
+
 /** 生成完整版本号：手动优先，否则自动检测 */
 function resolveVersion(project) {
   if (project.version && project.version.strategy === 'manual' && project.version.manual) {
-    return { version: String(project.version.manual).trim(), source: '手动输入' }
+    const manual = String(project.version.manual).trim()
+    if (!safeVersion(manual)) return { version: '', source: '' }
+    return { version: manual, source: '手动输入' }
   }
   const det = detectVersion(project.localPath)
-  if (det.version) return det
+  if (det.version && safeVersion(det.version)) return det
   return { version: '', source: '' }
 }
 

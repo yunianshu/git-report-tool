@@ -643,7 +643,8 @@ async function exportReport() {
   const res = await window.gitReport.saveReport(`${safeName}.md`, md)
   if (res?.saved) {
     ElMessage.success(`已保存：${res.path}`)
-    window.gitReport.openPath(res.path)
+    const opened = await window.gitReport.openPath(res.path)
+    if (opened && opened.ok === false) ElMessage.warning('文件已在对话框位置保存，但在系统中未找到')
   }
 }
 </script>

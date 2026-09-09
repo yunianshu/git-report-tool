@@ -239,11 +239,14 @@ health_http() {
   return 1
 }
 
-# Docker 容器状态检查：项目内至少一个容器处于 Running
+# Docker 容器状态检查：项目内至少一个容器处于 Running。
+# 必须在 release 目录内执行：脚本经 SSH exec 运行时 cwd 是用户主目录，
+# 相对路径 COMPOSE_FILE 在主目录下不存在，会误判为「无容器」导致健康检查必然失败
 health_docker() {
-  total=$(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
+  local dir="$1"
+  total=$(cd "$dir" && docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null | wc -l)
   [ "$total" -ge 1 ] || return 1
-  for id in $(docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null); do
+  for id in $(cd "$dir" && docker compose -f "$COMPOSE_FILE" ps -q 2>/dev/null); do
     st=$(docker inspect -f '{{.State.Running}}' "$id" 2>/dev/null || echo "false")
     [ "$st" = "true" ] && return 0
   done
@@ -251,10 +254,11 @@ health_docker() {
 }
 
 run_health() {
+  local dir="$1"
   if [ -n "$HEALTH_URL" ]; then
     health_http
   else
-    health_docker
+    health_docker "$dir"
   fi
 }
 
@@ -287,7 +291,7 @@ do_rollback() {
     link_current "$OLD_RELEASE"
     log "已切回旧版本: $(basename "$OLD_RELEASE")，正在启动…"
     (cd "$OLD_RELEASE" && docker compose -f "$COMPOSE_FILE" up -d >/dev/null 2>&1) || true
-    if run_health; then
+    if run_health "$OLD_RELEASE"; then
       ok "旧版本健康检查通过"
     else
       warn "旧版本健康检查未通过，请人工确认"
@@ -618,10 +622,10 @@ do_deploy() {
   # 健康检查（方案 §13）：容器存活 + 业务 HTTP
   stage health
   if [ -z "$HEALTH_URL" ]; then
-    if health_docker; then ok "容器状态健康（未配置 HTTP 健康检查）"
+    if health_docker "$NEW_RELEASE"; then ok "容器状态健康（未配置 HTTP 健康检查）"
     else do_rollback "容器启动状态异常"; fi
   else
-    if run_health; then ok "健康检查通过: $HEALTH_URL"
+    if run_health "$NEW_RELEASE"; then ok "健康检查通过: $HEALTH_URL"
     else do_rollback "健康检查失败: $HEALTH_URL"; fi
   fi
 
@@ -667,9 +671,9 @@ do_rollback_cmd() {
 
   stage health
   if [ -n "$HEALTH_URL" ]; then
-    run_health || fail_now "回滚后健康检查失败: $HEALTH_URL"
+    run_health "$target" || fail_now "回滚后健康检查失败: $HEALTH_URL"
   else
-    health_docker || fail_now "回滚后容器状态异常"
+    health_docker "$target" || fail_now "回滚后容器状态异常"
   fi
   ok "回滚完成，当前版本: $VERSION"
   write_history "rollback"

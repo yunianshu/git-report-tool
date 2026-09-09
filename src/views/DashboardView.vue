@@ -125,7 +125,12 @@ function toTime(value) {
 }
 const recentItems = computed(() => [
   ...reports.value.map((item) => ({ key: `r-${item.id}`, type: '报告', title: item.title, time: item.createdAt || '' })),
-  ...deployments.value.map((item) => ({ key: `d-${item.id}`, type: item.type === 'rollback' ? '回滚' : '部署', title: `${item.projectName || '项目'} ${item.version || ''}`, time: item.startedAt || '' })),
+  ...deployments.value.map((item) => ({
+    key: `d-${item.id}`,
+    type: { deploy: '部署', rollback: '回滚', 'db-restore': '数据恢复' }[item.type] || '部署',
+    title: `${item.projectName || '项目'} ${item.version || ''}`,
+    time: item.startedAt || '',
+  })),
 ].sort((a, b) => toTime(b.time) - toTime(a.time)).slice(0, 5))
 
 function formatRecordTime(value) {

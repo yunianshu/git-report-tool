@@ -184,7 +184,8 @@ async function saveToFile(content) {
   const result = await window.gitReport.saveReport(`${deriveTitle(content)}.md`, content)
   if (result?.saved) {
     ElMessage.success(`已保存：${result.path}`)
-    window.gitReport.openPath(result.path)
+    const opened = await window.gitReport.openPath(result.path)
+    if (opened && opened.ok === false) ElMessage.warning('文件已保存，但在系统中未找到')
   } else if (result?.error) ElMessage.error(`保存失败：${result.error}`)
 }
 

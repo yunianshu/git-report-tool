@@ -108,6 +108,10 @@ function normalizeProject(p) {
     deploy: { ...defaults.deploy, ...(source.deploy || {}) },
     scriptMode: { ...defaults.scriptMode, ...(source.scriptMode || {}) },
   }
+  // 版本号进入服务器端路径（releases/$VERSION，且会被 rm -rf）：只放行安全字符，
+  // 非法值清空由发布前检查报错，杜绝路径注入
+  const manual = String(c.version.manual || '').trim()
+  c.version.manual = /^[\w][\w.+~-]*$/.test(manual) && manual.length <= 64 ? manual : ''
   // 部署形态：仅 docker / script，未知值回退 docker
   c.deployMode = source.deployMode === 'script' ? 'script' : 'docker'
   c.composeFile = String(c.composeFile || 'docker-compose.yml').trim()
