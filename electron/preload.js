@@ -67,6 +67,9 @@ contextBridge.exposeInMainWorld('gitReport', {
   winMinimize: () => ipcRenderer.invoke('win:minimize'),
   winToggleMaximize: () => ipcRenderer.invoke('win:toggleMaximize'),
   winClose: () => ipcRenderer.invoke('win:close'),
+  // 关闭询问（Element Plus 询问框在渲染层，与项目 UI 风格一致）：主进程广播 → 弹框 → 结果回传
+  onWinAskClose: (cb) => subscribe('win:askClose', cb),
+  winCloseConfirm: (payload) => ipcRenderer.invoke('win:closeConfirm', toPlain(payload)),
   winIsMaximized: () => ipcRenderer.invoke('win:isMaximized'),
   onWinMaximized: (cb) => subscribe('win:maximized', cb),
   winSetFullScreen: (flag) => ipcRenderer.invoke('win:setFullScreen', !!flag),

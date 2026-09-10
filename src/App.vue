@@ -28,8 +28,8 @@
 </template>
 
 <script setup>
-import { ref, onMounted, watch } from 'vue'
-import { ElMessage } from 'element-plus'
+import { ref, h, onMounted, watch } from 'vue'
+import { ElMessage, ElMessageBox, ElCheckbox } from 'element-plus'
 import AppSidebar from './components/AppSidebar.vue'
 import AppTopbar from './components/AppTopbar.vue'
 import ProjectEditor from './components/ProjectEditor.vue'
@@ -93,10 +93,46 @@ async function saveEditorProject(project) {
   }
 }
 
+/** 关闭询问（主进程 close 拦截后广播触发）：默认按钮=最小化到托盘（不杀死程序），
+ *  「退出程序」彻底关闭，右上角 × / ESC 取消保留窗口；勾选「记住」后按选择落盘不再询问 */
+let closeAsking = false
+function showCloseAsk() {
+  if (closeAsking) return // 主进程已防重入，渲染层再兜一层
+  closeAsking = true
+  const remember = ref(false)
+  ElMessageBox.confirm(
+    // message 用渲染函数：ElCheckbox 的勾选状态（remember ref）变化时弹窗内容同步重渲染
+    () => h('div', { class: 'close-ask' }, [
+      h('p', { class: 'close-ask-text' },
+        '最小化后程序会继续在后台运行（包括内置 Harness 服务），可随时从系统托盘图标重新打开窗口或彻底退出。'),
+      h(ElCheckbox, {
+        modelValue: remember.value,
+        'onUpdate:modelValue': (v) => { remember.value = v },
+      }, () => '记住我的选择，下次不再询问'),
+    ]),
+    '关闭「开发项目管理」',
+    {
+      type: 'warning',
+      confirmButtonText: '最小化到托盘',
+      cancelButtonText: '退出程序',
+      distinguishCancelAndClose: true, // 「退出程序」按钮=cancel，×/ESC=close（取消）
+      closeOnClickModal: false,
+      autofocus: true, // 焦点落在「最小化到托盘」，回车即默认动作
+    },
+  ).then(() => window.gitReport.winCloseConfirm?.({ action: 'minimize', remember: remember.value }))
+    .catch((act) => {
+      // cancel=退出程序；close（×/ESC）= 取消，窗口保留
+      if (act === 'cancel') window.gitReport.winCloseConfirm?.({ action: 'quit', remember: remember.value })
+    })
+    .finally(() => { closeAsking = false })
+}
+
 onMounted(async () => {
   // 沉浸全屏：窗口全屏状态由主进程维护，渲染层只跟随（F11/Esc 等外部改变同样同步）
   window.gitReport.onWinFullscreen((value) => { state.ui.fullscreen = !!value })
   try { state.ui.fullscreen = !!(await window.gitReport.winIsFullScreen()) } catch { /* 主进程未就绪 */ }
+  // 关闭询问：主进程 close 拦截后广播，这里弹与项目 UI 一致的询问框，结果回传执行
+  window.gitReport.onWinAskClose?.(showCloseAsk)
 
   await loadProjects()
   try {

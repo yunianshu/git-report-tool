@@ -91,36 +91,22 @@ function hideToTray() {
   if (process.env.SMOKE_EXIT_MS) console.log('[SMOKE][win-hidden]')
 }
 
+/** 关闭询问状态：渲染层弹 Element Plus 风格询问框（与项目 UI 一致），结果经 win:closeConfirm 回传 */
+let pendingAskClose = false
+let askCloseTimer = null
+
 /** 关闭窗口前询问用户：默认最小化到托盘（程序继续后台运行），可选直接退出（close 事件已 preventDefault） */
 function askOnClose() {
-  // 冒烟钩子：自动化里无法点原生对话框，SMOKE_CLOSE_CHOICE 直接代入选择
-  const autoChoice = process.env.SMOKE_CLOSE_CHOICE
-  if (autoChoice === 'minimize' || autoChoice === 'quit') {
-    console.log('[SMOKE][close-choice]', autoChoice)
-    if (autoChoice === 'minimize') hideToTray()
-    else { isQuitting = true; app.quit() }
-    return
-  }
-  dialog.showMessageBox(mainWindow, {
-    type: 'question',
-    title: '关闭窗口',
-    message: '要关闭「开发项目管理」吗？',
-    detail: '最小化后程序会继续在后台运行（包括内置 Harness 服务），可随时从系统托盘图标重新打开窗口或彻底退出。',
-    buttons: ['最小化到托盘', '退出程序', '取消'],
-    defaultId: 0, // 默认最小化：不杀死程序
-    cancelId: 2,
-    checkboxLabel: '记住我的选择，下次不再询问',
-    noLink: true,
-  }).then(({ response, checkboxChecked }) => {
-    if (response === 2 || response == null) return // 取消：窗口保留原状
-    if (checkboxChecked) {
-      const cfg = store.load()
-      cfg.closeAction = response === 0 ? 'minimize' : 'quit'
-      if (store.save(cfg) !== true) console.error('[close] 关闭行为偏好写入失败（下次仍会询问）')
-    }
-    if (response === 0) hideToTray()
-    else { isQuitting = true; app.quit() }
-  }).catch(() => { /* 对话框异常时保留窗口，不打断用户 */ })
+  // 防重入：询问框已开着时（用户连续点 × / Alt+F4）只保留一次询问
+  if (pendingAskClose) return
+  pendingAskClose = true
+  // 渲染层无响应兜底（页面卡死/未就绪）：按默认语义最小化，绝不直接杀死程序
+  askCloseTimer = setTimeout(() => {
+    if (!pendingAskClose) return
+    pendingAskClose = false
+    hideToTray()
+  }, 8000)
+  broadcast('win:askClose')
 }
 
 /** 创建系统托盘：最小化到托盘后的常驻入口（显示窗口 / 退出） */
@@ -274,6 +260,23 @@ function registerIpc() {
     return mainWindow.isMaximized()
   })
   ipcMain.handle('win:close', () => mainWindow && mainWindow.close())
+  // 渲染层询问框（win:askClose 广播）的结果回传：action=minimize|quit，remember 时写入偏好
+  ipcMain.handle('win:closeConfirm', (_e, payload) => {
+    clearTimeout(askCloseTimer)
+    const wasPending = pendingAskClose
+    pendingAskClose = false
+    const action = payload && payload.action
+    // 非 pending（超时兜底已执行 / 伪造回传）或非法动作一律忽略，不重复执行
+    if (!wasPending || (action !== 'minimize' && action !== 'quit')) return { ok: false }
+    if (payload.remember) {
+      const cfg = store.load()
+      cfg.closeAction = action
+      if (store.save(cfg) !== true) console.error('[close] 关闭行为偏好写入失败（下次仍会询问）')
+    }
+    if (action === 'minimize') hideToTray()
+    else { isQuitting = true; app.quit() }
+    return { ok: true }
+  })
   ipcMain.handle('win:isMaximized', () => !!(mainWindow && mainWindow.isMaximized()))
   // 全屏开关（Harness 沉浸模式）：返回窗口实际状态，避免渲染层与窗口状态不一致
   ipcMain.handle('win:setFullScreen', (_e, flag) => {

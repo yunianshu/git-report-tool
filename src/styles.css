@@ -894,6 +894,10 @@ body {
 .close-behavior .cb-head strong { color: #343c47; font-size: 13px; }
 .close-behavior .cb-head span { color: #8b929d; font-size: 12px; }
 .close-behavior .field-hint { max-width: 620px; }
+/* 关闭询问弹窗（ElMessageBox）：说明文字与「记住选择」复选框的排版 */
+.close-ask { margin-top: 2px; }
+.close-ask-text { margin: 0; color: var(--text-muted); font-size: 12px; line-height: 1.7; }
+.close-ask .el-checkbox { height: auto; margin-top: 14px; white-space: normal; line-height: 1.5; }
 
 /* 控件与可访问性 */
 button, [role='button'], .el-button, .el-menu-item { -webkit-tap-highlight-color: transparent; }
