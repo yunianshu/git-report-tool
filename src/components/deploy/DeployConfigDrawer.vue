@@ -308,7 +308,7 @@
     </div>
     <template #footer>
       <div class="drawer-footer">
-        <el-button @click="emit('update:modelValue', false)">取消</el-button>
+        <el-button @click="cancelEdit">取消</el-button>
         <el-button type="primary" :disabled="!form.name" @click="emit('save')"><el-icon><Check /></el-icon>保存部署设置</el-button>
       </div>
     </template>
@@ -339,7 +339,7 @@
 </template>
 
 <script setup>
-import { computed, ref } from 'vue'
+import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { emptyTarget } from './deploy-form'
 
@@ -385,6 +385,21 @@ function undoClearSecret() {
   const s = activeTarget.value && activeTarget.value.server
   if (!s) return
   s.clearSecret = false
+}
+
+// ─── 取消回滚：抽屉直接编辑父级 form，取消必须恢复打开时的快照，否则修改残留（脏标记挂着、发布被禁用）───
+let openSnapshot = null
+watch(() => props.modelValue, (open) => {
+  if (open) openSnapshot = JSON.parse(JSON.stringify(props.form))
+})
+function cancelEdit() {
+  if (openSnapshot) {
+    // 整体替换数组与逐键覆盖标量：保持 form 引用不变（父级依赖同一响应式对象）
+    const restored = JSON.parse(JSON.stringify(openSnapshot))
+    Object.keys(props.form).forEach((key) => delete props.form[key])
+    Object.assign(props.form, restored)
+  }
+  emit('update:modelValue', false)
 }
 
 // ─── 部署目标（多环境）管理 ───

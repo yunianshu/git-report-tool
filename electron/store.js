@@ -190,31 +190,19 @@ function save(cfg) {
 
 /** 主进程专用：返回明文 API Key（绝不发往渲染层） */
 function getApiKey() {
-  try {
-    return decryptKey(JSON.parse(fs.readFileSync(file(), 'utf8')).ai || {})
-  } catch {
-    return ''
-  }
+  return decryptKey(readStored().ai || {})
 }
 
 /** 主进程专用：返回禅道登录密码明文（绝不发往渲染层） */
 function getZentaoPwd() {
-  try {
-    const zt = JSON.parse(fs.readFileSync(file(), 'utf8')).zentao
-    return zt ? decryptText(zt.pwdEnc) : ''
-  } catch {
-    return ''
-  }
+  const zt = readStored().zentao
+  return zt ? decryptText(zt.pwdEnc) : ''
 }
 
 /** 主进程专用：返回汉印登录密码明文（绝不发往渲染层） */
 function getHanprintPwd() {
-  try {
-    const hp = JSON.parse(fs.readFileSync(file(), 'utf8')).hanprint
-    return hp ? decryptText(hp.pwdEnc) : ''
-  } catch {
-    return ''
-  }
+  const hp = readStored().hanprint
+  return hp ? decryptText(hp.pwdEnc) : ''
 }
 
 /** 通用文本加密（safeStorage），供部署模块加密 SSH 凭据使用；失败回退明文并标记 plain */

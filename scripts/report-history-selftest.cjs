@@ -36,4 +36,4 @@ const store = require('../electron/store')
 assert.strictEqual(store.save({ roots: ['D:/x'] }), true, '正常保存应返回 true')
 
 fs.rmSync(tmpRoot, { recursive: true, force: true })
-console.log('第 2 轮主进程修复验证：全部通过')
+console.log('报告历史自测全部通过')

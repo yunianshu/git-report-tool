@@ -16,6 +16,7 @@
     "dev": "concurrently -k -s first \"vite\" \"wait-on tcp:127.0.0.1:5173 && cross-env ELECTRON_RENDERER_URL=http://127.0.0.1:5173 electron .\"",
     "start": "npm run build:renderer && electron .",
     "build:renderer": "vite build",
+    "test": "node scripts/run-selftests.cjs",
     "build": "npm run build:renderer && electron-builder --publish=never",
     "build:dir": "npm run build:renderer && electron-builder --dir --publish=never",
     "update:local": "npm run build:renderer && node scripts/update-local.cjs",

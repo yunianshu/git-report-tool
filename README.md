@@ -144,6 +144,36 @@ npm run dev        # 开发模式（Vite 热更新 + Electron）
 npm start          # 构建渲染层并启动
 ```
 
+## 测试
+
+主进程自测（无外部依赖，`npm test` 一键运行），覆盖：部署编排 / 脚本部署形态 / 数据同步 / 版本号注入防护 / 发布包符号链接 / 报告历史上限 / Git 扫描与收集 / 一键填报工时算法 / Harness 运行时与默认配置 / 扩展管理 / 终端 / 本地调试 / 项目配置 / AI 上下文。
+
+```bash
+npm test
+```
+
+端到端测试（真实 Electron 进程，按需单独运行，均要求先 `npm run build:renderer`）：
+
+```bash
+node scripts/report-empty-date-e2e.cjs          # 报告页空日期校验 + 关键页面挂载冒烟
+node scripts/deploy-layout-e2e.cjs              # 部署页布局
+node scripts/deploy-history-switch-e2e.cjs      # 切换项目后发布历史跟随刷新
+node scripts/deploy-version-runstate-e2e.cjs    # 新版本保存后运行态复位
+node scripts/deploy-version-predict-e2e.cjs     # 新版本候选预测
+node scripts/deploy-online-version-e2e.cjs      # 线上版本三级回退
+node scripts/deploy-run-timing-e2e.cjs          # 发布计时展示
+node scripts/deploy-import-secret-e2e.cjs       # 数据同步导入凭据
+node scripts/deploy-drawer-cancel-e2e.cjs       # 部署设置抽屉取消回滚
+node scripts/fill-default-endpoints-e2e.cjs     # 一键填报默认端点
+node scripts/fill-overnight-e2e.cjs             # 跨夜加班工时
+node scripts/fill-unbind-e2e.cjs                # 解绑任务
+node scripts/harness-fullscreen-e2e.cjs         # Harness 沉浸全屏（启动真实 dsh，耗时数分钟）
+```
+
+服务器侧脚本链路（真实 bash 执行 deploy.sh）：`node scripts/deploy-scriptmode-selftest.cjs`、`node scripts/deploy-datasync-selftest.cjs`（已含在 `npm test`）。
+
+打包产物冒烟：`npm run build:dir` 后以沙箱 `USERPROFILE` 启动 `release/<版本>/win-unpacked` 产物，配合 `SMOKE_*` 环境变量遍历视图并断言无渲染层错误（写法参照上述 e2e 脚本）。
+
 ## 打包发布
 
 ```bash

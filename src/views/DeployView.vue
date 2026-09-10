@@ -133,7 +133,10 @@ const dirty = computed(() => {
     }
     return stable(c)
   }
-  return norm(form) !== norm(selectedRaw.value)
+  // 清除凭据标记是待保存的变更：不计入则用户点了「清除」也不显示「有未保存修改」，易漏保存
+  const hasPendingClear = form.targets.some((t) =>
+    t.server?.clearSecret || t.server?.clearPassphrase || t.dataSync?.clearImportSecret)
+  return norm(form) !== norm(selectedRaw.value) || hasPendingClear
 })
 
 const publishVersion = computed(() => {

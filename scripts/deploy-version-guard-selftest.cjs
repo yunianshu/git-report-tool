@@ -28,4 +28,4 @@ for (const ok of ['1.2.3', 'v1.4.35', '1.2.3-beta+1', '2026.09.10~rc2']) {
 assert.deepStrictEqual(resolveVersion({ version: { strategy: 'manual', manual: '../../evil' } }), { version: '', source: '' })
 assert.strictEqual(resolveVersion({ version: { strategy: 'manual', manual: '1.2.3' } }).version, '1.2.3')
 fs.rmSync(tmpRoot, { recursive: true, force: true })
-console.log('第 3 轮版本注入拦截验证：全部通过')
+console.log('版本注入拦截自测全部通过')
