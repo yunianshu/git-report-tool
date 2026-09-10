@@ -77,11 +77,19 @@ function stripPrefix(subject) {
 }
 
 /**
+ * 有提交的项目最低工时：只要一个项目当天有提交，就至少记 0.5h——
+ * 原来按提交条数占比算出的份额不足 0.5h 时会被取整抹成 0，导致该项目白干。
+ */
+const MIN_PROJECT_HOURS = 0.5
+
+/**
  * 工时分配（与提交时刻无关）：
  * - 总工时 = workMinutes(实际上班时间, endTime) 扣午休后按 step 整体取整；
  *   crossDay=true 表示终点在次日（加班跨夜，如 08:30 → 次日 00:30）
- * - 各项目工时 = 总工时 × 该项目提交数 / 总提交数，0.5h 向下取整；
- *   余量补给提交最多的项目，保证 Σ = 总工时
+ * - 各项目工时 = 总工时 × 该项目提交数 / 总提交数，0.5h 向下取整，
+ *   但有提交的项目保底 MIN_PROJECT_HOURS（0.5h）；
+ *   余量补给提交最多的项目（可为负，即从该项目扣回），保证 Σ = 总工时；
+ *   项目数极多、保底之和已超过总工时时 Σ 会略高于总工时（保底优先）
  * - 说明 = 去类型前缀的编号列表（同活动报告复制格式）
  */
 function distributeByProject(commits, { startTime, endTime, lunchStart, lunchEnd, step = 30, crossDay = false } = {}) {
@@ -101,14 +109,14 @@ function distributeByProject(commits, { startTime, endTime, lunchStart, lunchEnd
   const total = sorted.length
   const list = [...groups.values()].map((g) => {
     const raw = totalHours * g.commits.length / total
-    const hours = Math.floor(raw * 2) / 2 // 0.5h 向下取整
+    const hours = Math.max(MIN_PROJECT_HOURS, Math.floor(raw * 2) / 2) // 0.5h 向下取整，且有提交即保底 0.5h
     return { projectId: g.projectId, projectName: g.projectName, commits: g.commits, hours, rawHours: round2(raw) }
   })
   const assigned = round2(list.reduce((s, g) => s + g.hours, 0))
   const rest = round2(totalHours - assigned)
   if (rest !== 0 && list.length) {
     const target = [...list].sort((a, b) => b.commits.length - a.commits.length)[0]
-    target.hours = round2(Math.max(0, target.hours + rest))
+    target.hours = round2(Math.max(MIN_PROJECT_HOURS, target.hours + rest))
   }
   for (const g of list) {
     g.commitCount = g.commits.length

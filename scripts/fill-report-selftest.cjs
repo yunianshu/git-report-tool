@@ -118,12 +118,37 @@ await test('取整余量补给提交最多的项目，Σ 恒等于总工时', ()
   assert.strictEqual(round2of(big[0].hours + big[1].hours), 2.5) // 1.5 + 1（余量补给并列最多者其一）
 })
 
-await test('工时不足 0.5h 时记 0', () => {
+await test('有提交但区间不足 0.5h → 保底给 0.5 工时（不再抹成 0）', () => {
   const list = fill.distributeByProject([
     { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
-  ], { startTime: '09:00', endTime: '09:20' }) // 20min → 0
+  ], { startTime: '09:00', endTime: '09:20' }) // 20min → 取整 0h，但有提交 → 保底 0.5h
   assert.strictEqual(list.length, 1)
-  assert.strictEqual(list[0].hours, 0)
+  assert.strictEqual(list[0].hours, 0.5)
+  assert.strictEqual(list[0].rawHours, 0)
+})
+
+await test('有提交的项目保底 0.5h：份额被取整抹平的项目不再记 0', () => {
+  // 3h 工时、20 条提交里只占 1 条：份额 0.15h 被保底抬到 0.5h，另一项目 2.5h，Σ 恰为 3h
+  const many = []
+  for (let i = 0; i < 19; i += 1) many.push({ time: '09:00', msg: 'a', projectId: 'pA', projectName: 'A' })
+  many.push({ time: '09:10', msg: 'b', projectId: 'pB', projectName: 'B' })
+  const g = fill.distributeByProject(many, { startTime: '08:00', endTime: '11:00' }) // 3h，不跨午休
+  const a = g.find((x) => x.projectId === 'pA')
+  const b = g.find((x) => x.projectId === 'pB')
+  assert.strictEqual(b.hours, 0.5, '仅 1/20 提交也保底 0.5h（原来会被抹成 0）')
+  assert.strictEqual(a.hours, 2.5)
+  assert.strictEqual(round2of(a.hours + b.hours), 3, 'Σ 仍等于总工时')
+})
+
+await test('保底之和超过总工时时保底优先（Σ 略高于窗口）', () => {
+  // 总工时 1h、3 个项目各 1 条：份额 0.33h 全被保底抬到 0.5h → Σ 1.5h（保底优先）
+  const list = fill.distributeByProject([
+    { time: '09:00', msg: 'a', projectId: 'p1', projectName: 'P1' },
+    { time: '09:10', msg: 'b', projectId: 'p2', projectName: 'P2' },
+    { time: '09:20', msg: 'c', projectId: 'p3', projectName: 'P3' },
+  ], { startTime: '09:00', endTime: '10:00' })
+  assert.deepStrictEqual(list.map((x) => x.hours), [0.5, 0.5, 0.5])
+  assert.strictEqual(round2of(list.reduce((s, x) => s + x.hours, 0)), 1.5)
 })
 
 await test('用户场景复现：9:30 实际到岗 → 19:03 点击生成 = 8.5h（与提交时刻无关）', () => {
@@ -183,11 +208,12 @@ await test('用户场景复现：凌晨 00:30 收工当时点生成报告（不�
   assert.strictEqual(list[0].hours, 15)
 })
 
-await test('跨夜未开启时保持原语义（倒序区间记 0）', () => {
+await test('跨夜未开启时区间分钟数记 0（项目工时仍按保底 0.5h 记）', () => {
+  assert.strictEqual(fill.workMinutes(fill.hm('08:30'), fill.hm('00:30'), 12 * 60, 13 * 60), 0) // 倒序区间 → 0 分钟
   const list = fill.distributeByProject([
     { time: '09:12', msg: 'feat: A', projectId: 'p1', projectName: 'P1' },
   ], { startTime: '08:30', endTime: '00:30' })
-  assert.strictEqual(list[0].hours, 0)
+  assert.strictEqual(list[0].hours, 0.5)
 })
 
 // ═══════════ 按项目聚合（一个项目一条记录 + 简洁编号内容） ═══════════
@@ -902,8 +928,8 @@ if (gitOk()) {
     hanprint: { baseUrl: 'http://hp.example', clientId: '1', account: '21290', password: 'secret' },
   })
 
-  await test('plan 端到端：分配 0 小时的项目占比 0% → 不进汉印条目', async () => {
-    // 真实 git：repoA 3 条提交 / repoB 1 条，总工时 1h → repoB 份额 0.25h 向下取整为 0
+  await test('plan 端到端：有提交的项目保底 0.5h（不再被抹成 0，汉印占比 50/50）', async () => {
+    // 真实 git：repoA 3 条提交 / repoB 1 条，总工时 1h → 各保底 0.5h（原来 repoB 会被抹成 0）
     fill.bindProject('hpA', 66, '任务A')
     fill.bindProject('hpB', 88, '任务B')
     const r = await fill.plan({
@@ -915,14 +941,15 @@ if (gitOk()) {
     })
     const a = r.planned.find((x) => x.projectId === 'hpA')
     const b = r.planned.find((x) => x.projectId === 'hpB')
-    assert.strictEqual(b.hours, 0, 'repoB 占 1/4 提交 → 0.25h 向下取整为 0')
-    assert.strictEqual(a.hours, 1, 'repoA 0.5h + 余量 0.5h')
+    assert.strictEqual(b.hours, 0.5, 'repoB 占 1/4 提交也保底 0.5h')
+    assert.strictEqual(a.hours, 0.5, 'repoA 份额 0.75h 取整 0.5h')
+    assert.strictEqual(round2of(a.hours + b.hours), 1, 'Σ 仍等于总工时')
     assert.deepStrictEqual(r.hpUnmatched, [])
-    assert.strictEqual(r.hpZeroSkipped, 1)
-    assert.strictEqual(r.hpItems.length, 1)
-    assert.strictEqual(r.hpItems[0].TaskId, '66')
-    assert.strictEqual(r.hpItems[0].Percent, 100)
-    assert.ok(r.hpItems.every((x) => x.Percent > 0))
+    assert.strictEqual(r.hpItems.length, 2)
+    assert.strictEqual(r.hpZeroSkipped, 0, '保底后不再有 0% 条目')
+    assert.deepStrictEqual(r.hpItems.map((x) => x.TaskId), ['66', '88'])
+    assert.deepStrictEqual(r.hpItems.map((x) => x.Percent), [50, 50])
+    assert.strictEqual(r.hpItems.reduce((s, x) => s + x.Percent, 0), 100)
     fill.unbindProject('hpA')
     fill.unbindProject('hpB')
   })
@@ -932,17 +959,15 @@ if (gitOk()) {
       date: pastDayStr,
       startTime: '09:00',
       endTime: '10:00', // 60min → 总工时 1h
-      projects: [
-        { id: 'hpA', name: 'P-A', repos: [repoA] },
-        { id: 'hpB', name: 'P-B', repos: [repoB] },
-      ],
-      selectedIds: ['hpA', 'hpB'], // 全选：与旧口径一致
+      projects: HP_PROJECTS,
+      selectedIds: ['hpA', 'hpB'], // 全选
     })
     assert.strictEqual(r.dayProjects.length, 2, '两个项目当天都有提交 → 都列出来供勾选')
     assert.strictEqual(r.dayProjects.every((p) => p.selected), true)
     const b = r.planned.find((x) => x.projectId === 'hpB')
-    assert.strictEqual(b.hours, 0, 'repoB 占 1/4 提交 → 0.25h 向下取整为 0')
-    assert.strictEqual(r.planned.find((x) => x.projectId === 'hpA').hours, 1, 'repoA 0.5h + 余量 0.5h')
+    assert.strictEqual(b.hours, 0.5, 'repoB 保底 0.5h')
+    assert.strictEqual(r.planned.find((x) => x.projectId === 'hpA').hours, 0.5)
+    assert.strictEqual(round2of(r.planned.reduce((s, x) => s + x.hours, 0)), 1)
   })
 
   await test('plan 默认勾选当天有提交的全部项目（含未绑定，便于就地绑定）', async () => {
@@ -973,7 +998,7 @@ if (gitOk()) {
       { id: 'hpA', name: 'P-A', repos: [repoA] },
       { id: 'hpB', name: 'P-B', repos: [repoB] },
     ]
-    // 只勾选 Beta：全部工时归 Beta（子集内 1/1），汉印占比 100%（不再是被抹平的 0%）
+    // 只勾选 Beta：全部工时归 Beta（子集内 1/1），汉印占比 100%
     const only = await fill.plan({ date: pastDayStr, startTime: '09:00', endTime: '10:00', projects, selectedIds: ['hpB'] })
     assert.strictEqual(only.planned.length, 1)
     assert.strictEqual(only.planned[0].hours, 1)
@@ -984,11 +1009,11 @@ if (gitOk()) {
     assert.strictEqual(only.hpItems[0].TaskId, '88')
     assert.strictEqual(only.hpItems[0].Percent, 100)
     assert.strictEqual(only.hpZeroSkipped, 0)
-    // 全选：回到 3:1 的分配，Beta 被抹成 0 小时 → 0% 不写入
+    // 全选：按 3:1 分配但落回保底 0.5h/0.5h，占比变 50/50
     const all = await fill.plan({ date: pastDayStr, startTime: '09:00', endTime: '10:00', projects, selectedIds: ['hpA', 'hpB'] })
-    assert.strictEqual(all.hpItems.length, 1)
-    assert.strictEqual(all.hpItems[0].TaskId, '66')
-    assert.strictEqual(all.hpZeroSkipped, 1)
+    assert.strictEqual(all.hpItems.length, 2)
+    assert.deepStrictEqual(all.hpItems.map((x) => x.Percent), [50, 50])
+    assert.strictEqual(all.hpItems.reduce((s, x) => s + x.Percent, 0), 100)
   })
 
   await test('plan 未勾选任何项目：不产出工时与汉印条目，但明细仍可勾选', async () => {

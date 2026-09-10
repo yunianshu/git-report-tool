@@ -1,27 +1,29 @@
 /**
  * E2E（真实 Electron + 沙箱主目录 + 真实 Git 仓库 + 本地 fake 汉印网关）：
- * 一键填报「占比 0% 的汉印条目不要记录」
+ * 一键填报「有提交的项目最少给 0.5 工时」
  *
- * 需求（用户反馈）：汉印工时填报中，如果有 0% 的数据，就不要记录。
+ * 需求（用户反馈）：只要一个项目有提交内容，最少给 0.5 工时。
  *
  * 验收标准（源自需求，非按实现反推）：
- *   Z1 计划的汉印条目里不含占比 0% 的条目，剩余条目占比合计仍为 100%（汉印硬约束）
- *   Z2 界面明确提示「有 N 个任务工时不足（占比 0%），不写入汉印」
+ *   Z1 份额被取整抹平的项目（1/4 提交）仍得到 0.5h，不再记 0h
+ *   Z2 汉印条目两条、占比 50/50、合计 100%（保底后不再出现占比 0% 的缺项）
  *   Z3 走真实 HTTP 链路：/login/getToken → GetDict → GetProjectList → GetProjectTaskList
  *      → GetByDate 均由真实 hanprint-service 客户端发起（fake 网关记录到这些请求，
  *      条目由真实客户端构造，不是打桩结果）
- *   Z4 工时为 0 的项目在禅道侧汇总里照常出现（本次只改汉印记录口径）
- *   Z5 先生成再勾选：生成前不预选项目；取消勾选一个项目后，工时与占比按剩余子集重算
- *      （Beta 从 0% 变 100%，Alpha 显示未选）
+ *   Z4 先生成再勾选：生成前不预选项目；生成后默认勾选当天有提交的项目
+ *   Z5 取消勾选一个项目后，工时与占比按剩余子集重算（Beta 从 50% 变 100%，Alpha 显示未选）
  *
  * 场景构造：Alpha 3 条提交 / Beta 1 条提交，下班时间 09:30（默认上班 08:30）→ 总工时 1h
- *   → Beta 份额 0.25h 被 0.5h 向下取整抹成 0h → 占比 0% → 不应写入汉印。
+ *   → Alpha 份额 0.75h 取整 0.5h、Beta 份额 0.25h 保底 0.5h（都在 0.5h 步进上）。
+ *
+ * 说明：占比 0% 的条目「不写入汉印」这条规则仍作为兜底保留（接口被直接调用等场景），
+ *       但因保底 0.5h，从界面已构造不出 0% 条目——该兜底由 fill-report-selftest 覆盖。
  *
  * 边界：汉印平台无可用账号（见项目记忆），故用本地网关替代真实服务器；禅道不配置，
  *       本次改动不涉及禅道写入口径，因此不验证禅道真实写入。
  *
  * 前置：npm run build:renderer（驱动 dist/ 产物）
- * 用法：node scripts/fill-zero-percent-e2e.cjs
+ * 用法：node scripts/fill-min-hours-e2e.cjs
  */
 const { spawn, spawnSync } = require('child_process')
 const fs = require('fs')
@@ -30,7 +32,7 @@ const path = require('path')
 const os = require('os')
 
 const ROOT = path.resolve(__dirname, '..')
-const SANDBOX = path.join(os.tmpdir(), `pm-fill-zero-${Date.now()}`)
+const SANDBOX = path.join(os.tmpdir(), `pm-fill-minh-${Date.now()}`)
 const USER_DATA = path.join(SANDBOX, 'appdata')
 const SHOT_DIR = path.join(SANDBOX, 'shots')
 const REPO_ALPHA = path.join(SANDBOX, 'repo-alpha')
@@ -193,6 +195,7 @@ const EVAL = `(async () => {
   r.hpLines = hpLines()
   r.hints = [...document.querySelectorAll('.submit-hint')].map((x) => norm(x.textContent))
   r.sumLines = [...document.querySelectorAll('.sumline')].map((x) => norm(x.textContent))
+  r.rowHours = { alpha: rowHours('Alpha项目'), beta: rowHours('Beta项目') }
 
   // 取消勾选 Alpha → 子集重算：工时与占比归到 Beta（0% → 100%）
   const alphaRow = rowOf('Alpha项目')
@@ -270,7 +273,7 @@ async function main() {
     server.close()
   }
 
-  console.log('=== 一键填报：汉印 0% 条目不写入 ===')
+  console.log('=== 一键填报：有提交的项目保底 0.5h ===')
   let failed = 0
   const check = (name, ok, detail = '') => {
     console.log(`  ${ok ? 'PASS' : 'FAIL'}  ${name}${ok || !detail ? '' : ` → ${detail}`}`)
@@ -283,15 +286,20 @@ async function main() {
     return
   }
 
-  check('Z0 下班时间 09:30 → 预览 1.0h（构造 0 小时项目的前提）', result.pickedEnd && result.rangeTip.includes('1.0h'), result.rangeTip)
-  check('Z0 生成报告不再要求先选项目（生成前未预选）', result.selectedBefore === 0, `selectedBefore=${result.selectedBefore}`)
-  check('Z0 生成后默认勾选当天有提交的两个项目', result.selectedAfter === true)
-  check('Z1 汉印条目只有 1 条（0% 的 Beta 不写入）', result.hpLines.length === 1, JSON.stringify(result.hpLines))
-  check('Z1 该条目为 Alpha 任务且占比 100%', (result.hpLines[0] || '').includes('Alpha开发任务') && (result.hpLines[0] || '').includes('100%'), result.hpLines[0])
-  check('Z1 占比合计仍为 100%（汉印硬约束）', /1 条 · 占比合计 100%/.test(result.hpTitle || ''), result.hpTitle)
-  check('Z2 提示「有 1 个任务工时不足（占比 0%），不写入汉印」',
-    (result.hints || []).some((h) => h.includes('占比 0%') && h.includes('1 个')), JSON.stringify(result.hints))
-  check('Z4 0 小时的 Beta 仍出现在禅道任务汇总里',
+  check('Z0 下班时间 09:30 → 预览 1.0h（构造份额被抹平场景的前提）', result.pickedEnd && result.rangeTip.includes('1.0h'), result.rangeTip)
+  check('Z4 生成报告不再要求先选项目（生成前未预选）', result.selectedBefore === 0, `selectedBefore=${result.selectedBefore}`)
+  check('Z4 生成后默认勾选当天有提交的两个项目', result.selectedAfter === true)
+  check('Z1 份额被抹平的 Beta 也拿到 0.5h（不再记 0h）',
+    result.rowHours.alpha === '0.5h' && result.rowHours.beta === '0.5h',
+    JSON.stringify(result.rowHours))
+  check('Z2 汉印条目两条（Alpha/Beta 各 50%，不再有 0% 缺项）',
+    result.hpLines.length === 2
+      && result.hpLines.some((x) => x.includes('Alpha开发任务') && x.includes('50%'))
+      && result.hpLines.some((x) => x.includes('Beta开发任务') && x.includes('50%')),
+    JSON.stringify(result.hpLines))
+  check('Z2 占比合计仍为 100%（汉印硬约束）', /2 条 · 占比合计 100%/.test(result.hpTitle || ''), result.hpTitle)
+  check('Z2 不再出现「占比 0% 不写入」提示', !(result.hints || []).some((h) => h.includes('占比 0%')), JSON.stringify(result.hints))
+  check('Z4 0.5h 的 Beta 出现在禅道任务汇总里',
     (result.sumLines || []).some((s) => s.includes(`#${TASK_BETA}`)), JSON.stringify(result.sumLines))
   check('Z5 取消勾选 Alpha 后按剩余子集重算：Beta 变 100%、Alpha 显示未选',
     result.alphaUnchecked === true
