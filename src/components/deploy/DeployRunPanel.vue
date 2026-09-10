@@ -47,7 +47,7 @@
         @click="doRollback(rollbackVersion)"
       >回滚到此版本</el-button>
       <el-button
-        v-if="form.deploy && form.deploy.backupDatabase"
+        v-if="activeTarget && activeTarget.db && activeTarget.db.enabled"
         size="large"
         plain
         @click="openDbBackups"

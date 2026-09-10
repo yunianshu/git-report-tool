@@ -179,7 +179,10 @@ function fillForm(p, preferredTargetId = '') {
         const dataSync = { ...et.dataSync, ...(t.dataSync || {}) }
         dataSync.importSecret = ''
         dataSync.clearImportSecret = false
-        return { ...et, ...t, server, health: { ...et.health, ...(t.health || {}) }, dataSync }
+        // db 显式合并默认值：旧配置（数据库备份在项目级）或字段缺失时保证环境级结构完整，
+        // 否则与主进程 normalizeProject 产出的键集不一致，dirty 会恒为真
+        const db = { ...et.db, ...(t.db || {}) }
+        return { ...et, ...t, server, health: { ...et.health, ...(t.health || {}) }, db, dataSync }
       })
     : base.targets
   Object.assign(form, merged)

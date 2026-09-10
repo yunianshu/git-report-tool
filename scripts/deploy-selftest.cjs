@@ -298,10 +298,12 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
   test('发布路径所有开关均被 deploy.sh 接受（防拼写/遗漏回归）', () => {
     const project = {
       name: 'demo',
-      deploy: { backupCode: true, backupDatabase: true, dbType: 'postgres', dbContainer: 'pg', dbName: 'db', dbUser: 'u', autoRollback: true, deleteUploadAfterSuccess: true, keepReleases: 5, keepBackups: 5 },
+      deploy: { backupCode: true, autoRollback: true, deleteUploadAfterSuccess: true, keepReleases: 5, keepBackups: 5 },
       targets: [{
         id: 't1', name: '测试', remotePath: '/opt/apps/demo',
         health: { enabled: true, url: 'http://x', timeout: 30, interval: 2 },
+        // 数据库备份配置按部署目标存放（数据库实例随环境不同）
+        db: { enabled: true, type: 'postgres', container: 'pg', name: 'db', user: 'u' },
       }],
     }
     const args = buildDeployArgs(
@@ -322,6 +324,31 @@ test('自定义：前导 / 锚定项目根，不误伤深层同名目录', () =>
     for (const req of ['--app', '--home', '--package', '--sha256', '--version', '--compose']) {
       assert.ok(args.includes(req), `发布参数缺少 ${req}`)
     }
+    // 数据库备份参数必须取自当前目标（曾为项目级配置，下沉后要防止读回项目级或漏传）
+    for (const req of ['--backup-db', '--backup-code', '--auto-rollback', '--delete-upload']) {
+      assert.ok(args.includes(req), `发布参数缺少 ${req}`)
+    }
+    assert.strictEqual(args[args.indexOf('--db-container') + 1], 'pg', '容器名应取当前目标')
+    assert.strictEqual(args[args.indexOf('--db-name') + 1], 'db', '库名应取当前目标')
+    assert.strictEqual(args[args.indexOf('--db-type') + 1], 'postgres')
+    assert.strictEqual(args[args.indexOf('--db-user') + 1], 'u')
+  })
+
+  test('数据库备份配置按环境独立：各目标各自读取、不串台', () => {
+    const p = {
+      name: 'demo',
+      deploy: { backupCode: true, autoRollback: true, deleteUploadAfterSuccess: true, keepReleases: 5, keepBackups: 5 },
+      targets: [
+        { id: 't1', name: '测试', remotePath: '/opt/apps/demo-test', health: { enabled: false }, db: { enabled: true, type: 'postgres', container: 'pg-test', name: 'db_test', user: 'ut' } },
+        { id: 't2', name: '生产', remotePath: '/opt/apps/demo-prod', health: { enabled: false }, db: { enabled: false, type: 'postgres', container: '', name: '', user: '' } },
+      ],
+    }
+    const argsTest = buildDeployArgs(p, p.targets[0], { fileName: 'a.zip', sha256: 'c'.repeat(64) }, '1.0.0')
+    const argsProd = buildDeployArgs(p, p.targets[1], { fileName: 'a.zip', sha256: 'c'.repeat(64) }, '1.0.0')
+    assert.strictEqual(argsTest[argsTest.indexOf('--db-container') + 1], 'pg-test', '测试环境取自身容器名')
+    assert.strictEqual(argsTest[argsTest.indexOf('--db-name') + 1], 'db_test')
+    assert.ok(argsProd.includes('--no-backup-db'), '未启用备份的环境不得执行数据库备份')
+    assert.ok(!argsProd.includes('--db-container'), '生产环境不得带上测试环境的数据库参数')
   })
 
   // ═══════════ 部署形态：compose 文件名兼容 ═══════════

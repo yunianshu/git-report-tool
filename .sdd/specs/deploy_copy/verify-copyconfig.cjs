@@ -34,16 +34,18 @@ a.id = 'dp_a'
 a.name = 'ProjectA'
 a.deployMode = 'script'
 a.version = { strategy: 'manual', manual: '0.1.2' }
-a.deploy.backupDatabase = true
 a.targets[0].name = '生产'
 a.targets[0].server.host = '10.0.0.8'
 a.targets[0].remotePath = '/opt/apps/a'
 a.targets[0].server.secret = 'enc:pass-A1' // 原始数据里即加密形态
 a.targets[0].dataSync.importSecret = 'enc:import-A1'
+// 数据库备份配置按环境独立：两个环境连的是不同的库
+a.targets[0].db = { enabled: true, type: 'postgres', container: 'pg-prod', name: 'db_prod', user: 'uprod' }
 const t2 = dp.defaultTarget()
 t2.name = '测试'
 t2.server.host = '10.0.0.9'
 t2.server.passphrase = 'enc:phrase-A2'
+t2.db = { enabled: true, type: 'mysql', container: 'pg-test', name: 'db_test', user: 'utest' }
 a.targets.push(t2)
 a.updatedAt = 1000
 
@@ -70,7 +72,15 @@ assert.strictEqual(B.targets[1].dataSync.importSecret, 'enc:import-A1', '数据�
 assert.strictEqual(B.targets[2].server.passphrase, 'enc:phrase-A2', '私钥口令原样复制')
 assert.strictEqual(B.deployMode, 'script', '部署形态复制')
 assert.strictEqual(B.version.manual, '0.1.2', '版本策略复制')
-assert.strictEqual(B.deploy.backupDatabase, true, '部署选项复制')
+// 数据库备份配置随环境复制：每个目标带各自的库配置（不是项目级一份）
+assert.deepStrictEqual(B.targets[1].db,
+  { enabled: true, type: 'postgres', container: 'pg-prod', name: 'db_prod', user: 'uprod' },
+  '生产环境的数据库备份配置随环境复制')
+assert.deepStrictEqual(B.targets[2].db,
+  { enabled: true, type: 'mysql', container: 'pg-test', name: 'db_test', user: 'utest' },
+  '测试环境的数据库备份配置独立复制（不被前一个环境覆盖）')
+assert.ok(!('backupDatabase' in B.deploy) && !('dbContainer' in B.deploy),
+  '数据库备份配置已下沉到环境，项目级不得残留')
 assert.strictEqual(B.name, 'ProjectB', '项目自身属性不被覆盖')
 assert.notStrictEqual(B.targets[1].id, A.targets[0].id, '新 id 与源 id 不同')
 
@@ -123,5 +133,35 @@ assert.strictEqual(re.copiedTargets, undefined, '无可用源时静默跳过')
 const E = JSON.parse(fs.readFileSync(dataFile, 'utf8')).projects.find((p) => p.id === re.id)
 assert.strictEqual(E.targets.length, 1, 'E 仅保留默认环境')
 
+// ── 断言 5：旧格式迁移——数据库备份原为项目级(deploy.backupDatabase/dbContainer/...) ──
+// 多环境下测试库与生产库不同，现按环境存放；旧项目只有项目级配置，读取时必须迁移到环境
+const old = dp.defaultProject()
+old.id = 'dp_old'
+old.name = 'LegacyProject'
+delete old.targets[0].db // 旧版本落盘的目标没有 db 字段
+old.targets[0].server.host = '10.1.1.1'
+old.targets[0].remotePath = '/opt/apps/legacy'
+old.deploy.backupDatabase = true // 旧的项目级数据库备份配置
+old.deploy.dbType = 'postgres'
+old.deploy.dbContainer = 'pg-legacy'
+old.deploy.dbName = 'legacy_db'
+old.deploy.dbUser = 'ulegacy'
+const rawOld = JSON.parse(fs.readFileSync(dataFile, 'utf8'))
+rawOld.projects.push(old)
+fs.writeFileSync(dataFile, JSON.stringify(rawOld))
+
+const listedOld = dp.list().find((p) => p.id === 'dp_old')
+assert.deepStrictEqual(listedOld.targets[0].db,
+  { enabled: true, type: 'postgres', container: 'pg-legacy', name: 'legacy_db', user: 'ulegacy' },
+  '项目级数据库备份配置迁移到环境')
+assert.ok(!('backupDatabase' in listedOld.deploy) && !('dbContainer' in listedOld.deploy) && !('dbType' in listedOld.deploy),
+  '迁移后项目级不再保留数据库配置（避免两份真源）')
+// 回写后仍在环境上、项目级不残留（迁移幂等：保存一次不会把配置弄丢）
+dp.save(listedOld)
+const savedOld = JSON.parse(fs.readFileSync(dataFile, 'utf8')).projects.find((p) => p.id === 'dp_old')
+assert.strictEqual(savedOld.targets[0].db.container, 'pg-legacy', '回写后数据库配置仍在环境上')
+assert.strictEqual(savedOld.targets[0].db.enabled, true, '回写后备份开关保持')
+assert.ok(!('backupDatabase' in savedOld.deploy), '回写后项目级不残留数据库配置')
+
 fs.rmSync(tmp, { recursive: true, force: true })
-console.log('copyConfig harness: 全部断言通过 ✓ (复制凭据原样/新 id/save 回写不丢/异常路径/脱敏/新建默认带入/重复保存不带入/无源跳过)')
+console.log('copyConfig harness: 全部断言通过 ✓ (复制凭据原样/新 id/save 回写不丢/异常路径/脱敏/新建默认带入/重复保存不带入/无源跳过/环境级数据库配置复制/旧格式迁移)')

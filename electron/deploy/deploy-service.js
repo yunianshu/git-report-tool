@@ -138,6 +138,8 @@ function readDeployScript() {
 /** 拼装 deploy.sh 参数（服务器目录结构方案 §8：home 下 releases/uploads/backups/shared/deployer） */
 function buildDeployArgs(project, target, pack, version) {
   const d = project.deploy || {}
+  // 数据库备份配置按环境存放：同一项目发布到测试/生产时用的是各自的库
+  const db = target.db || {}
   const h = target.health || {}
   const mode = deployModeOf(project)
   const args = [
@@ -158,10 +160,10 @@ function buildDeployArgs(project, target, pack, version) {
     args.push(sm.bootstrapPgdump ? '--bootstrap-pgdump' : '--no-bootstrap-pgdump')
   }
   args.push(d.backupCode ? '--backup-code' : '--no-backup-code')
-  if (d.backupDatabase) {
-    args.push('--backup-db', '--db-type', d.dbType || 'postgres',
-      '--db-container', d.dbContainer || '', '--db-name', d.dbName || '',
-      '--db-user', d.dbUser || '')
+  if (db.enabled) {
+    args.push('--backup-db', '--db-type', db.type || 'postgres',
+      '--db-container', db.container || '', '--db-name', db.name || '',
+      '--db-user', db.user || '')
   } else {
     args.push('--no-backup-db')
   }
@@ -368,11 +370,11 @@ function preCheckLocal(project, target, version) {
     }
   }
   if (!version) problems.push('未识别到版本号（可改用手动输入）')
-  const d = project.deploy || {}
   // 数据库备份参数缺失在客户端就拦截：否则要等发布到服务器备份阶段才失败
-  if (d.backupDatabase) {
-    if (!String(d.dbContainer || '').trim() || !String(d.dbName || '').trim()) {
-      problems.push('已启用「发布前备份数据库」但未配置数据库容器名或库名（部署设置中补全）')
+  const db = target.db || {}
+  if (db.enabled) {
+    if (!String(db.container || '').trim() || !String(db.name || '').trim()) {
+      problems.push(`[${target.name}] 已启用「发布前备份数据库」但未配置数据库容器名或库名（部署设置 → 数据库备份中补全）`)
     }
   }
   const s = target.server || {}
@@ -861,26 +863,27 @@ function assertDbBackupName(fileName) {
   }
 }
 
-/** 数据库恢复所需配置（沿用发布前备份的 dbType/dbContainer/dbName/dbUser） */
-function requireDbConfig(project) {
-  const d = project.deploy || {}
-  if (!d.backupDatabase) throw new Error('未启用「发布前备份数据库」，无法恢复（请先在部署设置中开启并配置数据库信息）')
-  const container = String(d.dbContainer || '').trim()
-  const name = String(d.dbName || '').trim()
-  const user = String(d.dbUser || 'postgres').trim()
-  if (!container || !name) throw new Error('数据库容器名或库名未配置')
+/** 数据库恢复所需配置（沿用该环境在部署设置中填写的 db 配置） */
+function requireDbConfig(target) {
+  const d = (target && target.db) || {}
+  const env = (target && target.name) || '当前环境'
+  if (!d.enabled) throw new Error(`[${env}] 未启用「发布前备份数据库」，无法恢复（请先在部署设置中开启并配置数据库信息）`)
+  const container = String(d.container || '').trim()
+  const name = String(d.name || '').trim()
+  const user = String(d.user || 'postgres').trim()
+  if (!container || !name) throw new Error(`[${env}] 数据库容器名或库名未配置`)
   // 容器名/库名/用户名进入 shell 与 SQL 标识符位置，只放行安全字符
   for (const v of [container, name, user]) {
-    if (!/^[\w.-]+$/.test(v)) throw new Error(`数据库配置含非法字符：${v}`)
+    if (!/^[\w.-]+$/.test(v)) throw new Error(`[${env}] 数据库配置含非法字符：${v}`)
   }
-  if (d.dbType !== 'postgres') throw new Error('当前仅支持 PostgreSQL 备份恢复')
+  if (d.type !== 'postgres') throw new Error(`[${env}] 当前仅支持 PostgreSQL 备份恢复`)
   return { container, name, user }
 }
 
 /** 列出服务器 backups/ 下的数据库备份（按时间倒序） */
 async function listDbBackups(projectId, targetId) {
-  const { project, target, conn } = await connectTarget(projectId, targetId)
-  requireDbConfig(project) // 未配置数据库信息时列表也无意义
+  const { target, conn } = await connectTarget(projectId, targetId)
+  requireDbConfig(target) // 未配置数据库信息时列表也无意义
   const home = target.remotePath
   try {
     const res = await ssh.exec(conn,
@@ -905,7 +908,7 @@ async function restoreDbBackup(projectId, targetId, fileName) {
   if (activeRun) throw new Error('已有发布任务进行中，请等待完成或取消')
   assertDbBackupName(fileName)
   const { project, target, conn } = await connectTarget(projectId, targetId)
-  const db = requireDbConfig(project)
+  const db = requireDbConfig(target)
   const home = target.remotePath
   const backupDir = ssh.remoteJoin(home, 'backups')
   const stamp = new Date().toISOString().replace(/[-:T.]/g, '').slice(0, 14)

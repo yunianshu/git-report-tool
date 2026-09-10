@@ -15,6 +15,8 @@ export function emptyTarget() {
     },
     remotePath: '',
     health: { enabled: true, url: '', timeout: 90, interval: 3 },
+    // 数据库备份按环境独立配置：测试/生产是不同实例，容器名与库名必然不同
+    db: { enabled: false, type: 'postgres', container: '', name: '', user: '' },
     dataSync: {
       enabled: false, localDir: 'data', remoteDir: 'shared/data',
       importMode: 'none', importCommand: '', importUser: '',
@@ -35,8 +37,7 @@ export function emptyProject() {
     composeFile: 'docker-compose.yml',
     scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh', bootstrapJava: false, bootstrapPgdump: false, packageCommand: '', packageTimeoutSec: 900, autoBumpVersion: true },
     deploy: {
-      backupCode: true, backupDatabase: false, dbType: 'postgres', dbContainer: '',
-      dbName: '', dbUser: '', autoRollback: true, deleteUploadAfterSuccess: true,
+      backupCode: true, autoRollback: true, deleteUploadAfterSuccess: true,
       keepReleases: 10, keepBackups: 10,
     },
     targets: [t],

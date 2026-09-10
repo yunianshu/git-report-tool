@@ -50,8 +50,10 @@ const EVAL = `(async () => {
     r.editedDirty = dirtyTag()
     const cancelBtn = [...document.querySelectorAll('.deploy-config-drawer button')].find(b => b.textContent.trim() === '取消')
     if (cancelBtn) cancelBtn.click()
-    await sleep(900)
-    r.drawerClosed = !document.querySelector('.deploy-config-drawer .el-drawer')
+    // 取消 → 恢复快照 → 重绘存在异步延迟：固定 sleep 偶发不足（曾误报「取消后仍脏」），改为轮询
+    const waitUntil = async (fn, ms = 6000) => { const t0 = Date.now(); while (Date.now() - t0 < ms) { if (fn()) return true; await sleep(120) } return false }
+    r.drawerClosed = await waitUntil(() => !document.querySelector('.deploy-config-drawer .el-drawer'))
+    r.dirtyGone = await waitUntil(() => !dirtyTag())
     r.nameReverted = (document.querySelector('.deploy-page .bar .target-host') ? true : true) && (() => {
       const host = document.querySelector('.deploy-page .bar .target-host')
       return host ? host.textContent.includes('192.0.2.30') : false

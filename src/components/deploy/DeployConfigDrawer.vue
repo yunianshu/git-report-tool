@@ -184,23 +184,35 @@
       </el-card>
 
       <el-card shadow="never" class="card">
+        <template #header>
+          <div class="card-header"><span>数据库备份（当前目标）</span></div>
+        </template>
+        <template v-if="activeTarget">
+          <div class="f-row check-row">
+            <el-checkbox v-model="activeTarget.db.enabled">发布前备份数据库</el-checkbox>
+          </div>
+          <div class="f-row">
+            <el-select v-model="activeTarget.db.type" style="width: 130px" :disabled="!activeTarget.db.enabled">
+              <el-option value="postgres" label="PostgreSQL" />
+              <el-option value="mysql" label="MySQL" />
+            </el-select>
+            <el-input v-model="activeTarget.db.container" placeholder="数据库容器名" style="width: 160px" :disabled="!activeTarget.db.enabled" />
+            <el-input v-model="activeTarget.db.name" placeholder="库名" style="width: 140px" :disabled="!activeTarget.db.enabled" />
+            <el-input v-model="activeTarget.db.user" placeholder="用户(可选)" style="width: 130px" :disabled="!activeTarget.db.enabled" />
+          </div>
+        </template>
+        <div class="f-hint">
+          按环境独立配置：测试与生产是不同实例，容器名与库名各填各的。发布时用当前目标的配置执行备份，
+          「数据库备份」列表与一键恢复也作用于当前目标。仅 PostgreSQL 支持一键恢复。
+        </div>
+      </el-card>
+
+      <el-card shadow="never" class="card">
         <template #header><div class="card-header"><span>部署选项</span></div></template>
         <div class="f-row check-row">
           <el-checkbox v-model="form.deploy.backupCode">发布前备份代码</el-checkbox>
           <el-checkbox v-model="form.deploy.autoRollback">失败自动回滚</el-checkbox>
           <el-checkbox v-model="form.deploy.deleteUploadAfterSuccess">成功后删除上传包</el-checkbox>
-        </div>
-        <div class="f-row check-row">
-          <el-checkbox v-model="form.deploy.backupDatabase">发布前备份数据库</el-checkbox>
-          <template v-if="form.deploy.backupDatabase">
-            <el-select v-model="form.deploy.dbType" style="width: 110px">
-              <el-option value="postgres" label="PostgreSQL" />
-              <el-option value="mysql" label="MySQL" />
-            </el-select>
-            <el-input v-model="form.deploy.dbContainer" placeholder="数据库容器名" style="width: 150px" />
-            <el-input v-model="form.deploy.dbName" placeholder="库名" style="width: 130px" />
-            <el-input v-model="form.deploy.dbUser" placeholder="用户(可选)" style="width: 120px" />
-          </template>
         </div>
         <div class="f-row">
           <span class="f-label">保留数量</span>
@@ -209,6 +221,9 @@
           <span class="f-mini">个版本 /</span>
           <el-input-number v-model="form.deploy.keepBackups" :min="1" :max="50" controls-position="right" style="width: 90px" />
           <span class="f-mini">份备份</span>
+        </div>
+        <div class="f-hint">
+          本卡片为跨环境统一的发布策略；数据库备份因各环境实例不同，已移到「数据库备份（当前目标）」按环境单独配置。
         </div>
       </el-card>
 

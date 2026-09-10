@@ -2,7 +2,7 @@
  * 部署项目配置管理 —— 对应方案 §5.1 / §21 / §22：
  *   - 多项目配置（名称、本地目录、版本策略、部署选项）
  *   - 每个项目支持多个部署目标 targets[]（测试/生产等多环境）：
- *     各目标独立的服务器（host/端口/用户/认证/密钥）、远程部署目录与健康检查
+ *     各目标独立的服务器（host/端口/用户/认证/密钥）、远程部署目录、健康检查与数据库备份配置
  *   - 持久化到 userData/deploy-projects.json；旧版单服务器配置自动迁移为 targets[0]
  *   - SSH 密码/私钥口令按目标分别经 safeStorage 加密落盘，明文不出主进程
  */
@@ -46,6 +46,18 @@ function normalizeDataSync(raw) {
   }
 }
 
+/** 目标级数据库备份配置：容器名/库名按环境不同（测试库与生产库是两个实例） */
+function normalizeDb(raw) {
+  const d = raw && typeof raw === 'object' ? raw : {}
+  return {
+    enabled: d.enabled === true,
+    type: d.type === 'mysql' ? 'mysql' : 'postgres',
+    container: String(d.container ?? '').trim(),
+    name: String(d.name ?? '').trim(),
+    user: String(d.user ?? '').trim(),
+  }
+}
+
 /** 单个部署目标（环境） */
 function defaultTarget() {
   return {
@@ -54,6 +66,7 @@ function defaultTarget() {
     server: defaultServer(),
     remotePath: '',
     health: { enabled: true, url: '', timeout: 90, interval: 3 },
+    db: normalizeDb(),
     dataSync: normalizeDataSync(),
   }
 }
@@ -76,13 +89,9 @@ function defaultProject() {
     // 打包命令：产物目录没有匹配版本的发布包时，在项目根自动执行（如 bash package.sh）；
     // 版本同步：手动发布版本与项目版本文件不一致时，打包前自动升级项目版本声明
     scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh', bootstrapJava: false, bootstrapPgdump: false, packageCommand: '', packageTimeoutSec: 900, autoBumpVersion: true },
+    // 项目级发布策略：跨环境统一的开关与保留份数；数据库备份配置按环境存放于 targets[].db
     deploy: {
       backupCode: true,
-      backupDatabase: false,
-      dbType: 'postgres', // postgres | mysql
-      dbContainer: '',
-      dbName: '',
-      dbUser: '',
       autoRollback: true,
       deleteUploadAfterSuccess: true,
       keepReleases: 10,
@@ -108,6 +117,18 @@ function normalizeProject(p) {
     deploy: { ...defaults.deploy, ...(source.deploy || {}) },
     scriptMode: { ...defaults.scriptMode, ...(source.scriptMode || {}) },
   }
+  // 数据库备份配置原为项目级（deploy.backupDatabase/dbType/dbContainer/dbName/dbUser）：
+  // 多环境下测试库与生产库是两个实例，现将该组配置改为按部署目标存放。
+  // 此处取出旧值供下方迁移到各目标，并从项目级删除——两份真源并存会导致
+  // 「界面改的是环境级配置、发布读的仍是项目级旧值」。
+  const legacyDb = normalizeDb(source.deploy && {
+    enabled: source.deploy.backupDatabase,
+    type: source.deploy.dbType,
+    container: source.deploy.dbContainer,
+    name: source.deploy.dbName,
+    user: source.deploy.dbUser,
+  })
+  for (const k of ['backupDatabase', 'dbType', 'dbContainer', 'dbName', 'dbUser']) delete c.deploy[k]
   // 版本号进入服务器端路径（releases/$VERSION，且会被 rm -rf）：只放行安全字符，
   // 非法值清空由发布前检查报错，杜绝路径注入
   const manual = String(c.version.manual || '').trim()
@@ -150,6 +171,8 @@ function normalizeProject(p) {
       t.health = { ...defaultTarget().health, ...(source.health || {}) }
       t.name = '默认环境'
     }
+    // 旧格式无环境级 db 配置：项目级 legacy 值迁移到唯一目标
+    t.db = normalizeDb(legacyDb)
     c.targets = [t]
   } else {
     c.targets = source.targets
@@ -159,6 +182,9 @@ function normalizeProject(p) {
     ...t,
     server: { ...defaultServer(), ...(t.server || {}) },
     health: { ...defaultTarget().health, ...(t.health || {}) },
+    // 旧数据的目标没有 db 字段，而 defaultTarget() 的默认值会经展开注入，
+    // 不能用真值判断「是否自带配置」——显式判所属键，缺失时迁移 legacy 值
+    db: normalizeDb(Object.prototype.hasOwnProperty.call(t, 'db') ? t.db : legacyDb),
     dataSync: normalizeDataSync(t.dataSync),
   }))
   delete c.server
