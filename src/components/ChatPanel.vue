@@ -181,7 +181,8 @@ async function copyText(text) {
 
 function deriveTitle(markdown) {
   const matched = String(markdown || '').match(/^#\s+(.+)$/m)
-  return (matched?.[1] || 'AI项目记录').replace(/[\\/:*?"<>|]/g, '_').slice(0, 60)
+  // \r 一并剔除：CRLF 行尾会把 \r 带进文件名，Windows 下保存对话框直接报错
+  return (matched?.[1] || 'AI项目记录').replace(/[\r\n\\/:*?"<>|]/g, '_').slice(0, 60)
 }
 
 async function saveToFile(content) {

@@ -152,7 +152,8 @@ async function loadProjects() {
   if (selected) fillForm(selected)
 }
 
-function fillForm(p) {
+/** preferredTargetId：填充后尽量停留的环境（保存/换版本等流程不得把用户悄悄切到环境 1） */
+function fillForm(p, preferredTargetId = '') {
   const base = emptyProject()
   const merged = { ...base, ...JSON.parse(JSON.stringify(p || {})) }
   merged.version = { ...base.version, ...(p && p.version || {}) }
@@ -174,7 +175,10 @@ function fillForm(p) {
       })
     : base.targets
   Object.assign(form, merged)
-  activeTargetId.value = merged.targets[0].id
+  const want = preferredTargetId && merged.targets.some((t) => t.id === preferredTargetId)
+    ? preferredTargetId
+    : merged.targets[0].id
+  activeTargetId.value = want
   detectVersion()
 }
 
@@ -265,7 +269,7 @@ async function saveProject(successMsg = '配置已保存') {
     state.projects.currentId = r.id
     const p = state.deploy.projects.find((x) => x.id === r.id)
     if (p) {
-      fillForm(p)
+      fillForm(p, activeTargetId.value) // 保存不切换当前选中的部署环境
       if (r.copiedTargets > 0) {
         const firstNew = form.targets[prevTargetCount]
         if (firstNew) activeTargetId.value = firstNew.id

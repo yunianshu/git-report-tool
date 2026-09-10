@@ -137,11 +137,14 @@ watch(
   () => [selected.value?.id, selected.value?.localPath],
   async () => {
     hasStartBat.value = false
-    const dir = selected.value?.localPath
+    const current = selected.value
+    const dir = current?.localPath
     if (!dir) return
     try {
       const r = await window.gitReport.debugStatus(dir)
-      hasStartBat.value = !!r?.hasStartBat
+      // 异步竞态防护：晚到的旧项目结果不得覆盖当前项目的探测状态
+      if (selected.value?.id !== current.id) return
+      hasStartBat.value = !!(r && r.hasStartBat)
     } catch { /* 探测失败按未找到处理 */ }
   },
   { immediate: true }

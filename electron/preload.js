@@ -63,7 +63,6 @@ contextBridge.exposeInMainWorld('gitReport', {
   // 系统
   openPath: (p) => ipcRenderer.invoke('shell:openPath', p),
   copyText: (text) => ipcRenderer.invoke('clipboard:write', text),
-  readClipboard: () => ipcRenderer.invoke('clipboard:read'),
   // 窗口控制（无边框自定义标题栏）
   winMinimize: () => ipcRenderer.invoke('win:minimize'),
   winToggleMaximize: () => ipcRenderer.invoke('win:toggleMaximize'),

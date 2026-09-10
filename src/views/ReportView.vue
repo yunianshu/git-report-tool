@@ -650,7 +650,8 @@ async function delHistory(row) {
 
 async function exportReport() {
   const md = getMarkdown()
-  const safeName = getTitle().replace(/[\\/:*?"<>|]/g, '_')
+  // \r 一并剔除：CRLF 行尾会把 \r 带进文件名，Windows 下保存对话框直接报错
+  const safeName = getTitle().replace(/[\r\n\\/:*?"<>|]/g, '_')
   const res = await window.gitReport.saveReport(`${safeName}.md`, md)
   if (res?.saved) {
     ElMessage.success(`已保存：${res.path}`)

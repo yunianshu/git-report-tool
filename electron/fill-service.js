@@ -427,16 +427,16 @@ async function plan(payload) {
     .filter((p) => commits.some((c) => c.projectId === p.id) && !boundProjects[String(p.id)])
     .map((p) => ({ id: p.id, name: p.name }))
 
-  // 当日已有工时（提示「已提交过，将更新覆盖」；查询失败不阻断计划）
+  // 当日已有工时（提示「已提交过，将更新覆盖」；查询失败不阻断计划）。
+  // 并发查询：多任务时串行延迟线性叠加，禅道同为内网接口可安全并行
   if (zentaoConfigured) {
-    for (const t of tasks) {
+    await Promise.all(tasks.map(async (t) => {
       try {
-        // eslint-disable-next-line no-await-in-loop
-        const today = (await zentao.ensureClient().then((c) => c.getTaskEfforts(t.taskId)))
-          .filter((e) => e.date === date)
+        const efforts = await zentao.ensureClient().then((c) => c.getTaskEfforts(t.taskId))
+        const today = efforts.filter((e) => e.date === date)
         t.existingToday = { count: today.length, consumed: round2(today.reduce((s, e) => s + e.consumed, 0)) }
       } catch { /* 查询失败按无已有处理 */ }
-    }
+    }))
   }
 
   // 汉印条目（容错：未配置/接口失败不阻断禅道计划，仅提示）
