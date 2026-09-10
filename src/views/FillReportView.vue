@@ -120,7 +120,7 @@
         title="尚未配置本人身份，无法过滤你的提交；请到「设置 → 个人身份」添加。"
       />
       <div v-if="selectedProjectIds.some((id) => !bindings[id])" class="bind-tip">
-        部分所选项目尚未绑定禅道任务：生成报告后可在明细中绑定，绑定一次长期生效。
+        已勾选的项目中还有未绑定禅道任务的：可在明细中绑定（绑定一次长期生效），未绑定不会写入工时。
       </div>
     </el-card>
 
@@ -131,18 +131,29 @@
     </div>
 
     <template v-if="plan">
-      <!-- 提交明细（工时计划） -->
+      <!-- 提交明细（工时计划）：列出当天所有有提交的项目，勾选决定哪些计入填报 -->
       <el-card shadow="never" class="card">
         <template #header>
           <div class="card-header">
             <span>提交明细 · {{ plan.date }}（{{ plan.rangeStart }}–{{ plan.crossDay ? '次日 ' : '' }}{{ plan.rangeEnd }}，午休 {{ plan.workConfig.lunchStart }}–{{ plan.workConfig.lunchEnd }}）</span>
-            <span class="header-meta">{{ plan.planned.length }} 个项目 · {{ plan.commitCount }} 条提交 · 合计 {{ totalHours }}h</span>
+            <span class="header-meta">已选 {{ plan.planned.length }}/{{ dayProjects.length }} 个项目 · {{ plan.commitCount }} 条提交 · 合计 {{ totalHours }}h</span>
           </div>
         </template>
-        <div v-if="plan.planned.length" class="plan-list">
-          <div v-for="(p, i) in plan.planned" :key="i" class="prow" :class="{ unbound: !p.taskId }">
+        <div v-if="dayProjects.length" class="plan-list">
+          <div
+            v-for="p in dayProjects"
+            :key="p.projectId"
+            class="prow"
+            :class="{ unbound: !p.taskId, 'prow-off': !p.selected }"
+          >
             <div class="pline">
-              <span class="phours">{{ p.hours }}h</span>
+              <el-checkbox
+                class="pcheck"
+                :model-value="p.selected"
+                :disabled="state.fillReport.running || state.fillReport.submitting"
+                @change="(v) => toggleProject(p.projectId, v)"
+              />
+              <span class="phours">{{ p.selected ? `${p.hours}h` : '未选' }}</span>
               <span class="pmsg">
                 <pre class="pwork">{{ p.work }}</pre>
                 <span class="pproj">{{ p.projectName }} · {{ p.commitCount }} 条提交</span>
@@ -162,7 +173,13 @@
           </div>
         </div>
         <div v-else class="collect-hint">
-          {{ plan.identitiesMissing ? '请先配置本人身份' : `${plan.date} 所选项目没有你的提交记录（可改选日期或项目）` }}
+          {{ plan.identitiesMissing ? '请先配置本人身份' : `${plan.date} 没有你的提交记录（可改选日期）` }}
+        </div>
+        <div v-if="skippedProjects.length" class="submit-hint">
+          另有 {{ skippedProjects.length }} 个当天有提交的项目未勾选，不计入填报（勾选后工时与汉印占比会重新计算）。
+        </div>
+        <div v-if="dayProjects.length && !plan.planned.length" class="submit-hint">
+          尚未勾选任何项目：勾选后才会计算工时并按占比写入汉印。
         </div>
       </el-card>
 
@@ -234,7 +251,7 @@
 
     <!-- 空状态引导（未生成时） -->
     <div v-if="!plan && !state.fillReport.running" class="fill-hint">
-      <el-alert type="info" :closable="false" show-icon title="选择日期与项目后点击「生成报告」，自动按提交时间计算每个任务的工时" />
+      <el-alert type="info" :closable="false" show-icon title="选好日期与上下班时间后点「生成报告」：自动汇总当天所有项目的提交，再勾选要填报的项目（工时与汉印占比按勾选结果计算）" />
     </div>
 
     <!-- 绑定禅道任务弹窗 -->
@@ -370,9 +387,16 @@ const fillableProjects = computed(() =>
     .map((p) => ({ ...p, repoCount: reposForProject(p, state.discoveredRepos).length })),
 )
 
-const canGenerate = computed(() => !!(fillDate.value && selectedProjectIds.value.length))
+const canGenerate = computed(() => !!(fillDate.value && fillableProjects.value.some((p) => p.repoCount > 0)))
 const canSubmit = computed(() => !!(plan.value && plan.value.tasks.length && !plan.value.ztError && !unmatchedCount.value && zentaoConfigured.value))
 const unmatchedCount = computed(() => (plan.value ? plan.value.planned.filter((p) => !p.taskId).length : 0))
+/** 当天有提交的全部项目（生成报告后由主进程带回），勾选决定哪些计入填报 */
+const dayProjects = computed(() => {
+  const p = plan.value
+  if (!p) return []
+  return Array.isArray(p.dayProjects) ? p.dayProjects : p.planned
+})
+const skippedProjects = computed(() => dayProjects.value.filter((p) => !p.selected))
 const totalHours = computed(() =>
   plan.value ? (Math.round(plan.value.planned.reduce((s, p) => s + p.hours, 0) * 100) / 100).toFixed(2) : '0.00',
 )
@@ -397,23 +421,16 @@ function isHpExisting(item) {
 }
 
 /**
- * 首次进入（selectedIds 尚为 null）自动选中已绑定禅道任务的项目，免去每次手动勾选。
- * 绑定表、项目列表、仓库扫描（repoCount 的数据源）三个都是异步就绪的，任一到位就重算；
- * 仓库扫描较慢，ids 为空时不 stop、继续等它；组件卸载时 watch 随 setup 作用域自动停止。
+ * 勾选变化 → 按新的项目子集重算工时与汉印占比（复用上次采集，不重复跑 git 与平台接口）。
+ * 与当前计划一致的选择（含计划写回）直接跳过，避免自我触发。
  */
-const stopDefaultSelection = watch(
-  [bindings, () => state.projects.items, () => state.discoveredRepos],
-  () => {
-    if (state.fillReport.selectedIds !== null) { stopDefaultSelection(); return }
-    if (!state.projects.items.length) return
-    const ids = fillableProjects.value
-      .filter((p) => p.repoCount > 0 && bindings.value[p.id])
-      .map((p) => p.id)
-    if (!ids.length) return
-    state.fillReport.selectedIds = ids
-    stopDefaultSelection()
+const stopSelectionWatch = watch(
+  () => state.fillReport.selectedIds,
+  (v) => {
+    if (!plan.value || !Array.isArray(v)) return
+    if (JSON.stringify(v) === JSON.stringify(plan.value.selectedIds || [])) return
+    refreshSubset()
   },
-  { immediate: true },
 )
 
 onMounted(async () => {
@@ -423,35 +440,66 @@ onMounted(async () => {
   } catch { /* noop */ }
 })
 
+/** 传给主进程的项目清单：全部可填报项目（生成阶段不再要求先勾选） */
+function allProjectsPayload() {
+  return fillableProjects.value
+    .filter((p) => p.repoCount > 0)
+    .map((p) => ({ id: p.id, name: p.name, repos: reposForProject(p, state.discoveredRepos).map((r) => r.path) }))
+}
+
+/** 写入计划结果；selectedIds 落定为显式数组（此后不再套用默认选中） */
+function applyPlan(r) {
+  state.fillReport.plan = r
+  if (Array.isArray(r.selectedIds)) state.fillReport.selectedIds = r.selectedIds
+  bindings.value = { ...bindings.value, ...r.bindings }
+}
+
+/** 勾选/取消勾选某个项目（明细行复选框与顶部下拉共用同一份选择） */
+function toggleProject(projectId, checked) {
+  const cur = Array.isArray(state.fillReport.selectedIds) ? [...state.fillReport.selectedIds] : []
+  state.fillReport.selectedIds = checked
+    ? [...new Set([...cur, projectId])]
+    : cur.filter((id) => id !== projectId)
+}
+
+async function refreshSubset() {
+  const p = plan.value
+  if (!p || state.fillReport.running) return
+  state.fillReport.running = true
+  try {
+    const r = await window.gitReport.fillPlan(toPlain({
+      date: p.date,
+      startTime: p.rangeStart,
+      endTime: p.rangeEnd, // 复用缓存时以计划里的窗口为准；缓存缺失时也能按同一区间重算
+      projects: allProjectsPayload(),
+      selectedIds: state.fillReport.selectedIds,
+      reuse: true, // 复用上次采集：勾选项目不重跑 git / 禅道 / 汉印
+    }))
+    if (r.ok) applyPlan(r)
+  } catch { /* 重算失败保留原计划 */ } finally {
+    state.fillReport.running = false
+  }
+}
+
 async function generate() {
   if (state.fillReport.running) return
-  const chosen = fillableProjects.value.filter((p) => selectedProjectIds.value.includes(p.id))
-  const invalid = chosen.find((p) => p.repoCount === 0)
-  if (invalid) {
-    ElMessage.warning(`项目「${invalid.name}」没有可识别的 Git 仓库`)
-    return
-  }
   state.fillReport.running = true
   try {
     const payload = {
       date: fillDate.value,
       startTime: startTime.value,
       endTime: endTime.value,
-      projects: chosen.map((p) => ({
-        id: p.id,
-        name: p.name,
-        repos: reposForProject(p, state.discoveredRepos).map((r) => r.path),
-      })),
+      projects: allProjectsPayload(),
+      selectedIds: state.fillReport.selectedIds, // null=从未选择过 → 由主进程默认选中已绑定项目
     }
     const r = await window.gitReport.fillPlan(toPlain(payload))
     if (!r.ok) {
       ElMessage.error(r.error || '生成失败')
       return
     }
-    state.fillReport.plan = r
-    bindings.value = { ...bindings.value, ...r.bindings }
-    if (!r.planned.length && !r.identitiesMissing) {
-      ElMessage.warning(`${r.date} 所选项目没有你的提交记录`)
+    applyPlan(r)
+    if (!r.dayProjects.length && !r.identitiesMissing) {
+      ElMessage.warning(`${r.date} 没有你的提交记录`)
     }
     if (r.ztError && zentaoConfigured.value) {
       ElMessage.warning(`禅道任务获取失败：${r.ztError}`)
@@ -674,6 +722,10 @@ async function copyReport() {
   padding: 10px 2px;
 }
 .plan-list .prow:first-child { border-top: none; }
+/* 未勾选的项目：整体淡出，表示不计入本次填报 */
+.plan-list .prow-off { opacity: 0.55; }
+.plan-list .prow-off .pwork { color: var(--el-text-color-secondary); }
+.pcheck { margin-right: 2px; flex-shrink: 0; }
 .pline {
   display: flex;
   gap: 12px;

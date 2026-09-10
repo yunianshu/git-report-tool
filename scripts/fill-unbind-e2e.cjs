@@ -5,8 +5,8 @@
  *       明细行上，绑定后弹窗不可再打开 → 解绑入口不可达（后端 fill:unbind 有实现但用不上）。
  *
  * 验收标准（源自需求，非按实现反推）：
- *   A0 已绑定且有仓库的项目在进入页面时默认选中（减少手动勾选）；未绑定或无仓库的项目不自动选中，
- *      且用户手动改选/清空后该选择跨视图保留（不被默认值覆盖）
+ *   A0（新流程）生成报告不再要求先选项目：生成前不预选任何项目；生成后默认勾选「当天有提交」
+ *      的项目（无仓库/无提交的项目不出现），用户可再逐项勾选或取消
  *   A1 项目下拉中已绑定项目可直接解绑：点「解绑」后该选项标签由「已绑定 #123」变「未绑定」，
  *      且该次点击不会顺带把项目选中（下拉内操作与选择互不干扰）
  *   A2 解绑落盘：userData/fill-bindings.json 中该项目条目被删除，同文件其他项目的绑定保留
@@ -143,9 +143,8 @@ const EVAL1 = `(async () => {
   if (await openDropdown() !== 'ok') { done(); return { fatal: '项目下拉未打开' } }
   // 仓库扫描是启动预热的异步结果：选项被禁用表示项目还没匹配到仓库
   r.alphaReady = await waitFor(() => optionEnabled('Alpha项目'), 25000)
-  // A0：已绑定且有仓库的 Alpha 默认选中（默认值由 bindings/项目列表/仓库扫描三个异步源就绪后写入，等它稳定）
-  r.defaultPicked = await waitFor(() => selectedTagCount() > 0, 8000)
-  r.defaultPickedTags = [...document.querySelectorAll('.fill-page .project-select .el-tag')].map((t) => norm(t.textContent))
+  // A0（新流程）：生成报告不再要求先选项目——未生成前不预选任何项目（默认勾选发生在生成后）
+  r.selectedBeforeGenerate = selectedTagCount()
   r.tagBefore = optionTag('Alpha项目')
   r.betaBefore = optionTag('Beta项目')
   r.selBefore = selectedTagCount()
@@ -169,14 +168,13 @@ const EVAL2 = `(async () => {
   if (!await viewReady()) { done(); return { fatal: '一键填报页未就绪' } }
   if (await openDropdown() !== 'ok') { done(); return { fatal: '项目下拉未打开' } }
   r.alphaReady = await waitFor(() => optionEnabled('Alpha项目'), 25000)
-  // A0/新需求：已绑定项目默认选中，无需手动勾选即可生成报告（这里等待默认选中生效，不再 pickOption——
-  // 对已选中选项再点击会变成取消选择）
-  r.picked = await waitFor(() => selectedTagCount() > 0, 8000)
-  r.pickedTag = r.picked ? [...document.querySelectorAll('.fill-page .project-select .el-tag')].map((t) => norm(t.textContent)) : []
-  r.generateReady = await waitFor(generateEnabled, 5000)
+  // 新流程：先点「生成报告」（不预选项目），生成后默认勾选当天有提交的项目
+  r.generateReady = await waitFor(generateEnabled, 8000)
   const gen = generateBtn()
   r.generated = !!gen
   if (gen) gen.click()
+  r.picked = await waitFor(() => selectedTagCount() > 0, 15000)
+  r.pickedTag = r.picked ? [...document.querySelectorAll('.fill-page .project-select .el-tag')].map((t) => norm(t.textContent)) : []
   r.rowAppeared = await waitFor(() => !!rowOf('Alpha项目'), 25000, 200)
   r.rowTag = rowTag('Alpha项目')
   r.rowBtns = rowBtns('Alpha项目')
@@ -261,9 +259,9 @@ if (!ev1) {
   failed++
 } else {
   if (ev1.fatal) assert('第一次启动页面就绪', false, ev1.fatal)
-  assert('A0 已绑定且有仓库的项目默认选中（仅 Alpha，无仓库的 Beta 不选）',
-    ev1.defaultPicked === true && JSON.stringify(ev1.defaultPickedTags) === JSON.stringify(['Alpha项目']),
-    `tags=${JSON.stringify(ev1.defaultPickedTags)}`)
+  assert('A0 生成前不预选项目（生成报告不再要求先选项目）',
+    ev1.selectedBeforeGenerate === 0,
+    `selected=${ev1.selectedBeforeGenerate}`)
   assert('A1 解绑前下拉显示「已绑定 #123」', ev1.tagBefore.includes('已绑定 #123'), `实际="${ev1.tagBefore}"`)
   assert('A1 下拉提供解绑入口', ev1.unbindBtnShown === true)
   assert('A1 点解绑后标签变「未绑定」', String(ev1.tagAfter).includes('未绑定'), `实际="${ev1.tagAfter}"`)
@@ -285,7 +283,7 @@ if (!ev2) {
   failed++
 } else {
   if (ev2.fatal) assert('第二次启动页面就绪', false, ev2.fatal)
-  assert('A0 重启后默认选中仍生效（标签为已绑定的 Alpha项目）',
+  assert('A0 生成后默认勾选当天有提交的 Alpha项目（无仓库的 Beta 不出现）',
     ev2.picked === true && JSON.stringify(ev2.pickedTag) === JSON.stringify(['Alpha项目']),
     `tags=${JSON.stringify(ev2.pickedTag)}`)
   assert('A3 默认选中项目并生成报告后出现明细行',

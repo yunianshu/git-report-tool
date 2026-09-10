@@ -365,101 +365,64 @@ function buildHpItems(tasks, groups, date) {
 // ─── 编排：生成工时计划 / 提交禅道 ───
 
 /**
- * 生成填报计划：收集提交 → 计算工时 → 匹配绑定 → 拉取禅道任务（容错）→ 汇总。
- * payload: { date: 'YYYY-MM-DD', startTime: 'HH:MM'（实际上班时间）, projects: [{ id, name, repos: string[] }] }
+ * 当天采集结果缓存：切换所选项目时复用（不重复跑 git / 禅道 / 汉印接口）。
+ * 只缓存「原始数据」，工时与占比每次按所选子集重新计算。
  */
-async function plan(payload) {
-  const { date, projects } = payload || {}
-  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) throw new Error('请选择填报日期')
-  if (!Array.isArray(projects) || !projects.length) throw new Error('请选择要填报的项目')
-  for (const p of projects) {
-    if (!p.id) throw new Error('项目缺少 ID')
-    if (!Array.isArray(p.repos) || !p.repos.length) throw new Error(`项目「${p.name || p.id}」没有可识别的 Git 仓库`)
-  }
+let rawCache = null
 
-  const cfg = store.load()
-  const identities = cfg.identities || []
+/** 仓库路径规范化（Windows 大小写不敏感），用于缓存签名 */
+function repoKey(p) {
+  const s = String(p || '').replace(/\\/g, '/')
+  return process.platform === 'win32' ? s.toLowerCase() : s
+}
+
+function projectsSignature(projects) {
+  const keys = []
+  for (const p of projects || []) for (const r of p.repos || []) keys.push(repoKey(r))
+  return keys.sort().join('|')
+}
+
+/**
+ * 采集当天原始数据：本人提交 + 禅道我的任务 + 各绑定任务的当日已有工时 + 汉印任务字典/当日记录。
+ * 容错口径与旧实现一致：禅道/汉印任一失败都不阻断计划，只回报错误文本。
+ */
+async function collectRaw({ date, projects, cfg, identities, win, signature }) {
   const identitiesMissing = !identities.length
   const commits = identitiesMissing ? [] : await collectTimedCommits(projects, { date, identities })
-
-  // 总工时区间 = 页面填写的实际上班时间 → 终点（显式填写优先，否则取点击生成报告的
-  // 当前时刻；终点早于上班时间即按次日跨夜）；git 提交时刻只用于收集内容与计数
-  const workStart = String(payload.startTime || (cfg.zentao && cfg.zentao.workStart) || '08:30')
-  if (!validHM(workStart)) throw new Error('实际上班时间格式不正确（应为 HH:MM）')
-  const explicitEnd = String(payload.endTime || '').trim()
-  if (explicitEnd && !validHM(explicitEnd)) throw new Error('下班时间格式不正确（应为 HH:MM）')
-  const workCfg = {
-    lunchStart: (cfg.zentao && cfg.zentao.lunchStart) || '12:00',
-    lunchEnd: (cfg.zentao && cfg.zentao.lunchEnd) || '13:00',
-  }
-  const endTime = resolveEndTime(undefined, explicitEnd)
-  const crossDay = isCrossDay(workStart, endTime)
-  const planned = distributeByProject(commits, { startTime: workStart, endTime, ...workCfg, crossDay })
-  const rangeStart = workStart
-
   const bindings = listBindings()
+
   const zentaoConfigured = !!(cfg.zentao && cfg.zentao.baseUrl && cfg.zentao.account && store.getZentaoPwd())
   let ztTasks = []
   let ztError = ''
+  const ztEfforts = {}
   if (zentaoConfigured) {
     try {
       ztTasks = await zentao.ensureClient().then((c) => c.myTasks())
     } catch (e) {
       ztError = (e && e.message) || String(e)
     }
+    // 当日已有工时挂在任务上，缓存后切换所选项目不必重查；并发查询（内网接口串行延迟线性叠加）
+    const taskIds = [...new Set(commits.map((c) => (bindings[String(c.projectId)] || {}).taskId).filter(Boolean))]
+    await Promise.all(taskIds.map(async (taskId) => {
+      try {
+        const efforts = await zentao.ensureClient().then((c) => c.getTaskEfforts(taskId))
+        const today = efforts.filter((e) => e.date === date)
+        ztEfforts[String(taskId)] = { count: today.length, consumed: round2(today.reduce((s, e) => s + e.consumed, 0)) }
+      } catch { /* 查询失败按无已有处理 */ }
+    }))
   } else {
     ztError = '禅道未配置：请到「设置 → 一键填报」填写地址、账号与密码'
   }
 
-  const projectById = new Map(projects.map((p) => [String(p.id), p]))
-  for (const p of planned) {
-    const binding = bindings[String(p.projectId)]
-    p.taskId = binding ? binding.taskId : null
-    p.taskName = binding ? binding.taskName : ''
-  }
-  // 未绑定项目的建议任务（绑定弹窗预选）
-  const suggested = {}
-  const boundProjects = {}
-  for (const [id] of Object.entries(bindings)) {
-    if (projectById.has(id)) boundProjects[id] = bindings[id]
-  }
-  for (const p of projects) {
-    if (boundProjects[String(p.id)]) continue
-    const s = suggestTask(p.name, ztTasks)
-    if (s) suggested[String(p.id)] = s
-  }
-
-  const tasks = buildSubmitTasks(planned, ztTasks, date)
-  const unmatchedProjects = projects
-    .filter((p) => commits.some((c) => c.projectId === p.id) && !boundProjects[String(p.id)])
-    .map((p) => ({ id: p.id, name: p.name }))
-
-  // 当日已有工时（提示「已提交过，将更新覆盖」；查询失败不阻断计划）。
-  // 并发查询：多任务时串行延迟线性叠加，禅道同为内网接口可安全并行
-  if (zentaoConfigured) {
-    await Promise.all(tasks.map(async (t) => {
-      try {
-        const efforts = await zentao.ensureClient().then((c) => c.getTaskEfforts(t.taskId))
-        const today = efforts.filter((e) => e.date === date)
-        t.existingToday = { count: today.length, consumed: round2(today.reduce((s, e) => s + e.consumed, 0)) }
-      } catch { /* 查询失败按无已有处理 */ }
-    }))
-  }
-
-  // 汉印条目（容错：未配置/接口失败不阻断禅道计划，仅提示）
-  let hpItems = []
-  let hpUnmatched = []
-  let hpZeroSkipped = 0
-  let hpError = ''
+  let hpGroups = []
   let hpExisting = []
+  let hpReady = false
+  let hpError = ''
   const hanprintConfigured = !!(cfg.hanprint && cfg.hanprint.baseUrl && cfg.hanprint.account && store.getHanprintPwd())
   if (hanprintConfigured) {
     try {
-      const groups = await hanprint.getGroups()
-      const built = buildHpItems(tasks, groups, date)
-      hpItems = built.items
-      hpUnmatched = built.unmatched
-      hpZeroSkipped = built.zeroSkipped
+      hpGroups = await hanprint.getGroups()
+      hpReady = true
       hpExisting = (await hanprint.ensureClient().then((c) => c.getByDate(date)))
         .filter((r) => r && r.ProjectType !== -2)
         .map((r) => ({ id: r.Id, taskId: String(r.TaskId), taskName: String(r.TaskName || ''), percent: Number(r.Percent || 0) }))
@@ -471,27 +434,161 @@ async function plan(payload) {
   }
 
   return {
+    signature,
     date,
-    workConfig: workCfg,
-    rangeStart,
-    rangeEnd: endTime,
-    crossDay,
-    endTimeManual: !!explicitEnd,
+    win,
+    commits,
+    identitiesMissing,
+    ztTasks,
+    ztError,
+    ztEfforts,
+    hpGroups,
+    hpReady,
+    hpExisting,
+    hpError,
+  }
+}
+
+/**
+ * 按「所选项目子集」计算工时与汉印占比（纯计算，可反复调用）：
+ * - 总工时 = 上班时间 → 终点（扣午休、0.5h 取整），按子集内各项目的提交条数占比分配
+ * - dayProjects 列出当天所有有提交的项目（含未选择的，供页面勾选与绑定）
+ * - 禅道汇总 / 汉印条目只覆盖所选子集
+ */
+function buildPlanResult({ raw, projects, selectedInput }) {
+  const bindings = listBindings()
+  const commits = raw.commits || []
+  const allIds = [...new Set(commits.map((c) => String(c.projectId)))]
+  // selectedIds 为 null = 用户从未手动选择过 → 默认勾选「当天有提交的全部项目」
+  // （未绑定的也勾上并提示绑定，避免工时被静默漏报；提交仍会被未绑定拦截）
+  const requested = selectedInput === null ? allIds : selectedInput
+  const selected = []
+  for (const id of requested) {
+    if (allIds.includes(id) && !selected.includes(id)) selected.push(id)
+  }
+  const selSet = new Set(selected)
+
+  const planned = distributeByProject(commits.filter((c) => selSet.has(String(c.projectId))), raw.win)
+  const dayPlanned = distributeByProject(commits, raw.win)
+  const hoursOf = new Map(planned.map((p) => [String(p.projectId), p.hours]))
+  for (const p of [...planned, ...dayPlanned]) {
+    const binding = bindings[String(p.projectId)]
+    p.taskId = binding ? binding.taskId : null
+    p.taskName = binding ? binding.taskName : ''
+  }
+  const dayProjects = dayPlanned.map((p) => {
+    const id = String(p.projectId)
+    return {
+      projectId: p.projectId,
+      projectName: p.projectName,
+      commitCount: p.commitCount,
+      work: p.work,
+      taskId: p.taskId,
+      taskName: p.taskName,
+      selected: selSet.has(id),
+      // 未选择的项目不显示工时：勾选后会按新的子集重新分配
+      hours: selSet.has(id) ? (hoursOf.has(id) ? hoursOf.get(id) : 0) : null,
+    }
+  })
+
+  const tasks = buildSubmitTasks(planned, raw.ztTasks, raw.date)
+  for (const t of tasks) {
+    const existing = raw.ztEfforts[String(t.taskId)]
+    if (existing) t.existingToday = existing
+  }
+
+  const projectById = new Map(projects.map((p) => [String(p.id), p]))
+  const boundProjects = {}
+  for (const [id] of Object.entries(bindings)) {
+    if (projectById.has(id)) boundProjects[id] = bindings[id]
+  }
+  const suggested = {}
+  for (const p of projects) {
+    if (boundProjects[String(p.id)]) continue
+    const s = suggestTask(p.name, raw.ztTasks)
+    if (s) suggested[String(p.id)] = s
+  }
+  const unmatchedProjects = projects
+    .filter((p) => allIds.includes(String(p.id)) && !boundProjects[String(p.id)])
+    .map((p) => ({ id: p.id, name: p.name }))
+
+  const built = raw.hpReady
+    ? buildHpItems(tasks, raw.hpGroups, raw.date)
+    : { items: [], unmatched: [], zeroSkipped: 0 }
+
+  return {
+    date: raw.date,
+    workConfig: { lunchStart: raw.win.lunchStart, lunchEnd: raw.win.lunchEnd },
+    rangeStart: raw.win.startTime,
+    rangeEnd: raw.win.endTime,
+    crossDay: raw.win.crossDay,
+    endTimeManual: raw.win.endTimeManual,
     planned,
+    dayProjects,
+    selectedIds: selected,
     tasks,
     unmatchedProjects,
     bindings: boundProjects,
     suggested,
-    ztTasks,
-    ztError,
-    hpItems,
-    hpUnmatched,
-    hpZeroSkipped,
-    hpExisting,
-    hpError,
-    identitiesMissing,
+    ztTasks: raw.ztTasks,
+    ztError: raw.ztError,
+    hpItems: built.items,
+    hpUnmatched: built.unmatched,
+    hpZeroSkipped: built.zeroSkipped,
+    hpExisting: raw.hpExisting,
+    hpError: raw.hpError,
+    identitiesMissing: raw.identitiesMissing,
     commitCount: commits.length,
   }
+}
+
+/**
+ * 生成填报计划：先采集「当天全部项目」的提交（不要求先选项目），再按所选项目子集
+ * 计算工时与占比。payload:
+ *   { date, startTime, endTime,
+ *     projects: [{ id, name, repos }],  // 全部可填报项目（渲染层已剔除无仓库的）
+ *     selectedIds: string[] | null,     // null=未手动选择过 → 默认勾选当天有提交的全部项目
+ *     reuse: boolean }                  // true=复用上次采集（勾选项目子集时用，不重复跑 git/网络）
+ */
+async function plan(payload) {
+  const { date, projects } = payload || {}
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || ''))) throw new Error('请选择填报日期')
+  if (!Array.isArray(projects) || !projects.length) throw new Error('没有可填报的项目（项目需配置本地目录并识别到 Git 仓库）')
+  for (const p of projects) {
+    if (!p.id) throw new Error('项目缺少 ID')
+    if (!Array.isArray(p.repos) || !p.repos.length) throw new Error(`项目「${p.name || p.id}」没有可识别的 Git 仓库`)
+  }
+
+  const cfg = store.load()
+  const identities = cfg.identities || []
+  const selectedInput = Array.isArray(payload.selectedIds) ? payload.selectedIds.map(String) : null
+  const signature = `${date}||${projectsSignature(projects)}||${identities.map((i) => `${i.name || ''}<${i.email || ''}>`).join(',')}`
+  const reused = !!payload.reuse && !!rawCache && rawCache.signature === signature
+
+  let raw
+  if (reused) {
+    raw = rawCache
+  } else {
+    // 总工时区间 = 页面填写的实际上班时间 → 终点（显式填写优先，否则取点击生成报告的
+    // 当前时刻；终点早于上班时间即按次日跨夜）；git 提交时刻只用于收集内容与计数
+    const workStart = String(payload.startTime || (cfg.zentao && cfg.zentao.workStart) || '08:30')
+    if (!validHM(workStart)) throw new Error('实际上班时间格式不正确（应为 HH:MM）')
+    const explicitEnd = String(payload.endTime || '').trim()
+    if (explicitEnd && !validHM(explicitEnd)) throw new Error('下班时间格式不正确（应为 HH:MM）')
+    const endTime = resolveEndTime(undefined, explicitEnd)
+    const win = {
+      startTime: workStart,
+      endTime,
+      crossDay: isCrossDay(workStart, endTime),
+      endTimeManual: !!explicitEnd,
+      lunchStart: (cfg.zentao && cfg.zentao.lunchStart) || '12:00',
+      lunchEnd: (cfg.zentao && cfg.zentao.lunchEnd) || '13:00',
+    }
+    raw = await collectRaw({ date, projects, cfg, identities, win, signature })
+    rawCache = raw
+  }
+
+  return { ...buildPlanResult({ raw, projects, selectedInput }), reused }
 }
 
 /**

@@ -11,6 +11,8 @@
  *      → GetByDate 均由真实 hanprint-service 客户端发起（fake 网关记录到这些请求，
  *      条目由真实客户端构造，不是打桩结果）
  *   Z4 工时为 0 的项目在禅道侧汇总里照常出现（本次只改汉印记录口径）
+ *   Z5 先生成再勾选：生成前不预选项目；取消勾选一个项目后，工时与占比按剩余子集重算
+ *      （Beta 从 0% 变 100%，Alpha 显示未选）
  *
  * 场景构造：Alpha 3 条提交 / Beta 1 条提交，下班时间 09:30（默认上班 08:30）→ 总工时 1h
  *   → Beta 份额 0.25h 被 0.5h 向下取整抹成 0h → 占比 0% → 不应写入汉印。
@@ -155,12 +157,20 @@ const helpers = `
   const optionByName = (name) => fillOptionEls().find((x) => norm(x.textContent).includes(name))
   const optionEnabled = (name) => { const o = optionByName(name); return !!(o && !o.classList.contains('is-disabled')) }
   const selectedTagCount = () => document.querySelectorAll('.fill-page .project-select .el-tag').length
+  const closeDropdown = () => {
+    document.body.dispatchEvent(new MouseEvent('mousedown', { bubbles: true }))
+    document.body.dispatchEvent(new MouseEvent('click', { bubbles: true }))
+  }
+  const rowOf = (name) => [...document.querySelectorAll('.prow')].find((r) => norm(r.textContent).includes(name))
+  const rowOff = (name) => { const r = rowOf(name); return !!(r && r.classList.contains('prow-off')) }
+  const rowHours = (name) => { const r = rowOf(name); return r ? norm(r.querySelector('.phours')?.textContent) : '(no-row)' }
+  const hpLines = () => [...document.querySelectorAll('.hpline')].map((x) => norm(x.textContent))
   const generateBtn = () => [...document.querySelectorAll('.fill-toolbar button')].find((b) => norm(b.textContent).includes('生成报告'))
   const generateEnabled = () => { const b = generateBtn(); return !!(b && !b.disabled) }
   const done = () => setTimeout(() => window.close(), 400)
 `
 
-/** 下班时间 09:30（上班默认 08:30）→ 总工时 1h；两个项目默认选中（已绑定且有仓库） */
+/** 先生成（不预选项目）→ 默认勾选 → 取消勾选一个项目触发子集重算 */
 const EVAL = `(async () => {
   ${helpers}
   const r = {}
@@ -168,19 +178,37 @@ const EVAL = `(async () => {
   if (!await openEndSelect()) { done(); return { fatal: '下班时间选择器未打开' } }
   r.pickedEnd = pickTime('09:30')
   r.rangeTip = await waitFor(() => rangeTip().includes('1.0h'), 8000) ? rangeTip() : rangeTip()
+  // 仓库扫描就绪（两个项目都要有仓库，否则计划里少一个项目）
   if (await openDropdown() !== 'ok') { done(); return { fatal: '项目下拉未打开' } }
   r.projectsReady = await waitFor(() => optionEnabled('Alpha项目') && optionEnabled('Beta项目'), 30000)
-  r.selected2 = await waitFor(() => selectedTagCount() >= 2, 10000)
+  r.selectedBefore = selectedTagCount() // 生成前不预选项目
+  closeDropdown()
   r.generateReady = await waitFor(generateEnabled, 8000)
   const gen = generateBtn()
   r.generated = !!gen
   if (gen) gen.click()
-  r.hpBlock = await waitFor(() => !!q('.hp-block'), 30000, 200)
+  r.hpBlock = await waitFor(() => !!q('.hp-block'), 40000, 200)
+  r.selectedAfter = await waitFor(() => selectedTagCount() >= 2, 15000) // 生成后默认勾选当天有提交的项目
   r.hpTitle = norm(q('.hp-title')?.textContent)
-  r.hpLines = [...document.querySelectorAll('.hpline')].map((x) => norm(x.textContent))
+  r.hpLines = hpLines()
   r.hints = [...document.querySelectorAll('.submit-hint')].map((x) => norm(x.textContent))
   r.sumLines = [...document.querySelectorAll('.sumline')].map((x) => norm(x.textContent))
-  r.cardText = norm(document.querySelector('.fill-page .card:last-of-type')?.textContent)
+
+  // 取消勾选 Alpha → 子集重算：工时与占比归到 Beta（0% → 100%）
+  const alphaRow = rowOf('Alpha项目')
+  const cb = alphaRow && alphaRow.querySelector('.pcheck')
+  r.alphaUnchecked = false
+  if (cb) {
+    cb.click()
+    r.alphaUnchecked = await waitFor(
+      () => rowOff('Alpha项目') && norm(q('.hp-block')?.textContent).includes('Beta开发任务'),
+      20000,
+      200,
+    )
+  }
+  r.hpLinesAfter = hpLines()
+  r.rowHoursAfter = { alpha: rowHours('Alpha项目'), beta: rowHours('Beta项目') }
+  r.hintsAfter = [...document.querySelectorAll('.submit-hint')].map((x) => norm(x.textContent))
   done()
   return r
 })()`
@@ -256,7 +284,8 @@ async function main() {
   }
 
   check('Z0 下班时间 09:30 → 预览 1.0h（构造 0 小时项目的前提）', result.pickedEnd && result.rangeTip.includes('1.0h'), result.rangeTip)
-  check('Z0 两个已绑定项目默认选中且生成可用', result.selected2 && result.generateReady)
+  check('Z0 生成报告不再要求先选项目（生成前未预选）', result.selectedBefore === 0, `selectedBefore=${result.selectedBefore}`)
+  check('Z0 生成后默认勾选当天有提交的两个项目', result.selectedAfter === true)
   check('Z1 汉印条目只有 1 条（0% 的 Beta 不写入）', result.hpLines.length === 1, JSON.stringify(result.hpLines))
   check('Z1 该条目为 Alpha 任务且占比 100%', (result.hpLines[0] || '').includes('Alpha开发任务') && (result.hpLines[0] || '').includes('100%'), result.hpLines[0])
   check('Z1 占比合计仍为 100%（汉印硬约束）', /1 条 · 占比合计 100%/.test(result.hpTitle || ''), result.hpTitle)
@@ -264,6 +293,14 @@ async function main() {
     (result.hints || []).some((h) => h.includes('占比 0%') && h.includes('1 个')), JSON.stringify(result.hints))
   check('Z4 0 小时的 Beta 仍出现在禅道任务汇总里',
     (result.sumLines || []).some((s) => s.includes(`#${TASK_BETA}`)), JSON.stringify(result.sumLines))
+  check('Z5 取消勾选 Alpha 后按剩余子集重算：Beta 变 100%、Alpha 显示未选',
+    result.alphaUnchecked === true
+      && result.hpLinesAfter.length === 1
+      && result.hpLinesAfter[0].includes('Beta开发任务')
+      && result.hpLinesAfter[0].includes('100%')
+      && result.rowHoursAfter.alpha === '未选'
+      && result.rowHoursAfter.beta === '1h',
+    JSON.stringify({ after: result.hpLinesAfter, hours: result.rowHoursAfter }))
   const seen = new Set(state.paths)
   const expectPaths = ['/login/getToken', '/com/workhour/GetDict', '/com/workhour/GetProjectList', '/com/workhour/GetProjectTaskList', '/com/workhour/GetByDate']
   const missing = expectPaths.filter((p) => !seen.has(p))

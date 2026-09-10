@@ -861,72 +861,179 @@ if (gitOk()) {
     )
   })
 
+  // ── 提交明细与所选子集（真实 git + 汉印接口注入；真实平台无可用账号，不发网络请求） ──
+  /** 建一个真实仓库并把提交固定在填报日 */
+  function mkRepo(name, items) {
+    const dir = path.join(tmpRoot, name)
+    fs.mkdirSync(dir, { recursive: true })
+    execFileSync('git', ['init', '-q'], { cwd: dir })
+    for (const [time, msg] of items) {
+      execFileSync('git', ['commit', '--allow-empty', '-m', msg], {
+        cwd: dir,
+        env: {
+          ...process.env,
+          GIT_AUTHOR_NAME: 'Me', GIT_AUTHOR_EMAIL: 'me@corp.com',
+          GIT_COMMITTER_NAME: 'Me', GIT_COMMITTER_EMAIL: 'me@corp.com',
+          GIT_AUTHOR_DATE: `${pastDayStr} ${time}:00 +0800`,
+          GIT_COMMITTER_DATE: `${pastDayStr} ${time}:00 +0800`,
+        },
+      })
+    }
+    return dir
+  }
+  const repoA = mkRepo('repo-hp-a', [['09:05', 'feat: A1'], ['09:15', 'feat: A2'], ['09:25', 'feat: A3']])
+  const repoB = mkRepo('repo-hp-b', [['09:35', 'feat: B1']])
+  const HP_PROJECTS = [
+    { id: 'hpA', name: 'P-A', repos: [repoA] },
+    { id: 'hpB', name: 'P-B', repos: [repoB] },
+  ]
+  // 汉印接口注入（本块为文件末尾，注入后不再还原）：只验证编排与条目过滤，不发网络请求
+  hpSvc.getGroups = async () => ([{
+    type: 3,
+    typeName: '软件项目',
+    projectId: '799',
+    projectName: 'P-A',
+    tasks: [{ Key: '66', Name: '任务A' }, { Key: '88', Name: '任务B' }],
+  }])
+  hpSvc.ensureClient = async () => ({ getByDate: async () => [] })
+  store.save({
+    roots: [],
+    identities: [{ name: 'Me', email: 'me@corp.com' }],
+    hanprint: { baseUrl: 'http://hp.example', clientId: '1', account: '21290', password: 'secret' },
+  })
+
   await test('plan 端到端：分配 0 小时的项目占比 0% → 不进汉印条目', async () => {
     // 真实 git：repoA 3 条提交 / repoB 1 条，总工时 1h → repoB 份额 0.25h 向下取整为 0
-    const mkRepo = (name, items) => {
-      const dir = path.join(tmpRoot, name)
-      fs.mkdirSync(dir, { recursive: true })
-      execFileSync('git', ['init', '-q'], { cwd: dir })
-      for (const [time, msg] of items) {
-        execFileSync('git', ['commit', '--allow-empty', '-m', msg], {
-          cwd: dir,
-          env: {
-            ...process.env,
-            GIT_AUTHOR_NAME: 'Me', GIT_AUTHOR_EMAIL: 'me@corp.com',
-            GIT_COMMITTER_NAME: 'Me', GIT_COMMITTER_EMAIL: 'me@corp.com',
-            GIT_AUTHOR_DATE: `${pastDayStr} ${time}:00 +0800`,
-            GIT_COMMITTER_DATE: `${pastDayStr} ${time}:00 +0800`,
-          },
-        })
-      }
-      return dir
-    }
-    const repoA = mkRepo('repo-hp-a', [['09:05', 'feat: A1'], ['09:15', 'feat: A2'], ['09:25', 'feat: A3']])
-    const repoB = mkRepo('repo-hp-b', [['09:35', 'feat: B1']])
-    // 汉印接口注入（真实平台无可用账号）：只验证编排与条目过滤，不发网络请求
-    const origGetGroups = hpSvc.getGroups
-    const origEnsure = hpSvc.ensureClient
-    hpSvc.getGroups = async () => ([{
-      type: 3,
-      typeName: '软件项目',
-      projectId: '799',
-      projectName: 'P-A',
-      tasks: [{ Key: '66', Name: '任务A' }, { Key: '88', Name: '任务B' }],
-    }])
-    hpSvc.ensureClient = async () => ({ getByDate: async () => [] })
-    try {
-      store.save({
-        roots: [],
-        identities: [{ name: 'Me', email: 'me@corp.com' }],
-        hanprint: { baseUrl: 'http://hp.example', clientId: '1', account: '21290', password: 'secret' },
-      })
-      fill.bindProject('hpA', 66, '任务A')
-      fill.bindProject('hpB', 88, '任务B')
-      const r = await fill.plan({
-        date: pastDayStr,
-        startTime: '09:00',
-        endTime: '10:00', // 60min，无午休重叠 → 总工时 1h
-        projects: [
-          { id: 'hpA', name: 'P-A', repos: [repoA] },
-          { id: 'hpB', name: 'P-B', repos: [repoB] },
-        ],
-      })
-      const a = r.planned.find((x) => x.projectId === 'hpA')
-      const b = r.planned.find((x) => x.projectId === 'hpB')
-      assert.strictEqual(b.hours, 0, 'repoB 占 1/4 提交 → 0.25h 向下取整为 0')
-      assert.strictEqual(a.hours, 1, 'repoA 0.5h + 余量 0.5h')
-      assert.deepStrictEqual(r.hpUnmatched, [])
-      assert.strictEqual(r.hpZeroSkipped, 1)
-      assert.strictEqual(r.hpItems.length, 1)
-      assert.strictEqual(r.hpItems[0].TaskId, '66')
-      assert.strictEqual(r.hpItems[0].Percent, 100)
-      assert.ok(r.hpItems.every((x) => x.Percent > 0))
-    } finally {
-      hpSvc.getGroups = origGetGroups
-      hpSvc.ensureClient = origEnsure
-      fill.unbindProject('hpA')
-      fill.unbindProject('hpB')
-    }
+    fill.bindProject('hpA', 66, '任务A')
+    fill.bindProject('hpB', 88, '任务B')
+    const r = await fill.plan({
+      date: pastDayStr,
+      startTime: '09:00',
+      endTime: '10:00', // 60min，无午休重叠 → 总工时 1h
+      projects: HP_PROJECTS,
+      selectedIds: ['hpA', 'hpB'],
+    })
+    const a = r.planned.find((x) => x.projectId === 'hpA')
+    const b = r.planned.find((x) => x.projectId === 'hpB')
+    assert.strictEqual(b.hours, 0, 'repoB 占 1/4 提交 → 0.25h 向下取整为 0')
+    assert.strictEqual(a.hours, 1, 'repoA 0.5h + 余量 0.5h')
+    assert.deepStrictEqual(r.hpUnmatched, [])
+    assert.strictEqual(r.hpZeroSkipped, 1)
+    assert.strictEqual(r.hpItems.length, 1)
+    assert.strictEqual(r.hpItems[0].TaskId, '66')
+    assert.strictEqual(r.hpItems[0].Percent, 100)
+    assert.ok(r.hpItems.every((x) => x.Percent > 0))
+    fill.unbindProject('hpA')
+    fill.unbindProject('hpB')
+  })
+  // ── 生成全部 + 按所选子集计算（先生成今天所有项目的填报内容，再勾选项目填报） ──
+  await test('plan 先采集当天全部项目，再按所选子集算工时', async () => {
+    const r = await fill.plan({
+      date: pastDayStr,
+      startTime: '09:00',
+      endTime: '10:00', // 60min → 总工时 1h
+      projects: [
+        { id: 'hpA', name: 'P-A', repos: [repoA] },
+        { id: 'hpB', name: 'P-B', repos: [repoB] },
+      ],
+      selectedIds: ['hpA', 'hpB'], // 全选：与旧口径一致
+    })
+    assert.strictEqual(r.dayProjects.length, 2, '两个项目当天都有提交 → 都列出来供勾选')
+    assert.strictEqual(r.dayProjects.every((p) => p.selected), true)
+    const b = r.planned.find((x) => x.projectId === 'hpB')
+    assert.strictEqual(b.hours, 0, 'repoB 占 1/4 提交 → 0.25h 向下取整为 0')
+    assert.strictEqual(r.planned.find((x) => x.projectId === 'hpA').hours, 1, 'repoA 0.5h + 余量 0.5h')
+  })
+
+  await test('plan 默认勾选当天有提交的全部项目（含未绑定，便于就地绑定）', async () => {
+    fill.bindProject('hpA', 66, '任务A')
+    fill.unbindProject('hpB') // 未绑定：仍默认勾选，避免工时静默漏报（提交时会被未绑定拦截）
+    const r = await fill.plan({
+      date: pastDayStr,
+      startTime: '09:00',
+      endTime: '10:00',
+      projects: [
+        { id: 'hpA', name: 'P-A', repos: [repoA] },
+        { id: 'hpB', name: 'P-B', repos: [repoB] },
+      ],
+      // selectedIds 省略 = 用户从未选择过 → 走默认勾选
+    })
+    assert.deepStrictEqual(r.selectedIds, ['hpA', 'hpB'])
+    assert.strictEqual(r.dayProjects.length, 2)
+    assert.strictEqual(r.dayProjects.every((p) => p.selected), true)
+    const b = r.planned.find((p) => p.projectId === 'hpB')
+    assert.strictEqual(b.taskId, null, '未绑定项目仍在明细里，提示绑定')
+    assert.strictEqual(r.planned.length, 2)
+  })
+
+  await test('plan 勾选变化后按新子集重算工时与汉印占比', async () => {
+    fill.bindProject('hpA', 66, '任务A')
+    fill.bindProject('hpB', 88, '任务B')
+    const projects = [
+      { id: 'hpA', name: 'P-A', repos: [repoA] },
+      { id: 'hpB', name: 'P-B', repos: [repoB] },
+    ]
+    // 只勾选 Beta：全部工时归 Beta（子集内 1/1），汉印占比 100%（不再是被抹平的 0%）
+    const only = await fill.plan({ date: pastDayStr, startTime: '09:00', endTime: '10:00', projects, selectedIds: ['hpB'] })
+    assert.strictEqual(only.planned.length, 1)
+    assert.strictEqual(only.planned[0].hours, 1)
+    assert.strictEqual(only.tasks.length, 1)
+    assert.strictEqual(only.tasks[0].taskId, 88)
+    assert.strictEqual(only.tasks[0].consumed, 1)
+    assert.strictEqual(only.hpItems.length, 1)
+    assert.strictEqual(only.hpItems[0].TaskId, '88')
+    assert.strictEqual(only.hpItems[0].Percent, 100)
+    assert.strictEqual(only.hpZeroSkipped, 0)
+    // 全选：回到 3:1 的分配，Beta 被抹成 0 小时 → 0% 不写入
+    const all = await fill.plan({ date: pastDayStr, startTime: '09:00', endTime: '10:00', projects, selectedIds: ['hpA', 'hpB'] })
+    assert.strictEqual(all.hpItems.length, 1)
+    assert.strictEqual(all.hpItems[0].TaskId, '66')
+    assert.strictEqual(all.hpZeroSkipped, 1)
+  })
+
+  await test('plan 未勾选任何项目：不产出工时与汉印条目，但明细仍可勾选', async () => {
+    const r = await fill.plan({
+      date: pastDayStr,
+      startTime: '09:00',
+      endTime: '10:00',
+      projects: [
+        { id: 'hpA', name: 'P-A', repos: [repoA] },
+        { id: 'hpB', name: 'P-B', repos: [repoB] },
+      ],
+      selectedIds: [],
+    })
+    assert.deepStrictEqual(r.selectedIds, [])
+    assert.deepStrictEqual(r.planned, [])
+    assert.deepStrictEqual(r.tasks, [])
+    assert.deepStrictEqual(r.hpItems, [])
+    assert.strictEqual(r.dayProjects.length, 2)
+  })
+
+  await test('plan reuse：复用上次采集结果，勾选项目不重复跑 git', async () => {
+    const projects = [
+      { id: 'hpA', name: 'P-A', repos: [repoA] },
+      { id: 'hpB', name: 'P-B', repos: [repoB] },
+    ]
+    const first = await fill.plan({ date: pastDayStr, startTime: '09:00', endTime: '10:00', projects, selectedIds: ['hpA'] })
+    assert.strictEqual(first.reused, false)
+    // 采集后仓库又多了一条当天提交：reuse 必须看不到它（证明用的是缓存采集结果）
+    execFileSync('git', ['commit', '--allow-empty', '-m', 'feat: A4'], {
+      cwd: repoA,
+      env: {
+        ...process.env,
+        GIT_AUTHOR_NAME: 'Me', GIT_AUTHOR_EMAIL: 'me@corp.com',
+        GIT_COMMITTER_NAME: 'Me', GIT_COMMITTER_EMAIL: 'me@corp.com',
+        GIT_AUTHOR_DATE: `${pastDayStr} 09:40:00 +0800`,
+        GIT_COMMITTER_DATE: `${pastDayStr} 09:40:00 +0800`,
+      },
+    })
+    const reused = await fill.plan({ date: pastDayStr, startTime: '09:00', endTime: '10:00', projects, selectedIds: ['hpA', 'hpB'], reuse: true })
+    assert.strictEqual(reused.reused, true)
+    assert.strictEqual(reused.commitCount, first.commitCount)
+    // 重新生成（reuse 不传）→ 重新采集，能看到新提交，且窗口一致时工时不变（1h）
+    const fresh = await fill.plan({ date: pastDayStr, startTime: '09:00', endTime: '10:00', projects, selectedIds: ['hpA', 'hpB'] })
+    assert.strictEqual(fresh.reused, false)
+    assert.strictEqual(fresh.commitCount, first.commitCount + 1)
   })
 } else {
   console.log('  （git 不可用，跳过真实仓库集成用例）')
