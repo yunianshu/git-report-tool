@@ -2,6 +2,7 @@
   <div class="deploy-page">
     <PageHeader eyebrow="DELIVERY" title="部署" :description="currentProject ? `管理“${currentProject.name}”的环境、发布与回滚。` : '选择一个项目后进入部署工作区。'">
       <template #actions>
+        <el-button v-if="currentProject" @click="aiOpen = true"><el-icon><MagicStick /></el-icon>AI 部署助手</el-button>
         <el-button v-if="currentProject" @click="configOpen = true"><el-icon><Setting /></el-icon>部署设置</el-button>
         <el-button v-if="currentProject" :loading="testing" :disabled="!form.id || dirty" @click="testConnection"><el-icon><Link /></el-icon>测试连接</el-button>
       </template>
@@ -56,6 +57,13 @@
       @reset-conn="connResult = null"
     />
 
+    <DeployAiAssistant
+      v-model="aiOpen"
+      :form="form"
+      :active-target-id="activeTargetId"
+      @applied="onPlanApplied"
+    />
+
       <div class="deploy-main-column">
         <DeployRunPanel
           ref="runPanelRef"
@@ -85,6 +93,7 @@ import { useProjects } from '../composables/useProjects'
 import PageHeader from '../components/PageHeader.vue'
 import EmptyState from '../components/EmptyState.vue'
 import DeployConfigDrawer from '../components/deploy/DeployConfigDrawer.vue'
+import DeployAiAssistant from '../components/deploy/DeployAiAssistant.vue'
 import DeployRunPanel from '../components/deploy/DeployRunPanel.vue'
 import DeployHistoryTable from '../components/deploy/DeployHistoryTable.vue'
 import { emptyTarget, emptyProject, fmtDur } from '../components/deploy/deploy-form'
@@ -94,6 +103,7 @@ const { currentProject, loadProjects: loadSharedProjects } = useProjects()
 
 const form = reactive(emptyProject())
 const configOpen = ref(false)
+const aiOpen = ref(false)
 const configDrawerRef = ref(null)
 const activeTargetId = ref('')
 const detected = ref({ version: '', source: '' })
@@ -263,8 +273,16 @@ async function onCopyConfig(fromProjectId) {
   }
 }
 
-async function saveProject(successMsg = '配置已保存') {
-  if (!form.name) { ElMessage.warning('请填写项目名称'); return false }
+/** AI 部署助手把方案写回磁盘后：重新拉取并回填表单，当前环境保持不变 */
+async function onPlanApplied() {
+  await loadProjects()
+  const p = state.deploy.projects.find((x) => x.id === form.id)
+  if (p) fillForm(p, activeTargetId.value)
+  connResult.value = null
+  runPanelRef.value?.resetSelection()
+}
+
+async function saveProject(successMsg = '配置已保存') {  if (!form.name) { ElMessage.warning('请填写项目名称'); return false }
   const prevTargetCount = form.targets.length
   const payload = JSON.parse(JSON.stringify(form))
   if (!payload.targets.length) payload.targets = [emptyTarget()]

@@ -15,6 +15,7 @@ const localDebugService = require('./local-debug-service')
 const deployService = require('./deploy/deploy-service')
 const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
+const aiDeploy = require('./deploy/ai-deploy')
 const fillService = require('./fill-service')
 const zentaoService = require('./zentao-service')
 const hanprintService = require('./hanprint-service')
@@ -629,6 +630,54 @@ function registerIpc() {
     try {
       const record = await deployService.restoreDbBackup(projectId, targetId, fileName)
       return { ok: record.status === 'success', record }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  // AI 部署助手（新项目首次接入部署：体检 → 生成部署文件 → 套用配置）
+  ipcMain.handle('deploy:ai:scanLocal', (_e, { projectId }) => {
+    try {
+      const project = deployProjects.list().find((p) => p.id === projectId)
+      if (!project) return { ok: false, error: '项目配置不存在，请先保存项目' }
+      return { ok: true, local: aiDeploy.scanLocal(project) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:ai:scanRemote', async (_e, { projectId, targetId }) => {
+    try {
+      const project = deployProjects.list().find((p) => p.id === projectId)
+      if (!project) return { ok: false, error: '项目配置不存在，请先保存项目' }
+      const target = (project.targets || []).find((t) => t.id === targetId) || project.targets[0]
+      const remote = await aiDeploy.scanRemote(project, target)
+      return { ok: true, remote }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:ai:diagnose', async (_e, { projectId, targetId }) => {
+    try {
+      return { ok: true, ...(await aiDeploy.diagnose(projectId, targetId)) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:ai:writeFiles', (_e, { projectId, files }) => {
+    try {
+      return { ok: true, ...aiDeploy.writeFiles(projectId, files) }
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
+  ipcMain.handle('deploy:ai:generateFile', async (_e, { projectId, targetId, req }) => {
+    try {
+      return await aiDeploy.generateFileContent(projectId, targetId, req)
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })  ipcMain.handle('deploy:ai:apply', (_e, { projectId, targetId, plan }) => {
+    try {
+      return aiDeploy.applyPlan(projectId, targetId, plan)
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }
     }

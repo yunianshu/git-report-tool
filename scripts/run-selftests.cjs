@@ -10,6 +10,7 @@ const SUITES = [
   'deploy-selftest.cjs',
   'deploy-scriptmode-selftest.cjs',
   'deploy-datasync-selftest.cjs',
+  'deploy-ai-selftest.cjs',
   'deploy-version-guard-selftest.cjs',
   'deploy-packager-symlink-selftest.cjs',
   'report-history-selftest.cjs',

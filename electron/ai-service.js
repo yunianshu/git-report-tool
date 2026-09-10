@@ -131,9 +131,61 @@ async function chat({ baseUrl, apiKey, model, messages, temperature = 0.7, maxTo
   return full
 }
 
+/**
+ * 非流式对话（结构化输出场景用，如 AI 部署方案要一份 JSON）。
+ * 与 chat() 的差别：
+ *   - 不开 stream：推理型模型（返回 reasoning_content）在流式下正文内容可能与推理内容
+ *     交错，甚至被推理 token 吃光预算而只剩空正文；非流式由服务端一次性给出最终 content
+ *   - 返回 finishReason 与 reasoning，便于调用方判断「被长度截断 / 只有推理没有正文」
+ *   - reasoningEffort：部分网关支持（'none' 关闭思考）时传入，避免推理过程吃掉输出预算；
+ *     不支持的网关会返回 4xx，由调用方决定是否去掉该参数重试
+ * 出错时抛 Error（message 可直接展示给用户）。
+ * @returns {Promise<{text: string, finishReason: string, reasoning: string, model: string}>}
+ */
+async function complete({ baseUrl, apiKey, model, messages, temperature = 0, maxTokens = DEFAULT_MAX_TOKENS, reasoningEffort, signal }) {
+  if (!apiKey) throw new Error('未配置 API Key，请先在「设置 → AI 模型」中填写')
+  if (!model) throw new Error('未配置模型名称，请先在「设置 → AI 模型」中填写')
+  if (!Array.isArray(messages) || !messages.length) throw new Error('消息列表为空')
+
+  const url = `${await assertSafeBaseUrl(baseUrl)}/chat/completions`
+  const body = { model, messages, temperature, max_tokens: maxTokens, stream: false }
+  if (reasoningEffort) body.reasoning_effort = reasoningEffort
+  const resp = await net.fetch(url, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${apiKey}`,
+    },
+    body: JSON.stringify(body),
+    signal,
+  })
+  if (!resp.ok) {
+    let detail = ''
+    try {
+      detail = (await resp.text()).slice(0, 400)
+    } catch { /* noop */ }
+    const err = new Error(`AI 接口请求失败（HTTP ${resp.status}）${detail ? `：${detail}` : ''}`)
+    err.status = resp.status
+    throw err
+  }
+  let json
+  try {
+    json = await resp.json()
+  } catch {
+    throw new Error('AI 接口返回的不是有效 JSON')
+  }
+  const choice = (json.choices && json.choices[0]) || {}
+  const msg = choice.message || {}
+  return {
+    text: String(msg.content || ''),
+    finishReason: String(choice.finish_reason || ''),
+    reasoning: String(msg.reasoning_content || msg.reasoning || ''),
+    model: String(json.model || model),
+  }
+}
+
 /** 测试连接：极简请求验证 baseUrl / apiKey / model 可用性 */
-async function test({ baseUrl, apiKey, model }) {
-  const text = await chat({
+async function test({ baseUrl, apiKey, model }) {  const text = await chat({
     baseUrl,
     apiKey,
     model,
@@ -172,4 +224,4 @@ async function listModels({ baseUrl, apiKey }) {
   return models
 }
 
-module.exports = { chat, test, listModels, DEFAULT_BASE_URL, DEFAULT_MAX_TOKENS }
+module.exports = { chat, complete, test, listModels, DEFAULT_BASE_URL, DEFAULT_MAX_TOKENS }

@@ -507,6 +507,57 @@ async function main() {
     passed += 1
     console.log('  ✓ 手动版本自动同步：VERSION+pom 联动升级→打包读新版本→发布成功；关闭同步时失败信息指出偏差')
 
+    // ── 11. CURRENT 指针由本工具负责：项目升级脚本不写指针时也必须记录当前版本 ──
+    // 背景：契约里 CURRENT（内容 = release 目录名）由部署工具维护。若项目脚本不写、工具也不写，
+    // 首次发布后就没有「当前版本」记录：线上版本查询为空、同版本守卫失效、旧版本清理失去保护。
+    const proj6Dir = path.join(tmpRoot, 'proj-noptr')
+    fs.mkdirSync(path.join(proj6Dir, 'release'), { recursive: true })
+    fs.writeFileSync(path.join(proj6Dir, 'VERSION'), '7.0.0\n')
+    // 造一个「不写 CURRENT」的发布包（与 makeFakeArtifact 同契约，仅去掉写指针那一行）
+    {
+      const name = 'app-v7.0.0-401'
+      const stage = path.join(proj6Dir, '.staging', name)
+      fs.mkdirSync(stage, { recursive: true })
+      fs.writeFileSync(path.join(stage, 'VERSION'), '7.0.0\n')
+      fs.writeFileSync(path.join(stage, 'upgrade.sh'), [
+        '#!/usr/bin/env bash',
+        'set -euo pipefail',
+        'SD="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd)"; IR="$INSTALL_ROOT"',
+        'echo "[fake-upgrade-noptr] $(basename -- "$SD")（本脚本不写 CURRENT）"',
+        'INSTALL_ROOT="$IR" bash "$SD/start.sh"',
+      ].join('\n'))
+      fs.writeFileSync(path.join(stage, 'start.sh'), '#!/usr/bin/env bash\ntouch "$(dirname -- "${BASH_SOURCE[0]}")/.started"\n')
+      fs.writeFileSync(path.join(stage, 'stop.sh'), '#!/usr/bin/env bash\nrm -f "$(dirname -- "${BASH_SOURCE[0]}")/.started"\n')
+      const r = spawnSync('bash', ['-c', `cd "$(dirname '${msysPath(stage)}')" && tar -czf '${msysPath(path.join(proj6Dir, 'release', name + '.tar.gz'))}' '${name}' && rm -rf '${msysPath(stage)}'`], { encoding: 'utf8' })
+      assert.strictEqual(r.status, 0, `打 no-ptr 包失败: ${r.stderr}`)
+    }
+    fs.rmSync(path.join(SERVER_ROOT, 'CURRENT'), { force: true })
+    fs.rmSync(path.join(SERVER_ROOT, 'releases'), { recursive: true, force: true })
+    const proj6 = deployProjects.save(deployProjects.normalizeProject({
+      name: '不写指针的项目', localPath: proj6Dir, deployMode: 'script',
+      scriptMode: { artifactDir: 'release', upgradeScript: 'upgrade.sh' },
+      version: { strategy: 'auto', manual: '' },
+      targets: [{
+        id: 't1', name: '生产', remotePath: REMOTE_HOME,
+        server: { host: '203.0.113.10', port: 22, username: 'root', authType: 'password' },
+        health: { enabled: false, url: '', timeout: 90, interval: 3 },
+      }],
+    }))
+    const { record: recPtr, events: evPtr } = await runDeploy(proj6.id)
+    assert.strictEqual(recPtr.status, 'success', `不写指针的项目发布应成功: ${recPtr.message}\n${evPtr.logs.map((l) => l.text).join('\n')}`)
+    assert.strictEqual(
+      fs.readFileSync(path.join(SERVER_ROOT, 'CURRENT'), 'utf8').trim(), 'app-v7.0.0-401',
+      '项目脚本不写 CURRENT 时，工具必须在发布成功后写入当前版本目录名',
+    )
+    assert.ok(evPtr.logs.some((l) => l.text.includes('CURRENT -> app-v7.0.0-401')), '日志应记录指针切换')
+    // 二次发布：同版本守卫依赖 CURRENT，必须能识别出「线上已运行同一版本」
+    const { record: recPtr2 } = await runDeploy(proj6.id)
+    assert.strictEqual(recPtr2.status, 'failed')
+    assert.ok(/线上已运行同一版本/.test(recPtr2.message), `同版本守卫应依赖工具写入的 CURRENT: ${recPtr2.message}`)
+    deployProjects.remove(proj6.id)
+    passed += 1
+    console.log('  ✓ CURRENT 指针由工具兜底写入：项目脚本不写指针时线上版本仍可识别、同版本守卫生效')
+
     console.log(`\n脚本部署形态编排自测通过（${passed} 组断言）`)
   } finally {
     fs.rmSync(tmpRoot, { recursive: true, force: true })

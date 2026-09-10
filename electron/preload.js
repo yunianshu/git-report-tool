@@ -119,6 +119,16 @@ contextBridge.exposeInMainWorld('gitReport', {
     ipcRenderer.invoke('deploy:dbBackups', { projectId, targetId }),
   deployDbRestore: (projectId, targetId, fileName) =>
     ipcRenderer.invoke('deploy:dbRestore', { projectId, targetId, fileName }),
+  // AI 部署助手：本地体检 / 服务器体检 / AI 方案 / 生成部署文件 / 套用方案
+  deployAiScanLocal: (projectId) => ipcRenderer.invoke('deploy:ai:scanLocal', { projectId }),
+  deployAiScanRemote: (projectId, targetId) => ipcRenderer.invoke('deploy:ai:scanRemote', { projectId, targetId }),
+  deployAiDiagnose: (projectId, targetId) => ipcRenderer.invoke('deploy:ai:diagnose', { projectId, targetId }),
+  deployAiWriteFiles: (projectId, files) =>
+    ipcRenderer.invoke('deploy:ai:writeFiles', { projectId, files: toPlain(files) }),
+  deployAiGenerateFile: (projectId, targetId, req) =>
+    ipcRenderer.invoke('deploy:ai:generateFile', { projectId, targetId, req: toPlain(req) }),
+  deployAiApply: (projectId, targetId, plan) =>
+    ipcRenderer.invoke('deploy:ai:apply', { projectId, targetId, plan: toPlain(plan) }),
   onDeployLog: (cb) => subscribe('deploy:log', cb),
   onDeployStage: (cb) => subscribe('deploy:stage', cb),
   onDeployProgress: (cb) => subscribe('deploy:progress', cb),

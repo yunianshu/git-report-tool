@@ -537,6 +537,12 @@ do_deploy_script() {
     else do_rollback_script "健康检查失败: $HEALTH_URL"; fi
   fi
 
+  # 版本指针：本工具是 CURRENT 的负责人（回滚、"线上版本"查询、清理旧版本都读它）。
+  # 兼容项目脚本自己也会写 CURRENT 的情况——值都是 release 目录名，重复写等价；
+  # 但项目脚本不写时（多数项目）必须由这里补上，否则首次发布后没有任何"当前版本"记录。
+  set_current "$entries"
+  ok "CURRENT -> $entries"
+
   cleanup_releases_script
   if [ "$DELETE_UPLOAD" = "1" ]; then
     rm -f "$pkg"
