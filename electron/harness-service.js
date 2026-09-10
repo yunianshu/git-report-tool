@@ -27,6 +27,8 @@ const harnessRuntime = require('./harness-runtime')
 const DEFAULT_PORT = 3080
 /** 就绪等待上限：首次启动要加载插件与前端资源，留足时间 */
 const READY_TIMEOUT_MS = 90000
+/** 自启动失败后的重试间隔（秒级：给插件加载/资源竞争留缓冲，期间用户操作可打断） */
+const RETRY_DELAY_MS = 8000
 /** 服务就绪标志行 */
 const URL_LINE = /dsh web:\s*(http:\/\/\S+)/
 /** 诊断输出保留长度（出错时回传渲染层展示） */
@@ -278,6 +280,14 @@ function spawnHarness(launch, args, cwd) {
 }
 
 async function doStart(opts = {}, token = startSeq) {
+  // 上一轮超时保留的现场进程（超时不清进程是刻意的，供迟到就绪行翻正）：
+  // 本轮要重新拉起服务，先回收避免泄漏与端口冲突
+  if (child && child.exitCode === null) {
+    killTree(child.pid)
+    child = null
+    clearPidFile()
+  }
+
   // 先清理上次异常退出遗留的进程，避免它们占着旧的运行时目录导致解包删不掉
   await cleanupStale()
 
@@ -319,6 +329,9 @@ async function doStart(opts = {}, token = startSeq) {
 
   const preferred = Number.isInteger(opts.port) && opts.port > 0 && opts.port < 65536 ? opts.port : DEFAULT_PORT
   const port = (await isPortFree(preferred)) ? preferred : 0 // 端口被占用时交给系统分配，地址以启动输出为准
+  // 就绪等待上限可注入（自测用短超时触发翻正/重试路径），默认 90 秒
+  const readyTimeoutMs = Number.isInteger(opts.readyTimeoutMs) && opts.readyTimeoutMs > 0
+    ? opts.readyTimeoutMs : READY_TIMEOUT_MS
   const args = ['web', '--no-open', '--host', '127.0.0.1', '--port', String(port)]
 
   logBuffer = ''
@@ -366,23 +379,36 @@ async function doStart(opts = {}, token = startSeq) {
     }
 
     timer = setTimeout(() => {
-      // 超时不清进程：插件加载可能仍在继续，保留现场供用户重试/查看日志
+      // 超时不清进程：插件加载可能仍在继续，保留现场供用户重试/查看日志；
+      // 服务随后打印地址时由 onChunk 翻正回 running
       finish({
         status: 'error',
-        error: `启动超时（${Math.round(READY_TIMEOUT_MS / 1000)} 秒内未输出服务地址）`,
+        error: `启动超时（${Math.round(readyTimeoutMs / 1000)} 秒内未输出服务地址）`,
       })
-    }, READY_TIMEOUT_MS)
+    }, readyTimeoutMs)
     if (timer.unref) timer.unref()
 
     const onChunk = (chunk) => {
       const text = String(chunk)
       logBuffer = (logBuffer + text).slice(-MAX_LOG_CHARS)
-      if (state.status !== 'starting') return
       const matched = text.match(URL_LINE) || logBuffer.match(URL_LINE)
       if (!matched) return
       const url = matched[1]
       let actualPort = preferred
       try { actualPort = Number(new URL(url).port) || actualPort } catch { /* 保留预期端口 */ }
+      if (settled) {
+        // 超时后迟到的就绪行：服务实际已起来（超时只是等待上限），翻正状态；
+        // 已被 stop()/restart() 作废的启动不得翻正（进程已被杀）
+        if (token !== startSeq || child !== proc) return
+        writePidFile({ pid: proc.pid, port: actualPort, startedAt: Date.now() })
+        setState({
+          status: 'running', url,
+          displayUrl: `http://127.0.0.1:${actualPort}`,
+          port: actualPort, pid: proc.pid, error: '',
+        })
+        return
+      }
+      if (state.status !== 'starting') return
       writePidFile({ pid: proc.pid, port: actualPort, startedAt: Date.now() })
       finish({
         status: 'running',
@@ -421,8 +447,27 @@ async function start(opts = {}) {
   if (starting && startingToken === startSeq) return starting
   const token = ++startSeq
   startingToken = token
-  starting = doStart(opts, token).finally(() => { starting = null })
+  starting = (opts.retryOnFail === true ? startWithRetry(opts, token) : doStart(opts, token))
+    .finally(() => { starting = null })
   return starting
+}
+
+/**
+ * 自启动专用：失败后延迟重试一次。启动失败多为插件加载慢/瞬态资源竞争
+ * （启动即拉起会与仓库扫描预热并发），隔几秒重来通常即可就绪；重试间隔内
+ * 用户手动操作（停止/重启）会作废 token，随即放弃重试交还控制权。
+ */
+async function startWithRetry(opts, token) {
+  let result = await doStart(opts, token)
+  if (result.status !== 'error') return result
+  // 注意保持 timer 引用（不 unref）：重试是关键路径，unref 会让纯 Node 场景
+  // （自测）在等待期因事件循环清空而直接退出
+  await new Promise((resolve) => setTimeout(resolve, RETRY_DELAY_MS))
+  if (token !== startSeq) return snapshot()
+  console.log('[harness] 自启动未就绪，自动重试一次')
+  result = await doStart(opts, token)
+  if (result.status === 'error') console.log('[harness] 重试后仍未就绪：', result.error || result.status)
+  return result
 }
 
 /** 关闭服务：连同子进程树一起结束，并清理残留记录 */

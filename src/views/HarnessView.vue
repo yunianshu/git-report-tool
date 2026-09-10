@@ -55,7 +55,7 @@
         <!-- 出错 / 未安装 -->
         <div v-else class="harness-placeholder">
           <el-icon class="harness-placeholder-icon"><WarningFilled /></el-icon>
-          <h3>{{ installed ? 'Harness 服务未运行' : '未检测到 DeepSeek Harness' }}</h3>
+          <h3>{{ installed ? (snapshot.status === 'error' ? 'Harness 服务启动失败' : 'Harness 服务未运行') : '未检测到 DeepSeek Harness' }}</h3>
           <p v-if="snapshot.error" class="harness-error">{{ snapshot.error }}</p>
           <p v-else-if="!installed">
             请先在本机安装 dsh CLI，然后点击「启动服务」：

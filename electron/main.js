@@ -657,7 +657,7 @@ app.whenReady().then(() => {
   if (!process.env.SMOKE_EXIT_MS || process.env.SMOKE_HARNESS === '1') {
     const cfg = store.load()
     if (!cfg.harness || cfg.harness.autoStart !== false) {
-      harnessService.start({ port: cfg.harness && cfg.harness.port })
+      harnessService.start({ port: cfg.harness && cfg.harness.port, retryOnFail: true })
         .then((snapshot) => {
           if (snapshot.status === 'running') console.log('[harness] 已启动', snapshot.displayUrl)
           else console.log('[harness] 启动未就绪：', snapshot.error || snapshot.status)
