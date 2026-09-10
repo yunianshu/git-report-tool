@@ -75,6 +75,16 @@
       />
     </el-card>
 
+    <!-- 项目范围已切换：已收集结果不属于当前项目，不再作为本项目报告展示 -->
+    <el-alert
+      v-if="scopeMismatch"
+      type="info"
+      :closable="false"
+      show-icon
+      class="stale-alert"
+      :title="`已切换项目，下方不再显示「${dataRangeLabel}」的收集结果；点击「生成报告」按“${currentProject?.name || '全部项目'}”重新收集。`"
+    />
+
     <!-- 生成过程：扫描 / 收集中 -->
     <div v-if="state.report.phase === 'scanning' || state.report.phase === 'collecting'" class="report-results">
       <div class="phase-card">
@@ -99,7 +109,7 @@
     <el-tabs v-model="resultTab" class="result-tabs report-tabs">
       <el-tab-pane v-if="state.report.phase === 'done'" label="报告明细" name="detail">
             <el-alert
-              v-if="stale"
+              v-if="periodMismatch"
               type="warning"
               :closable="false"
               show-icon
@@ -137,6 +147,7 @@
                 </div>
               </div>
             </div>
+            <div v-else-if="scopeMismatch" class="collect-hint">项目已切换，请重新生成报告</div>
             <div v-else class="collect-hint">该时间范围内无提交记录</div>
           </el-tab-pane>
 
@@ -175,7 +186,7 @@
                   <div class="kpi-icon"><el-icon><Calendar /></el-icon></div>
                   <div class="kpi-body">
                     <div class="kpi-label">时间范围</div>
-                    <div class="kpi-value kpi-range">{{ dataRangeLabel }}</div>
+                    <div class="kpi-value kpi-range">{{ scopeMismatch ? '—' : dataRangeLabel }}</div>
                   </div>
                 </div>
               </el-col>
@@ -308,14 +319,25 @@ const dataRangeLabel = computed(() => {
   return rangeLabel.value
 })
 
-/** 展示数据是否与当前所选周期/项目不一致（rawCommits 可能来自 AI 页刷新或其它周期/项目） */
-const stale = computed(() => {
+const repoKey = (paths) => (paths || []).slice().sort().join('\n')
+
+/** 收集范围与当前项目不一致（切换了项目，或 AI 页按其它项目刷新过活动）。
+ *  此时旧数据不属于当前项目，明细/统计必须归零：显示别的项目的提交比显示空更糟。 */
+const scopeMismatch = computed(() => {
+  if (state.report.phase !== 'done' || !state.report.collectedRange) return false
+  return repoKey(state.report.collectedRange.repoPaths) !== repoKey(scopedRepos.value.map((row) => row.path))
+})
+
+/** 收集范围与当前所选周期不一致（只改了日期，数据仍属于本项目）：保留展示但禁止复制/导出 */
+const periodMismatch = computed(() => {
   if (state.report.phase !== 'done' || !state.report.collectedRange) return false
   const r = range()
   const c = state.report.collectedRange
-  const repoKey = (paths) => (paths || []).slice().sort().join('\n')
-  return c.since !== r.since || c.until !== r.until || repoKey(c.repoPaths) !== repoKey(scopedRepos.value.map((row) => row.path))
+  return c.since !== r.since || c.until !== r.until
 })
+
+/** 展示数据是否与当前所选周期/项目不一致（rawCommits 可能来自 AI 页刷新或其它周期/项目） */
+const stale = computed(() => scopeMismatch.value || periodMismatch.value)
 
 /** 一键生成：扫描（若有需要）→ 收集提交 → 展示，分阶段显示进度 */
 async function generate() {
@@ -396,6 +418,8 @@ async function doCollect() {
 }
 
 const authors = computed(() => {
+  // 项目已切换时作者分布同样属于旧数据，不能继续作为筛选依据
+  if (scopeMismatch.value) return []
   const m = new Map()
   state.report.rawCommits.forEach((c) => {
     if (!m.has(c.authorName)) m.set(c.authorName, { name: c.authorName, email: c.authorEmail, count: 0 })
@@ -415,13 +439,16 @@ function isMine(c) {
 /** 「只看本人」但没有可匹配的身份：过滤必然为空，必须显式提示而不是误报「无提交」 */
 const identitiesMissing = computed(() => !(state.config?.identities || []).length)
 
-const filteredCommits = computed(() =>
-  state.report.rawCommits.filter((c) => {
+const filteredCommits = computed(() => {
+  // 项目已切换：rawCommits 属于上一个项目，明细/KPI/图表必须一起归零；
+  // 切回原项目时 scopeMismatch 变回 false，数据自动恢复，因此无需丢弃 rawCommits
+  if (scopeMismatch.value) return []
+  return state.report.rawCommits.filter((c) => {
     if (onlyMine.value) return isMine(c)
     if (authorFilter.value.length) return authorFilter.value.includes(c.authorName)
     return true
   })
-)
+})
 
 const filteredGroups = computed(() => groupByProject(filteredCommits.value))
 const authorCount = computed(() => new Set(filteredCommits.value.map((c) => c.authorName)).size)
