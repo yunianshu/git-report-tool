@@ -517,7 +517,7 @@ defineExpose({ doRollback, resetSelection })
 .ver-options { display: flex; flex-direction: column; gap: 8px; margin-bottom: 12px; }
 .ver-options .el-radio { margin-right: 0; height: auto; }
 
-.publish-row { display: flex; align-items: center; margin-bottom: 14px; flex-wrap: wrap; }
+.publish-row { display: flex; align-items: center; margin-bottom: 14px; flex-wrap: wrap; row-gap: 10px; }
 .publish-btn { min-width: 220px; font-size: 15px; font-weight: 600; }
 
 .run-meta { display: flex; align-items: center; gap: 10px; margin-bottom: 10px; }
