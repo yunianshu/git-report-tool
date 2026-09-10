@@ -186,6 +186,7 @@ node scripts/deploy-drawer-cancel-e2e.cjs       # 部署设置抽屉取消回滚
 node scripts/deploy-copy-config-e2e.cjs         # 从其他项目复制部署配置后界面跟随更新
 node scripts/deploy-release-notes-selftest.cjs  # 发布更新内容：真实 Git 仓库采集 / 中文整理 / 打标签
 node scripts/deploy-release-notes-e2e.cjs       # 更新内容：查看 / AI 整理成大白话 / 打标签 / 无 AI 降级
+node scripts/deploy-ai-apply-e2e.cjs            # AI 部署助手「套用到部署配置」：确认后必须真的写入配置
 node scripts/fill-default-endpoints-e2e.cjs     # 一键填报默认端点
 node scripts/fill-overnight-e2e.cjs             # 跨夜加班工时
 node scripts/fill-unbind-e2e.cjs                # 解绑任务

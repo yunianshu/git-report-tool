@@ -311,6 +311,7 @@
 <script setup>
 import { computed, ref, watch } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
+import { toPlain } from '../../utils/ipc'
 
 const props = defineProps({
   modelValue: { type: Boolean, default: false },
@@ -457,8 +458,17 @@ async function apply() {
       { type: 'warning' },
     )
   } catch { return }
-  const r = await window.gitReport.deployAiApply(projectId.value, props.activeTargetId, plan)
-  if (!r || !r.ok) return ElMessage.error((r && r.error) || '套用失败')
+  // 必须转成普通对象再传：result 是 Vue 的 ref，result.plan 是响应式代理，
+  // 而代理无法跨 contextBridge（preload 里的 toPlain 根本收不到），ipcRenderer.invoke
+  // 会直接抛「An object could not be cloned.」——表现为点确定毫无反应
+  const payload = toPlain(plan)
+  if (payload === plan) return ElMessage.error('方案内容无法序列化，请重新体检后再套用')
+  try {
+    const r = await window.gitReport.deployAiApply(projectId.value, props.activeTargetId, payload)
+    if (!r || !r.ok) return ElMessage.error((r && r.error) || '套用失败')
+  } catch (e) {
+    return ElMessage.error(`套用失败：${(e && e.message) || String(e)}`)
+  }
   ElMessage.success('部署方案已写入配置')
   emit('applied')
 }
