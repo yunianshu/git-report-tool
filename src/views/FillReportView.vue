@@ -274,7 +274,7 @@
 </template>
 
 <script setup>
-import { ref, computed, onMounted } from 'vue'
+import { ref, computed, watch, onMounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../store'
 import { todayStr } from '../utils/date'
@@ -286,7 +286,11 @@ import PageHeader from '../components/PageHeader.vue'
 const emit = defineEmits(['navigate'])
 const { loadProjects } = useProjects()
 
-const selectedProjectIds = ref([])
+/** 跨视图保留：所选项目存共享状态，切换视图再回来不丢 */
+const selectedProjectIds = computed({
+  get: () => state.fillReport.selectedIds || [],
+  set: (v) => { state.fillReport.selectedIds = v || [] },
+})
 const bindings = ref({})
 const bindDialog = ref({ visible: false, projectId: '', projectName: '', taskId: null, boundTaskId: null, options: [], loading: false })
 const previewDialog = ref({ visible: false, content: '' })
@@ -388,6 +392,26 @@ function isHpExisting(item) {
   if (!p || !Array.isArray(p.hpExisting)) return false
   return p.hpExisting.some((e) => e.taskId === String(item.TaskId))
 }
+
+/**
+ * 首次进入（selectedIds 尚为 null）自动选中已绑定禅道任务的项目，免去每次手动勾选。
+ * 绑定表、项目列表、仓库扫描（repoCount 的数据源）三个都是异步就绪的，任一到位就重算；
+ * 仓库扫描较慢，ids 为空时不 stop、继续等它；组件卸载时 watch 随 setup 作用域自动停止。
+ */
+const stopDefaultSelection = watch(
+  [bindings, () => state.projects.items, () => state.discoveredRepos],
+  () => {
+    if (state.fillReport.selectedIds !== null) { stopDefaultSelection(); return }
+    if (!state.projects.items.length) return
+    const ids = fillableProjects.value
+      .filter((p) => p.repoCount > 0 && bindings.value[p.id])
+      .map((p) => p.id)
+    if (!ids.length) return
+    state.fillReport.selectedIds = ids
+    stopDefaultSelection()
+  },
+  { immediate: true },
+)
 
 onMounted(async () => {
   loadProjects()

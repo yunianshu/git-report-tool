@@ -87,6 +87,7 @@ export const state = reactive({
     date: '', // 填报日期 YYYY-MM-DD
     startTime: '', // 实际上班时间 HH:MM（空则用设置页默认）
     endTime: '', // 下班/加班结束时间 HH:MM（空则取点击生成报告的时刻；早于上班时间按次日跨夜）
+    selectedIds: null, // 所选填报项目 id 数组；null=尚未选择过（首次进入按已绑定项目自动选中）
     running: false, // 生成/提交进行中
     submitting: false,
   },
