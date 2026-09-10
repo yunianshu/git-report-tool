@@ -402,6 +402,16 @@ function cancelEdit() {
   emit('update:modelValue', false)
 }
 
+/**
+ * 重置取消快照为当前表单。父级在「已落盘」的操作（如从其他项目复制）之后调用：
+ * 这些改动已写入磁盘、不可撤销，若用户随后点「取消」把界面回滚到改动前，
+ * 就会出现「磁盘已变、界面没变」的假象（并且后续发布会用回滚后的旧配置）。
+ */
+function rebaseline() {
+  openSnapshot = JSON.parse(JSON.stringify(props.form))
+}
+defineExpose({ rebaseline })
+
 // ─── 部署目标（多环境）管理 ───
 async function addTarget() {
   const t = emptyTarget()

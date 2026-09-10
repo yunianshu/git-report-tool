@@ -45,6 +45,7 @@
     </el-card>
 
     <DeployConfigDrawer
+      ref="configDrawerRef"
       v-model="configOpen"
       v-model:active-target-id="activeTargetId"
       :form="form"
@@ -93,6 +94,7 @@ const { currentProject, loadProjects: loadSharedProjects } = useProjects()
 
 const form = reactive(emptyProject())
 const configOpen = ref(false)
+const configDrawerRef = ref(null)
 const activeTargetId = ref('')
 const detected = ref({ version: '', source: '' })
 const testing = ref(false)
@@ -147,7 +149,10 @@ const publishVersion = computed(() => {
 // ─── 数据加载 ───
 async function loadProjects() {
   try {
-    if (!state.projects.items.length) await loadSharedProjects()
+    // 磁盘是唯一真源：复制配置、删除项目、保存都直接改 deploy-projects.json，
+    // 这里必须重新拉取。曾因「state.projects.items 非空就跳过拉取」而复用改动前的缓存，
+    // 表现为「复制项目配置后界面毫无变化」——环境列表与服务器卡片都停在旧数据上。
+    await loadSharedProjects()
     state.deploy.projects = state.projects.items
   } catch { state.deploy.projects = [] }
   state.deploy.currentProjectId = state.projects.currentId
@@ -229,21 +234,26 @@ function newProject() {
 
 /** 从源项目整套复制部署配置（主进程含凭据复制），完成后刷新表单并选中新追加的第一个环境 */
 async function onCopyConfig(fromProjectId) {
-  const prevTargetCount = form.targets.length
+  // 复制前已存在的环境 id：复制后据此找出新追加的环境。
+  // 不能用下标（prevTargetCount）判定——抽屉里可能有尚未保存的新增环境，下标会对不上
+  const knownIds = new Set(form.targets.map((t) => t.id))
   try {
     const r = await window.gitReport.deployProjectsCopyConfig({ fromProjectId, toProjectId: form.id })
     if (!r || !r.ok) return ElMessage.error((r && r.error) || '复制失败')
+    // 复制改的是磁盘：loadProjects 必须重新拉取列表并回填，否则界面停在复制前
     await loadProjects()
     const p = state.deploy.projects.find((x) => x.id === form.id)
     if (p) {
       fillForm(p)
       state.deploy.currentProjectId = form.id
-      const firstNew = form.targets[prevTargetCount]
+      const firstNew = form.targets.find((t) => !knownIds.has(t.id))
       if (firstNew) activeTargetId.value = firstNew.id
     }
     connResult.value = null
     runPanelRef.value?.resetSelection()
     state.deploy.currentVersion = ''
+    // 复制已落盘不可撤销：重置抽屉的取消快照，避免用户接着点「取消」把界面回滚成复制前
+    configDrawerRef.value?.rebaseline()
     ElMessage.success(`已复制 ${r.copiedTargets} 个环境的部署配置`)
   } catch (e) {
     ElMessage.error(e.message || String(e))

@@ -164,6 +164,7 @@ node scripts/deploy-online-version-e2e.cjs      # 线上版本三级回退
 node scripts/deploy-run-timing-e2e.cjs          # 发布计时展示
 node scripts/deploy-import-secret-e2e.cjs       # 数据同步导入凭据
 node scripts/deploy-drawer-cancel-e2e.cjs       # 部署设置抽屉取消回滚
+node scripts/deploy-copy-config-e2e.cjs         # 从其他项目复制部署配置后界面跟随更新
 node scripts/fill-default-endpoints-e2e.cjs     # 一键填报默认端点
 node scripts/fill-overnight-e2e.cjs             # 跨夜加班工时
 node scripts/fill-unbind-e2e.cjs                # 解绑任务
