@@ -45,6 +45,8 @@ const DEFAULTS = {
     port: 3080,       // 期望端口；被占用时自动改用系统分配的空闲端口
     autoStart: true,  // 随应用启动自动开启
   },
+  // 关闭窗口行为：ask=每次询问（默认按钮是最小化到托盘）/ minimize=直接最小化 / quit=直接退出
+  closeAction: 'ask',
 }
 
 /** 从 AI 配置对象解密出明文 Key（keyEnc 优先，兼容旧版明文 apiKey） */
@@ -96,6 +98,8 @@ function load() {
     cfg.hanprint.pwdMasked = hpPwd ? maskKey(hpPwd) : ''
     delete cfg.hanprint.pwdEnc
     cfg.harness = { ...DEFAULTS.harness, ...(cfg.harness || {}) }
+    // 关闭行为偏好：历史配置缺失或脏值回落「每次询问」
+    if (!['ask', 'minimize', 'quit'].includes(cfg.closeAction)) cfg.closeAction = DEFAULTS.closeAction
     return cfg
   } catch {
     return {

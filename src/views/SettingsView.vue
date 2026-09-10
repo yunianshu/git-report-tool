@@ -351,6 +351,20 @@
         <div><dt>平台</dt><dd>Windows / macOS / Linux</dd></div>
         <div><dt>数据方式</dt><dd>本地优先</dd></div>
       </dl>
+      <div class="close-behavior">
+        <div class="cb-head">
+          <strong>窗口关闭行为</strong>
+          <span>点击窗口右上角关闭按钮（×）时：</span>
+        </div>
+        <el-segmented
+          :model-value="closeAction"
+          :options="CLOSE_ACTION_OPTIONS"
+          @update:model-value="saveCloseAction"
+        />
+        <p class="field-hint">
+          最小化后程序会继续在后台运行（含内置 Harness 服务），可从系统托盘图标重新打开窗口或彻底退出；此状态下再次启动程序会直接唤起已有窗口。关闭时的询问框里勾选「记住我的选择」也会更新此处设置。
+        </p>
+      </div>
     </section>
   </div>
 </template>
@@ -375,6 +389,26 @@ const { loadProjects } = useProjects()
 
 /** 由 vite define 从 package.json 注入（见 vite.config.js） */
 const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : '—'
+
+// ---------- 窗口关闭行为（主进程 close 拦截读取同一 closeAction 配置） ----------
+const CLOSE_ACTION_OPTIONS = [
+  { label: '每次询问', value: 'ask' },
+  { label: '最小化到托盘', value: 'minimize' },
+  { label: '直接退出', value: 'quit' },
+]
+const closeAction = computed(() =>
+  (['ask', 'minimize', 'quit'].includes(state.config.closeAction) ? state.config.closeAction : 'ask'))
+/** 立即保存关闭行为（独立于各节底部的「保存配置」按钮，改动即生效） */
+async function saveCloseAction(value) {
+  state.config.closeAction = value
+  try {
+    const r = await window.gitReport.configSave(toPlain(state.config))
+    if (r && r.ok === false) ElMessage.error(r.error || '关闭行为保存失败')
+    else ElMessage.success('关闭行为已保存')
+  } catch (e) {
+    ElMessage.error(`关闭行为保存失败：${(e && e.message) || e}`)
+  }
+}
 
 const SETTING_SECTIONS = [
   { label: 'AI 服务', value: 'ai' },

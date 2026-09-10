@@ -889,6 +889,11 @@ body {
 .settings-about { max-width: 760px; padding: 28px; }
 .settings-about h2 { margin: 4px 0 8px; }
 .settings-about > p { color: var(--text-muted); line-height: 1.7; }
+.close-behavior { margin: 22px 0 0; padding-top: 18px; border-top: 1px solid var(--line); }
+.close-behavior .cb-head { display: flex; align-items: baseline; gap: 10px; margin-bottom: 12px; }
+.close-behavior .cb-head strong { color: #343c47; font-size: 13px; }
+.close-behavior .cb-head span { color: #8b929d; font-size: 12px; }
+.close-behavior .field-hint { max-width: 620px; }
 
 /* 控件与可访问性 */
 button, [role='button'], .el-button, .el-menu-item { -webkit-tap-highlight-color: transparent; }

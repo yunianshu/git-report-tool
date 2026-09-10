@@ -1,7 +1,7 @@
 /**
  * 主进程入口
  */
-const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, webContents } = require('electron')
+const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, webContents, Tray, nativeImage } = require('electron')
 const path = require('path')
 const fs = require('fs')
 const gitService = require('./git-service')
@@ -61,6 +61,91 @@ if (!process.env.PROJECT_MANAGER_USER_DATA) {
 
 let mainWindow
 
+// 关闭行为（最小化到托盘）配套单实例锁：进程常驻托盘后再次启动应唤起已有窗口，
+// 而不是双开第二个实例（冒烟自动化同样参与抢锁，保持与真实运行一致的行为）。
+const gotSingleLock = app.requestSingleInstanceLock()
+if (!gotSingleLock) {
+  app.quit()
+} else {
+  // 已有实例常驻（含最小化到托盘）时，再次启动直接唤起已有窗口
+  app.on('second-instance', () => showMainWindow())
+}
+
+/** 真正退出中（托盘退出 / 关闭对话框选退出 / app.quit）：close 事件直接放行 */
+let isQuitting = false
+/** 系托盘实例（关闭最小化后窗口的唯一常驻入口） */
+let tray = null
+
+/** 显示并聚焦主窗口（托盘双击 / 菜单 / 二次启动唤起） */
+function showMainWindow() {
+  if (!mainWindow || mainWindow.isDestroyed()) return
+  if (mainWindow.isMinimized()) mainWindow.restore()
+  mainWindow.show()
+  mainWindow.focus()
+  if (process.env.SMOKE_EXIT_MS) console.log('[SMOKE][win-shown]')
+}
+
+/** 隐藏窗口到托盘（关闭行为的默认动作；程序继续后台运行） */
+function hideToTray() {
+  mainWindow.hide()
+  if (process.env.SMOKE_EXIT_MS) console.log('[SMOKE][win-hidden]')
+}
+
+/** 关闭窗口前询问用户：默认最小化到托盘（程序继续后台运行），可选直接退出（close 事件已 preventDefault） */
+function askOnClose() {
+  // 冒烟钩子：自动化里无法点原生对话框，SMOKE_CLOSE_CHOICE 直接代入选择
+  const autoChoice = process.env.SMOKE_CLOSE_CHOICE
+  if (autoChoice === 'minimize' || autoChoice === 'quit') {
+    console.log('[SMOKE][close-choice]', autoChoice)
+    if (autoChoice === 'minimize') hideToTray()
+    else { isQuitting = true; app.quit() }
+    return
+  }
+  dialog.showMessageBox(mainWindow, {
+    type: 'question',
+    title: '关闭窗口',
+    message: '要关闭「开发项目管理」吗？',
+    detail: '最小化后程序会继续在后台运行（包括内置 Harness 服务），可随时从系统托盘图标重新打开窗口或彻底退出。',
+    buttons: ['最小化到托盘', '退出程序', '取消'],
+    defaultId: 0, // 默认最小化：不杀死程序
+    cancelId: 2,
+    checkboxLabel: '记住我的选择，下次不再询问',
+    noLink: true,
+  }).then(({ response, checkboxChecked }) => {
+    if (response === 2 || response == null) return // 取消：窗口保留原状
+    if (checkboxChecked) {
+      const cfg = store.load()
+      cfg.closeAction = response === 0 ? 'minimize' : 'quit'
+      if (store.save(cfg) !== true) console.error('[close] 关闭行为偏好写入失败（下次仍会询问）')
+    }
+    if (response === 0) hideToTray()
+    else { isQuitting = true; app.quit() }
+  }).catch(() => { /* 对话框异常时保留窗口，不打断用户 */ })
+}
+
+/** 创建系统托盘：最小化到托盘后的常驻入口（显示窗口 / 退出） */
+function createTray() {
+  const iconPath = app.isPackaged
+    ? path.join(process.resourcesPath, 'tray-icon.png')
+    : path.join(__dirname, '../build/icon.png')
+  try {
+    const image = nativeImage.createFromPath(iconPath).resize({ width: 16, height: 16 })
+    if (image.isEmpty()) throw new Error(`托盘图标为空：${iconPath}`)
+    tray = new Tray(image)
+    tray.setToolTip('开发项目管理（后台运行中）')
+    tray.setContextMenu(Menu.buildFromTemplate([
+      { label: '显示主窗口', click: () => showMainWindow() },
+      { type: 'separator' },
+      { label: '退出程序', click: () => { isQuitting = true; app.quit() } },
+    ]))
+    // Windows 习惯：双击托盘图标直接唤起窗口
+    tray.on('double-click', () => showMainWindow())
+  } catch (e) {
+    // Linux 无托盘支持等场景：不创建托盘，二次启动实例仍可通过单实例锁唤起窗口
+    console.error('[tray] 托盘创建失败（最小化功能仍可用）', e.message)
+  }
+}
+
 /** 向主窗口广播事件（预热等主进程主动任务无 sender，统一走此通道） */
 function broadcast(channel, payload) {
   const wc = mainWindow && !mainWindow.isDestroyed() ? mainWindow.webContents : null
@@ -93,6 +178,20 @@ function createWindow() {
   // 最大化状态同步给渲染层（自定义标题栏按钮图标切换）
   mainWindow.on('maximize', () => broadcast('win:maximized', true))
   mainWindow.on('unmaximize', () => broadcast('win:maximized', false))
+
+  // 关闭行为拦截：ask（默认，弹询问框）/ minimize（直接最小化到托盘）/ quit（直接退出）；
+  // 真正退出（托盘退出 / 询问框选退出 / app.quit）时 isQuitting 已置位，直接放行
+  mainWindow.on('close', (event) => {
+    if (isQuitting) return
+    const action = store.load().closeAction
+    if (action === 'quit') return
+    event.preventDefault()
+    if (action === 'minimize') {
+      hideToTray()
+      return
+    }
+    askOnClose()
+  })
 
   // 沉浸全屏（Harness 内嵌页铺满整屏）：窗口全屏状态是唯一真源，渲染层据此隐藏应用外壳
   mainWindow.on('enter-full-screen', () => broadcast('win:fullscreen', true))
@@ -541,10 +640,13 @@ function registerIpc() {
 }
 
 app.whenReady().then(() => {
+  // 抢锁失败的第二实例已在上方 app.quit()，不再初始化任何窗口/服务
+  if (!gotSingleLock) return
   // 移除默认应用菜单栏（File/Edit/View/Window/Help）
   Menu.setApplicationMenu(null)
   registerIpc()
   createWindow()
+  createTray() // 托盘常驻入口：窗口最小化到托盘后从这里恢复/退出
   // 启动即后台预热（扫描 + 预收集今天），用户点生成时近乎秒出
   warmupPipeline()
   // 内置 DeepSeek Harness：启动应用即拉起本地 dsh web 服务。
@@ -650,7 +752,9 @@ app.whenReady().then(() => {
     setTimeout(() => app.quit(), Number(process.env.SMOKE_EXIT_MS) || 8000)
   }
   app.on('activate', () => {
+    // macOS Dock 点击：窗口在（可能被最小化到托盘）则唤起，没有则新建
     if (BrowserWindow.getAllWindows().length === 0) createWindow()
+    else showMainWindow()
   })
 })
 
@@ -659,6 +763,7 @@ app.on('window-all-closed', () => {
 })
 
 // 关闭软件即关闭内置 Harness 服务（stop 为同步的进程树终止，可安全用于退出钩子）
-app.on('before-quit', () => { harnessService.stop() })
+// before-quit 同时置 isQuitting：此后各窗口的 close 事件直接放行，不再弹询问框
+app.on('before-quit', () => { isQuitting = true; harnessService.stop() })
 app.on('will-quit', () => { harnessService.stop() })
 process.on('exit', () => { harnessService.stop() })
