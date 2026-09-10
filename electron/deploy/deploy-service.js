@@ -12,6 +12,7 @@ const ssh = require('./ssh-service')
 const packager = require('./packager')
 const projects = require('./deploy-projects')
 const history = require('./history')
+const releaseNotes = require('./release-notes')
 const store = require('../store')
 const { detectVersion, bumpVersionFiles } = require('./version-detector')
 
@@ -498,6 +499,11 @@ async function run(projectId, targetId) {
     record.durationMs = record.finishedAt - record.startedAt
     record.logFile = history.writeLog(runId, logBuf.join('\n'))
     history.add(record)
+    // 发布成功且采集到提交：后台整理成通俗中文更新说明（AI 优先、失败退回本地整理），
+    // 生成后再通知渲染层刷新历史；不阻塞发布完成事件
+    if (status === 'success' && Array.isArray(record.gitCommits) && record.gitCommits.length) {
+      releaseNotes.enrichRecord(record.id, () => emit('deploy:history:updated', { id: record.id }))
+    }
     activeRun = null
     emit('deploy:done', { record: JSON.parse(JSON.stringify(record)) })
     return JSON.parse(JSON.stringify(record))
@@ -514,6 +520,14 @@ async function run(projectId, targetId) {
     const t0 = Date.now()
     const ver = resolveVersion(project)
     record.version = ver.version
+    // 更新内容：采集本次发布包含的 Git 提交（非仓库/无提交时静默跳过，绝不因此中断发布）
+    const anchor = releaseNotes.anchorFromRecords(history.list(project.id), project.id)
+    const gitInfo = await releaseNotes.captureFor(project, { anchor, version: ver.version })
+    if (gitInfo.ok) {
+      Object.assign(record, gitInfo.fields)
+      const scope = gitInfo.info.anchorLabel || ''
+      log('info', `本次更新内容：${gitInfo.info.commits.length} 条提交${scope ? `（${scope}）` : ''}`)
+    }
     const mode = deployModeOf(project)
     const problems = preCheckLocal(project, target, ver.version)
     if (mode === 'docker') {

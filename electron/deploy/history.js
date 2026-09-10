@@ -65,6 +65,13 @@ function add(record) {
   return record
 }
 
+/** 按 id 取单条记录（不存在返回 null） */
+function get(recordId) {
+  const id = String(recordId || '')
+  if (!id) return null
+  return loadAll().find((r) => r && r.id === id) || null
+}
+
 function update(recordId, patch) {
   const records = loadAll()
   const idx = records.findIndex((r) => r.id === recordId)
@@ -98,4 +105,4 @@ function clear(projectId) {
   return { ok: true }
 }
 
-module.exports = { list, add, update, writeLog, readLog, clear }
+module.exports = { list, add, get, update, writeLog, readLog, clear }

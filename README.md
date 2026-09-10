@@ -104,6 +104,7 @@
 - **安全防护**：发布锁防并发、防重复点击、上传包校验、健康检查失败/连接中断自动回滚
 - **健康检查**：HTTP 探测（如 `/actuator/health`），未配置时检查容器运行状态；可选 PostgreSQL / MySQL 数据库备份
 - **发布历史与回滚**：记录每次发布（状态/耗时/失败原因/完整日志），支持从历史版本一键回滚
+- **本次更新内容**：发布时自动读取项目 Git 提交（起点取上一次成功发布，没有记录时取最近的标签，都没有则收录最近若干条），发布成功后由 AI 整理成「全部中文、不带专业词汇」的大白话说明；AI 不可用或结果里混进英文时退回本地整理。历史中「查看」可看说明与原始提交记录，也能为这个版本打 Git 标签（标签名默认 v+版本号，同名不覆盖）
 - **数据库备份恢复**：开启「发布前备份数据库」的项目，发布页可查看服务器上的全部 pg_dump 备份并一键恢复——恢复前自动保底备份当前库（失败即中止），随后杀连接重建空库、灌入选中备份（出错即停）、重启同 Compose 项目容器；恢复记录（类型「数据恢复」）与完整日志进入发布历史
 - **凭据安全**：SSH 密码/私钥口令经 safeStorage 加密落盘，明文不保存、不出主进程
 
@@ -183,6 +184,8 @@ node scripts/deploy-run-timing-e2e.cjs          # 发布计时展示
 node scripts/deploy-import-secret-e2e.cjs       # 数据同步导入凭据
 node scripts/deploy-drawer-cancel-e2e.cjs       # 部署设置抽屉取消回滚
 node scripts/deploy-copy-config-e2e.cjs         # 从其他项目复制部署配置后界面跟随更新
+node scripts/deploy-release-notes-selftest.cjs  # 发布更新内容：真实 Git 仓库采集 / 中文整理 / 打标签
+node scripts/deploy-release-notes-e2e.cjs       # 更新内容：查看 / AI 整理成大白话 / 打标签 / 无 AI 降级
 node scripts/fill-default-endpoints-e2e.cjs     # 一键填报默认端点
 node scripts/fill-overnight-e2e.cjs             # 跨夜加班工时
 node scripts/fill-unbind-e2e.cjs                # 解绑任务
@@ -230,6 +233,7 @@ npm run build:linux     # Linux（AppImage + deb）
 │       ├── packager.js          #   ZIP 打包 + 忽略规则 + SHA256
 │       ├── version-detector.js  #   版本号识别
 │       ├── history.js           #   发布历史
+│       ├── release-notes.js     #   更新内容（Git 提交 → 通俗中文说明 / 打标签）
 │       └── scripts/deploy.sh    #   服务器端部署脚本
 ├── src/                   # 渲染进程（Vue 3）
 │   ├── views/             #   工作台 / 项目 / AI 助手 / DeepSeek Harness / 活动报告 / 一键填报 / 部署 / 扩展管理 / 设置
@@ -244,7 +248,7 @@ npm run build:linux     # Linux（AppImage + deb）
 - 项目数据与配置保存在 `userData/config.json`、`userData/deploy-projects.json`（兼容旧部署项目数据）
 - 一键填报的项目-禅道任务绑定保存在 `userData/fill-bindings.json`
 - 内置 Harness 服务的进程记录保存在 `userData/harness.json`（用于清理异常退出遗留的服务进程）
-- 发布历史保存在 `userData/deploy-history.json`（完整日志在 `userData/deploy-logs/`）
+- 发布历史保存在 `userData/deploy-history.json`（完整日志在 `userData/deploy-logs/`）；每条发布记录同时保存本次采集到的 Git 提交号、采集范围、提交列表与更新说明
 - API Key、SSH 凭据与禅道/汉印密码经 safeStorage 加密落盘
 
 ## 说明

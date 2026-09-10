@@ -36,6 +36,14 @@
           <el-tag size="small" :type="statusType(row.status)">{{ statusText(row.status) }}</el-tag>
         </template>
       </el-table-column>
+      <el-table-column label="更新内容" width="110">
+        <template #default="{ row }">
+          <el-button v-if="hasChanges(row)" text size="small" type="primary" @click="openChanges(row)">
+            查看<span v-if="changeCount(row)" class="change-count">（{{ changeCount(row) }}）</span>
+          </el-button>
+          <span v-else class="muted">—</span>
+        </template>
+      </el-table-column>
       <el-table-column prop="message" label="说明" show-overflow-tooltip />
       <el-table-column label="操作" width="130" fixed="right">
         <template #default="{ row }">
@@ -53,11 +61,51 @@
   <el-dialog v-model="logDialog" title="部署日志" width="860px" top="6vh">
     <pre class="dialog-log">{{ dialogLog || '（无日志内容）' }}</pre>
   </el-dialog>
+
+  <!-- 本次更新内容：提交记录 → 通俗中文说明 -->
+  <el-dialog v-model="changeDialog" title="本次更新内容" width="720px" top="8vh">
+    <div v-if="changeRow" class="change-body">
+      <div class="change-head">
+        <span class="mono change-version">{{ changeRow.version || '未标版本' }}</span>
+        <span class="change-time">{{ fmtTime(changeRow.startedAt) }}</span>
+        <el-tag size="small" type="info" effect="plain">{{ changeRow.targetName || '默认环境' }}</el-tag>
+        <el-tag v-if="changeRow.changeSummarySource === 'ai'" size="small" type="success" effect="plain">已用 AI 整理成大白话</el-tag>
+        <el-tag v-else-if="changeRow.changeSummary" size="small" effect="plain">本地自动整理</el-tag>
+      </div>
+      <div v-if="changeRow.gitAnchor" class="change-scope">收录范围：{{ changeRow.gitAnchor }}</div>
+
+      <pre class="change-summary">{{ changeRow.changeSummary || '（还没有生成更新说明）' }}</pre>
+
+      <div class="change-actions">
+        <el-button size="small" :loading="summarizing" @click="regenerate">用 AI 重新整理成大白话</el-button>
+        <template v-if="changeRow.gitHead">
+          <el-input v-model="tagName" size="small" class="tag-input" placeholder="标签名" />
+          <el-button size="small" :loading="tagging" @click="doTag">打标签</el-button>
+        </template>
+      </div>
+      <div v-if="changeRow.gitHead" class="change-meta mono">
+        本次提交 {{ String(changeRow.gitHead).slice(0, 8) }}{{ changeRow.gitTag ? ` · 已打标签 ${changeRow.gitTag}` : '' }}
+      </div>
+
+      <el-collapse v-if="commitsOfChange.length" class="change-commits">
+        <el-collapse-item :title="`原始提交记录（${commitsOfChange.length} 条）`">
+          <div v-for="c in commitsOfChange" :key="c.hash" class="commit-row">
+            <span class="mono commit-hash">{{ String(c.hash || '').slice(0, 8) }}</span>
+            <span class="commit-date">{{ c.date }}</span>
+            <span class="commit-subject">{{ c.subject }}</span>
+          </div>
+        </el-collapse-item>
+      </el-collapse>
+      <div v-else class="change-empty">
+        这次发布没有采集到提交记录。项目目录不是 Git 仓库，或发布的是已经打好的成品包时，就没有可用的更新内容。
+      </div>
+    </div>
+  </el-dialog>
 </template>
 
 <script setup>
-import { ref, watch } from 'vue'
-import { ElMessageBox } from 'element-plus'
+import { ref, computed, watch, onMounted, onUnmounted } from 'vue'
+import { ElMessage, ElMessageBox } from 'element-plus'
 import { state } from '../../store'
 import { fmtTime, fmtDur } from './deploy-form'
 
@@ -70,6 +118,34 @@ const emit = defineEmits(['rollback'])
 const history = ref([])
 const logDialog = ref(false)
 const dialogLog = ref('')
+const changeDialog = ref(false)
+const changeRecordId = ref('')
+const summarizing = ref(false)
+const tagging = ref(false)
+const tagName = ref('')
+let offHistoryUpdated = null
+
+/** 弹窗当前展示的记录：从表格数据里取，生成总结/打标签后 reload 即自动刷新 */
+const changeRow = computed(() => history.value.find((r) => r.id === changeRecordId.value) || null)
+const commitsOfChange = computed(() => {
+  const rows = (changeRow.value && changeRow.value.gitCommits) || []
+  return Array.isArray(rows) ? rows : []
+})
+
+function hasChanges(row) {
+  return !!(row && (row.changeSummary || (Array.isArray(row.gitCommits) && row.gitCommits.length)))
+}
+function changeCount(row) {
+  const n = Array.isArray(row && row.gitCommits) ? row.gitCommits.length : 0
+  return n || 0
+}
+
+function openChanges(row) {
+  changeRecordId.value = row.id
+  const v = String(row.version || '').trim().replace(/^v/i, '')
+  tagName.value = v && /^[\w.+-]+$/.test(v) ? `v${v}` : ''
+  changeDialog.value = true
+}
 
 // ─── 历史 ───
 // 过期响应防护：快速连续切换项目时，先发请求可能后回，落表前校验项目未再变化
@@ -87,9 +163,48 @@ async function loadHistory() {
 // 因此数据加载统一由本 watch 驱动（immediate 覆盖首载，此时 projectId 可能为空=查全部）
 watch(() => props.projectId, () => { loadHistory() }, { immediate: true })
 
+// 发布成功后主进程在后台整理更新内容，完成后推送刷新（弹窗打开时也随之更新）
+onMounted(() => {
+  offHistoryUpdated = window.gitReport.onDeployHistoryUpdated(() => loadHistory())
+})
+onUnmounted(() => { if (offHistoryUpdated) offHistoryUpdated() })
+
 async function viewLog(row) {
   dialogLog.value = await window.gitReport.deployHistoryReadLog(row.logFile) || ''
   logDialog.value = true
+}
+
+async function regenerate() {
+  if (!changeRow.value) return
+  summarizing.value = true
+  try {
+    const r = await window.gitReport.deployHistorySummarize(changeRow.value.id, true)
+    if (!r || !r.ok) {
+      ElMessage.warning((r && r.error) || '整理失败')
+      return
+    }
+    await loadHistory()
+    if (r.source === 'ai') ElMessage.success('已重新整理成大白话')
+    else ElMessage.warning(r.error || 'AI 暂时用不了，已保留本地整理的说明')
+  } finally {
+    summarizing.value = false
+  }
+}
+
+async function doTag() {
+  if (!changeRow.value) return
+  tagging.value = true
+  try {
+    const r = await window.gitReport.deployHistoryTag(changeRow.value.id, tagName.value)
+    if (!r || !r.ok) {
+      ElMessage.error((r && r.error) || '打标签失败')
+      return
+    }
+    await loadHistory()
+    ElMessage.success(r.existed ? `标签 ${r.tag} 已经存在，未做改动` : `已打上标签 ${r.tag}`)
+  } finally {
+    tagging.value = false
+  }
 }
 
 async function clearHistory() {
@@ -119,6 +234,8 @@ defineExpose({ reload: loadHistory })
 
 <style scoped>
 .cur-tag { margin-left: 6px; }
+.muted { color: var(--el-text-color-placeholder); }
+.change-count { margin-left: 2px; }
 .dialog-log {
   background: #14181f;
   color: #b8c0ca;
@@ -133,4 +250,29 @@ defineExpose({ reload: loadHistory })
   word-break: break-all;
   margin: 0;
 }
+.change-body { display: flex; flex-direction: column; gap: 10px; }
+.change-head { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.change-version { font-weight: 600; }
+.change-time { color: var(--el-text-color-secondary); font-size: 12.5px; }
+.change-scope { color: var(--el-text-color-secondary); font-size: 12.5px; }
+.change-summary {
+  margin: 0;
+  padding: 12px 14px;
+  background: var(--el-fill-color-light);
+  border-radius: 8px;
+  white-space: pre-wrap;
+  word-break: break-word;
+  line-height: 1.8;
+  font-size: 13.5px;
+  max-height: 34vh;
+  overflow: auto;
+}
+.change-actions { display: flex; align-items: center; gap: 8px; flex-wrap: wrap; }
+.tag-input { width: 150px; }
+.change-meta { color: var(--el-text-color-secondary); font-size: 12px; }
+.commit-row { display: flex; gap: 8px; padding: 3px 0; font-size: 12.5px; align-items: baseline; }
+.commit-hash { color: var(--el-text-color-secondary); flex: none; }
+.commit-date { color: var(--el-text-color-secondary); flex: none; }
+.commit-subject { flex: 1; word-break: break-word; }
+.change-empty { color: var(--el-text-color-secondary); font-size: 12.5px; }
 </style>

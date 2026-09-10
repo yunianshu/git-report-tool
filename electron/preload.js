@@ -114,6 +114,10 @@ contextBridge.exposeInMainWorld('gitReport', {
   deployHistoryList: (projectId) => ipcRenderer.invoke('deploy:history:list', projectId),
   deployHistoryReadLog: (logFile) => ipcRenderer.invoke('deploy:history:readLog', logFile),
   deployHistoryClear: (projectId) => ipcRenderer.invoke('deploy:history:clear', projectId),
+  // 更新内容：生成/重算通俗中文说明；为某次发布打 Git 标签
+  deployHistorySummarize: (recordId, refresh) =>
+    ipcRenderer.invoke('deploy:history:summarize', { recordId, refresh: refresh === true }),
+  deployHistoryTag: (recordId, tag) => ipcRenderer.invoke('deploy:history:tag', { recordId, tag }),
   // 数据库备份（列表 / 一键恢复）
   deployDbBackups: (projectId, targetId) =>
     ipcRenderer.invoke('deploy:dbBackups', { projectId, targetId }),
@@ -133,6 +137,8 @@ contextBridge.exposeInMainWorld('gitReport', {
   onDeployStage: (cb) => subscribe('deploy:stage', cb),
   onDeployProgress: (cb) => subscribe('deploy:progress', cb),
   onDeployDone: (cb) => subscribe('deploy:done', cb),
+  // 发布历史的更新内容在后台整理完成后推送，界面据此刷新
+  onDeployHistoryUpdated: (cb) => subscribe('deploy:history:updated', cb),
   // ─── 一键填报模块（Git 提交 → 工时计划 → 禅道任务工时） ───
   fillPlan: (payload) => ipcRenderer.invoke('fill:plan', toPlain(payload)),
   fillSubmit: (payload) => ipcRenderer.invoke('fill:submit', toPlain(payload)),

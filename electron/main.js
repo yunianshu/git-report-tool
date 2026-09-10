@@ -15,6 +15,7 @@ const localDebugService = require('./local-debug-service')
 const deployService = require('./deploy/deploy-service')
 const deployProjects = require('./deploy/deploy-projects')
 const deployHistory = require('./deploy/history')
+const releaseNotes = require('./deploy/release-notes')
 const aiDeploy = require('./deploy/ai-deploy')
 const fillService = require('./fill-service')
 const zentaoService = require('./zentao-service')
@@ -618,6 +619,31 @@ function registerIpc() {
   ipcMain.handle('deploy:history:list', (_e, projectId) => deployHistory.list(projectId))
   ipcMain.handle('deploy:history:readLog', (_e, logFile) => deployHistory.readLog(logFile))
   ipcMain.handle('deploy:history:clear', (_e, projectId) => deployHistory.clear(projectId))
+  // 更新内容：按提交记录生成通俗中文说明（AI 优先、失败退回本地整理）
+  ipcMain.handle('deploy:history:summarize', async (_e, { recordId, refresh } = {}) => {
+    try {
+      return await releaseNotes.summarizeRecord(recordId, { refresh: refresh === true })
+    } catch (err) {
+      return { ok: false, summary: '', source: '', error: (err && err.message) || String(err) }
+    }
+  })
+  // 给某次发布打 Git 标签（标签名默认 v+版本号；已存在同名标签时如实返回 existed，不覆盖）
+  ipcMain.handle('deploy:history:tag', async (_e, { recordId, tag } = {}) => {
+    try {
+      const record = deployHistory.get(recordId)
+      if (!record) return { ok: false, error: '发布记录不存在' }
+      const project = deployProjects.list().find((p) => p.id === record.projectId)
+      if (!project) return { ok: false, error: '项目配置不存在，无法定位本地仓库' }
+      const name = String(tag || '').trim() || releaseNotes.defaultTagName(record.version)
+      if (!name) return { ok: false, error: '版本号为空，无法自动生成标签名，请手动填写' }
+      const r = await releaseNotes.createTag(project.localPath, name, record.gitHead)
+      // 打标签成功后把标签写回历史：下一次发布可直接以该标签为采集起点，界面也据此显示
+      if (r && r.ok) deployHistory.update(recordId, { gitTag: r.tag })
+      return r
+    } catch (err) {
+      return { ok: false, error: (err && err.message) || String(err) }
+    }
+  })
   // 数据库备份：列出服务器 backups/ 下的 pg_dump 备份并支持一键恢复
   ipcMain.handle('deploy:dbBackups', async (_e, { projectId, targetId }) => {
     try {
