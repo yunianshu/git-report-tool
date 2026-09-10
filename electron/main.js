@@ -675,7 +675,8 @@ function registerIpc() {
     } catch (err) {
       return { ok: false, error: (err && err.message) || String(err) }
     }
-  })  ipcMain.handle('deploy:ai:apply', (_e, { projectId, targetId, plan }) => {
+  })
+  ipcMain.handle('deploy:ai:apply', (_e, { projectId, targetId, plan }) => {
     try {
       return aiDeploy.applyPlan(projectId, targetId, plan)
     } catch (err) {
