@@ -14,7 +14,7 @@
 
 ## 工作台
 
-进入应用后的默认页面：展示真实的项目数量、当前项目资料完整度、Git 活动状态、部署状态和最近操作，并提供「创建项目 / 询问 AI / 生成报告 / 打开部署」快捷入口。只展示真实数据，不编造指标。启动后台扫描（预热）实时可见：「Git 活动源」卡片随扫描动态计数，并显示扫描进度（已检查目录数）与今日活动加载进度（x/y），完成后恢复为入口态。
+进入应用后的默认页面：展示真实的项目数量、当前项目资料完整度、Git 活动状态、部署状态和最近操作，并提供「创建项目 / 询问 AI / 生成报告 / 打开部署」快捷入口。只展示真实数据，不编造指标。启动后台扫描（预热）实时可见：「Git 活动源」卡片随扫描动态计数，并显示扫描进度（已检查目录数）与今日活动加载进度（x/y），完成后恢复为入口态。预热在首帧绘制完成、进入工作台之后才启动，且整个扫描与收集都在独立工作进程内执行（`electron/git-worker.js`），不与首屏渲染抢主进程。
 
 ## 项目
 
@@ -168,6 +168,7 @@ node scripts/fill-default-endpoints-e2e.cjs     # 一键填报默认端点
 node scripts/fill-overnight-e2e.cjs             # 跨夜加班工时
 node scripts/fill-unbind-e2e.cjs                # 解绑任务
 node scripts/harness-fullscreen-e2e.cjs         # Harness 沉浸全屏（启动真实 dsh，耗时数分钟）
+node scripts/startup-background-e2e.cjs         # 打开应用时的后台任务时机（预热推迟到首帧后、在独立进程内跑）
 ```
 
 服务器侧脚本链路（真实 bash 执行 deploy.sh）：`node scripts/deploy-scriptmode-selftest.cjs`、`node scripts/deploy-datasync-selftest.cjs`（已含在 `npm test`）。

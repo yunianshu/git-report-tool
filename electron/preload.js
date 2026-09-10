@@ -36,6 +36,9 @@ contextBridge.exposeInMainWorld('gitReport', {
   scanRepos: (roots, excludes, force) =>
     ipcRenderer.invoke('git:scanRepos', { roots: toPlain(roots), excludes: toPlain(excludes), force: !!force }),
   warmup: () => ipcRenderer.invoke('git:warmup'),
+  // 渲染层首帧已绘制：主进程据此启动后台任务（仓库预热 / 内置 Harness），
+  // 保证这些重型任务不与首屏渲染抢主进程与磁盘
+  appUiReady: () => ipcRenderer.invoke('app:uiReady'),
   // 已发现仓库快照（补齐接线前错过的发现事件，避免数量与收集总数不一致）
   reposSnapshot: () => ipcRenderer.invoke('git:reposSnapshot'),
   repoInfo: (repo) => ipcRenderer.invoke('git:repoInfo', repo),

@@ -4,7 +4,7 @@
 const { app, BrowserWindow, ipcMain, dialog, shell, Menu, clipboard, webContents, Tray, nativeImage } = require('electron')
 const path = require('path')
 const fs = require('fs')
-const gitService = require('./git-service')
+const gitService = require('./git-client')
 const store = require('./store')
 const reportHistory = require('./report-history')
 const aiService = require('./ai-service')
@@ -199,6 +199,13 @@ function createWindow() {
   } else {
     mainWindow.loadFile(path.join(__dirname, '../dist/index.html'))
   }
+
+  // 兜底：渲染层首帧上报缺失（页面异常/无渲染层场景）时，窗口加载完成后自行启动后台任务，
+  // 不能因为少了一个上报就让预热与内置 Harness 永不启动
+  mainWindow.webContents.once('did-finish-load', () => {
+    const timer = setTimeout(() => startBackgroundTasks('兜底计时'), BACKGROUND_FALLBACK_MS)
+    if (timer.unref) timer.unref()
+  })
 }
 
 /**
@@ -209,9 +216,9 @@ function createWindow() {
 let warmupTask = null
 
 /**
- * 已发现仓库快照 —— 预热在窗口加载完成前就启动，早于渲染层注册监听器的
- * git:scanRepoFound 事件会丢失；只靠事件累积会让「Git 活动源」数量少于
- * 收集进度的总数。渲染层接线后主动拉取本快照补齐。
+ * 已发现仓库快照 —— 渲染层接线（onMounted 注册监听器）与预热启动之间没有严格先后：
+ * 兜底路径（did-finish-load 后计时）或设置页手动扫描都可能早于监听器就绪，
+ * 只靠事件累积会让「Git 活动源」数量少于收集进度的总数。渲染层接线后主动拉取本快照补齐。
  */
 let knownRepos = []
 
@@ -225,10 +232,9 @@ async function warmupPipeline() {
   const task = (async () => {
     const cfg = store.load()
     if (!cfg.roots || !cfg.roots.length) return []
-    const repos = await gitService.scanReposCached(cfg.roots, cfg.excludes, {
-      onProgress: (p) => broadcast('git:scanProgress', p),
-      onRepo: rememberRepo,
-    })
+    // 扫描与收集的实际执行都在 git 工作进程内（见 electron/git-worker.js）：
+    // 进度/发现事件经 handleGitEvent 转发，主进程只做协调
+    const repos = await gitService.scanReposCached(cfg.roots, cfg.excludes, { tag: 'broadcast' })
     knownRepos = [...repos] // 扫描结果为权威列表（缓存命中时不会触发 onRepo）
     // 预热路径同样广播 scanDone：渲染层扫描态复位不依赖用户手动扫描
     broadcast('git:scanDone', { total: repos.length })
@@ -239,7 +245,7 @@ async function warmupPipeline() {
       until: gitService.tomorrowLocal(),
       authors: [],
       includeMerges: false,
-    }, (p) => broadcast('git:collectProgress', p))
+    }, { tag: 'broadcast' })
     return repos
   })()
   warmupTask = task.catch(() => {
@@ -248,6 +254,67 @@ async function warmupPipeline() {
     warmupTask = null // 失败允许下次触发重试
   })
   return warmupTask
+}
+
+/** 渲染层首帧兜底等待上限：渲染层异常未上报时，主进程自行启动后台任务（可注入，便于自测） */
+const BACKGROUND_FALLBACK_MS = Number(process.env.BACKGROUND_FALLBACK_MS) > 0
+  ? Number(process.env.BACKGROUND_FALLBACK_MS)
+  : 8000
+/** 后台任务（仓库预热 + 内置 Harness）是否已启动；两项自身均幂等 */
+let backgroundStarted = false
+
+/**
+ * 启动后台任务（仓库预热 + 内置 Harness）。
+ *
+ * 触发时机是「渲染层首帧已绘制」（渲染层经 app:uiReady 上报），而不是 app ready：
+ * 预热要为每个仓库建 git 子进程，而 Windows 上建进程是同步阻塞调用线程的，放在首帧前
+ * 会与首屏渲染抢主进程和磁盘（实测首屏 FCP 因此多花约 90~150ms，且打开后头 4 秒
+ * 首页 IPC 往返被拖到 100~452ms）。did-finish-load 后仍未收到上报时由计时器兜底，
+ * 保证渲染层异常或无渲染层的场景下预热与 Harness 不会缺席。
+ */
+function startBackgroundTasks(source) {
+  if (backgroundStarted) return
+  backgroundStarted = true
+  if (process.env.SMOKE_EXIT_MS) console.log(`[startup] 后台任务启动（${source}）`)
+  warmupPipeline()
+  startHarnessIfEnabled()
+}
+
+/** 内置 DeepSeek Harness 自启动（autoStart=false 时不启动；冒烟模式默认跳过） */
+function startHarnessIfEnabled() {
+  // 冒烟模式默认跳过（服务启动会占用 90s 级时序），需要时用 SMOKE_HARNESS=1 显式开启
+  if (process.env.SMOKE_EXIT_MS && process.env.SMOKE_HARNESS !== '1') return
+  const cfg = store.load()
+  if (cfg.harness && cfg.harness.autoStart === false) return
+  harnessService.start({ port: cfg.harness && cfg.harness.port, retryOnFail: true })
+    .then((snapshot) => {
+      if (snapshot.status === 'running') console.log('[harness] 已启动', snapshot.displayUrl)
+      else console.log('[harness] 启动未就绪：', snapshot.error || snapshot.status)
+    })
+    .catch((err) => console.log('[harness] 启动失败：', (err && err.message) || String(err)))
+}
+
+/**
+ * 转发 git 工作进程的进度事件到渲染层。
+ * tag 为 `wc:<id>` 时只发给发起窗口（报告页生成报告自己的收集进度），其余一律广播。
+ */
+function handleGitEvent({ event, tag, payload }) {
+  if (event === 'workerExit') {
+    // 工作进程异常退出：立即复位扫描态，避免渲染层「正在扫描」永久悬挂
+    broadcast('git:scanDone', { total: knownRepos.length })
+    return
+  }
+  if (event === 'scanRepoFound') {
+    rememberRepo(payload) // 内部已广播，保证快照不落后于事件
+    return
+  }
+  const channel = `git:${event}`
+  if (gitService.isWindowTag(tag)) {
+    const wc = gitService.windowFromTag(tag)
+    if (wc) { try { wc.send(channel, payload) } catch { /* noop */ } }
+    return
+  }
+  broadcast(channel, payload)
 }
 
 function registerIpc() {
@@ -314,12 +381,12 @@ function registerIpc() {
     return r.canceled ? null : r.filePaths[0]
   })
 
-  // git 服务
+  // git 服务（实际执行在 git 工作进程内，这里只转发调用与事件）
   // 扫描统一走 scanReposCached：同参数并发共享一次扫盘，预热完成后瞬时返回；
-  // 进度/发现事件经 broadcast 推送，无论预热还是用户触发，渲染端都能收到进度流
+  // 进度/发现事件经 handleGitEvent 广播，无论预热还是用户触发，渲染端都能收到进度流
+  gitService.setEventSink(handleGitEvent)
   ipcMain.handle('git:scanRepos', (_e, { roots, excludes, force }) => {
-    const onProgress = (p) => broadcast('git:scanProgress', p)
-    return gitService.scanReposCached(roots, excludes, { force: !!force, onProgress, onRepo: rememberRepo })
+    return gitService.scanReposCached(roots, excludes, { force: !!force, tag: 'broadcast' })
       .then((result) => {
         knownRepos = [...result] // 命中缓存时不触发 onRepo，用返回值校准快照
         broadcast('git:scanDone', { total: result.length })
@@ -328,18 +395,24 @@ function registerIpc() {
   })
   ipcMain.handle('git:repoInfo', (_e, repo) => gitService.getRepoInfo(repo))
   ipcMain.handle('git:collectCommits', async (e, payload) => {
-    const onProgress = (p) => { try { e.sender.send('git:collectProgress', p) } catch { /* noop */ } }
-    return gitService.collectCommits(payload.repos, payload.opts, onProgress)
+    // 报告页自己的收集：进度只回发起窗口（预热走 broadcast，见 handleGitEvent）
+    return gitService.collectCommits(payload.repos, payload.opts, { tag: gitService.windowTag(e.sender.id) })
   })
   ipcMain.handle('git:identity', () => gitService.getIdentity())
 
-  // 启动预热：渲染端在配置就绪后调用（幂等，主进程启动时也会自动触发），返回预热到的仓库列表
+  // 启动预热：渲染端在配置就绪后调用（幂等，首次调用会拉起工作进程），返回预热到的仓库列表
   ipcMain.handle('git:warmup', () => {
     if (!warmupTask) warmupPipeline()
     return warmupTask
   })
   // 已发现仓库快照：渲染层接线晚于预热启动时，用它补齐错过的 git:scanRepoFound 事件
   ipcMain.handle('git:reposSnapshot', () => knownRepos)
+
+  // 渲染层首帧已绘制：据此启动后台任务（仓库预热 + 内置 Harness），见 startBackgroundTasks
+  ipcMain.handle('app:uiReady', () => {
+    startBackgroundTasks('渲染层首帧')
+    return true
+  })
 
   // 报告导出
   ipcMain.handle('report:save', async (_e, { defaultName, content }) => {
@@ -650,21 +723,8 @@ app.whenReady().then(() => {
   registerIpc()
   createWindow()
   createTray() // 托盘常驻入口：窗口最小化到托盘后从这里恢复/退出
-  // 启动即后台预热（扫描 + 预收集今天），用户点生成时近乎秒出
-  warmupPipeline()
-  // 内置 DeepSeek Harness：启动应用即拉起本地 dsh web 服务。
-  // 冒烟模式默认跳过（服务启动会占用 90s 级时序），需要时用 SMOKE_HARNESS=1 显式开启。
-  if (!process.env.SMOKE_EXIT_MS || process.env.SMOKE_HARNESS === '1') {
-    const cfg = store.load()
-    if (!cfg.harness || cfg.harness.autoStart !== false) {
-      harnessService.start({ port: cfg.harness && cfg.harness.port, retryOnFail: true })
-        .then((snapshot) => {
-          if (snapshot.status === 'running') console.log('[harness] 已启动', snapshot.displayUrl)
-          else console.log('[harness] 启动未就绪：', snapshot.error || snapshot.status)
-        })
-        .catch((err) => console.log('[harness] 启动失败：', (err && err.message) || String(err)))
-    }
-  }
+  // 仓库预热与内置 Harness 都不在这里启动：统一推迟到「渲染层首帧已绘制」之后
+  // （渲染层经 app:uiReady 上报，见 startBackgroundTasks），避免与首屏渲染抢占主进程
   // 冒烟测试钩子（仅供自动化验证）：设置 SMOKE_EXIT_MS 后自动退出，
   // 并将渲染层 error/warning 控制台消息转发到 stdout 以便断言
   if (process.env.SMOKE_EXIT_MS) {
@@ -765,8 +825,8 @@ app.on('window-all-closed', () => {
   if (process.platform !== 'darwin') app.quit()
 })
 
-// 关闭软件即关闭内置 Harness 服务（stop 为同步的进程树终止，可安全用于退出钩子）
+// 关闭软件即关闭内置 Harness 服务与 git 工作进程（stop 均为同步的进程终止，可安全用于退出钩子）
 // before-quit 同时置 isQuitting：此后各窗口的 close 事件直接放行，不再弹询问框
-app.on('before-quit', () => { isQuitting = true; harnessService.stop() })
-app.on('will-quit', () => { harnessService.stop() })
-process.on('exit', () => { harnessService.stop() })
+app.on('before-quit', () => { isQuitting = true; harnessService.stop(); gitService.stop() })
+app.on('will-quit', () => { harnessService.stop(); gitService.stop() })
+process.on('exit', () => { harnessService.stop(); gitService.stop() })

@@ -54,6 +54,16 @@ const editorSaving = ref(false)
 const editingProject = ref(null)
 const { loadProjects, selectProject, saveProject } = useProjects()
 
+/** 首帧已绘制：连续两次 requestAnimationFrame 之后，浏览器已完成第一次绘制。
+ *  窗口被遮挡/锁屏时 rAF 会被 Chromium 节流，因此加一个上限兜底，
+ *  保证后台任务最多晚 1.5 秒启动（主进程侧还有 did-finish-load 兜底）。 */
+function afterFirstPaint() {
+  return Promise.race([
+    new Promise((resolve) => requestAnimationFrame(() => requestAnimationFrame(() => resolve()))),
+    new Promise((resolve) => setTimeout(resolve, 1500)),
+  ])
+}
+
 /** 将页面导航意图集中映射；活动源列表复用设置页的 Git 活动分区。 */
 function navigate(target) {
   if (target === 'activity-sources') {
@@ -213,7 +223,12 @@ onMounted(async () => {
     })
 
     warmupActive = true
-    // 预热早于本组件挂载启动，接线前广播的发现事件已丢失：先用快照补齐，
+    // 预热（仓库扫描 + 今日提交预收集）推迟到首帧绘制之后再发起：扫描与「每个仓库一个
+    // git 子进程」都会占用主进程（Windows 建进程是同步阻塞调用线程的），在首帧前发起会
+    // 拖慢「打开 → 主页可见」。首帧就绪后先通知主进程启动后台任务，再取快照与预热结果。
+    await afterFirstPaint()
+    window.gitReport.appUiReady?.()
+    // 预热早于本组件挂载启动时，接线前广播的发现事件已丢失：先用快照补齐，
     // 否则收集期间的「Git 活动源」数量会小于「正在加载今日活动 x/y」的总数
     window.gitReport.reposSnapshot().then(syncDiscoveredRepos).catch(() => {})
     window.gitReport.warmup().then((repos) => {
