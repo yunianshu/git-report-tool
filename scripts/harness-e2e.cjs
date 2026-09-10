@@ -201,6 +201,8 @@ console.log('  渲染层结果:', JSON.stringify(r))
 
 assert('H2 侧栏可进入 Harness 且 webview 挂载', r.menuFound === true && r.webviewAttached === true, `menu=${r.menuFound} webview=${r.webviewAttached} placeholder=${r.placeholder}`)
 assert('H2b 服务状态显示运行中', r.pill === '运行中', `pill=${r.pill}`)
+assert('H2c 服务运行中不显示“未运行”占位层', r.pill !== '运行中' || r.placeholder === '',
+  `pill=${r.pill} placeholder=${r.placeholder}`)
 assert('H3 内嵌页握手后落到干净根地址（token 已换取 cookie）',
   !!r.guestUrl && !r.guestUrl.includes('token=') && new URL(r.guestUrl).pathname === '/',
   `guestUrl=${r.guestUrl}`)

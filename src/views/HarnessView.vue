@@ -46,14 +46,14 @@
         </div>
 
         <!-- 启动中 -->
-        <div v-else-if="starting" class="harness-placeholder">
+        <div v-if="starting" class="harness-placeholder">
           <el-icon class="harness-placeholder-icon is-spin"><Loading /></el-icon>
           <h3>{{ startingTitle }}</h3>
           <p>{{ startingHint }}</p>
         </div>
 
         <!-- 出错 / 未安装 -->
-        <div v-else class="harness-placeholder">
+        <div v-if="!running && !starting" class="harness-placeholder">
           <el-icon class="harness-placeholder-icon"><WarningFilled /></el-icon>
           <h3>{{ installed ? (snapshot.status === 'error' ? 'Harness 服务启动失败' : 'Harness 服务未运行') : '未检测到 DeepSeek Harness' }}</h3>
           <p v-if="snapshot.error" class="harness-error">{{ snapshot.error }}</p>

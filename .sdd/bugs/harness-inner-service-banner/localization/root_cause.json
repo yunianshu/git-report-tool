@@ -1,0 +1,10 @@
+{
+  "status": "confirmed",
+  "root_cause": "HarnessView 中 webview 的运行分支与状态占位层被拆成两条 Vue 条件链。服务运行且 loadFailed 为 false 时，第二条链的 v-if 和 v-else-if 均不成立，最终 v-else 错误渲染“服务未运行”占位层，并覆盖正常 webview。启动按钮调用的是幂等 start，服务已运行时只返回原状态，所以提示不会消失。",
+  "evidence": [
+    "用户截图动态显示宿主顶部/底部均为运行中，同时未运行占位层覆盖在正常 dsh 页面上。",
+    "src/views/HarnessView.vue 的相邻指令归属证明最终 v-else 跟随 loadFailed 分支，而非 webview 的 running 分支。",
+    "electron/harness-service.js 的 start 在运行中直接返回当前快照，解释按钮无效。"
+  ],
+  "fix_boundary": "仅修正三个状态层的显式互斥条件，并补充运行中占位层为空的 E2E 断言。"
+}

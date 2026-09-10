@@ -1,0 +1,10 @@
+{
+  "strategy": "scoped_structural_search",
+  "scope": [
+    "src/views/HarnessView.vue",
+    "electron/harness-service.js",
+    "electron/main.js",
+    "scripts/harness-e2e.cjs"
+  ],
+  "reason": "用户截图同时包含宿主运行状态和未运行提示，问题边界已明确落在 Harness 宿主视图及其服务状态交互。"
+}

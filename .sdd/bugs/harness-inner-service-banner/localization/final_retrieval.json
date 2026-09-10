@@ -1,0 +1,16 @@
+{
+  "final_top_localization": [
+    {
+      "rank": 1,
+      "file": "src/views/HarnessView.vue",
+      "ranges": ["webview 与三个状态层的模板条件", "start 方法"],
+      "reason": "模板分支直接解释了运行中 webview 与未运行占位层同时出现，以及点击启动按钮无视觉变化。"
+    },
+    {
+      "rank": 2,
+      "file": "scripts/harness-e2e.cjs",
+      "ranges": ["placeholder 采集", "H2 断言"],
+      "reason": "测试已采集关键 DOM 状态但缺少互斥断言，导致回归未被发现。"
+    }
+  ]
+}

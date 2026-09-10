@@ -1,0 +1,25 @@
+{
+  "queries": [
+    "Harness 服务未运行|启动服务",
+    "running|starting|loadFailed",
+    "harness:start|harness:status"
+  ],
+  "results": [
+    {
+      "file": "src/views/HarnessView.vue",
+      "ranges": ["1-70", "100-160"],
+      "finding": "运行中 webview 使用独立 v-if；加载失败、启动中和未运行占位层组成另一条 v-if/v-else-if/v-else 链。"
+    },
+    {
+      "file": "electron/harness-service.js",
+      "ranges": ["start", "status"],
+      "finding": "start 对已经运行的子进程幂等返回当前状态，因此误显示的启动按钮点击后不会改变界面。"
+    },
+    {
+      "file": "scripts/harness-e2e.cjs",
+      "ranges": ["EVAL", "H2 assertions"],
+      "finding": "现有 E2E 读取了 placeholder，但只在 webview 挂载失败时用于诊断，没有断言运行中占位层必须为空。"
+    }
+  ],
+  "assessment": "satisfied"
+}
