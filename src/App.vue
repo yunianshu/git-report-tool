@@ -102,17 +102,20 @@ onMounted(async () => {
   try {
     const cfg = await window.gitReport.configLoad()
     if (cfg) {
+      let migrated = false
       // 兼容旧版单身份配置。
       if (cfg.myIdentity && (cfg.myIdentity.name || cfg.myIdentity.email) && (!cfg.identities || !cfg.identities.length)) {
         cfg.identities = [cfg.myIdentity]
+        migrated = true
       }
       if (!cfg.identities || !cfg.identities.length) {
         const identity = await window.gitReport.getIdentity()
-        if (identity.name || identity.email) cfg.identities = [identity]
+        if (identity.name || identity.email) { cfg.identities = [identity]; migrated = true }
       }
       delete cfg.myIdentity
       if (!Array.isArray(cfg.identities)) cfg.identities = []
-      await window.gitReport.configSave(toPlain(cfg))
+      // 仅迁移实际改动了配置时才写盘：每次启动都整份重写属无谓 I/O
+      if (migrated) await window.gitReport.configSave(toPlain(cfg))
       state.config = { ...state.config, ...cfg }
     }
 

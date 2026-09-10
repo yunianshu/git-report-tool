@@ -390,7 +390,11 @@ function undoClearSecret() {
 // ─── 部署目标（多环境）管理 ───
 async function addTarget() {
   const t = emptyTarget()
-  t.name = `环境 ${props.form.targets.length + 1}`
+  // 取第一个未被占用的环境编号：length+1 在删除过中间环境后会与现存环境重名
+  const used = new Set(props.form.targets.map((x) => x.name))
+  let n = props.form.targets.length + 1
+  while (used.has(`环境 ${n}`)) n += 1
+  t.name = `环境 ${n}`
   props.form.targets.push(t)
   emit('update:activeTargetId', t.id)
   emit('reset-conn')

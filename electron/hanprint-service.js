@@ -85,17 +85,17 @@ class HanprintClient {
     return this
   }
 
-  /** 全部报工类型的项目与任务（三重遍历，单个子列表失败不影响整体） */
+  /** 全部报工类型的项目与任务（类型与项目两级并行，单个子列表失败不影响整体；结果保持类型顺序） */
   async allTypeTasks() {
     await this.ensureLogin()
-    const out = []
     const dict = (await this.getData('/com/workhour/GetDict', { dictType: 1 }).catch(() => [])) || []
-    for (const ty of dict) {
+    // 各类型独立收集：原先三层串行，整链耗时 = 所有请求之和，计划页生成明显偏慢
+    const perType = await Promise.all(dict.map(async (ty) => {
       let projects = []
       try {
         projects = (await this.getData('/com/workhour/GetProjectList', { projecttype: ty.Key })) || []
       } catch { /* 该类型项目列表失败则跳过 */ }
-      for (const p of projects) {
+      const rows = await Promise.all(projects.map(async (p) => {
         let tasks = []
         try {
           tasks = (await this.getData('/com/workhour/GetProjectTaskList', {
@@ -103,10 +103,11 @@ class HanprintClient {
             projecttype: ty.Key,
           })) || []
         } catch { /* 单项目任务失败则跳过 */ }
-        out.push({ type: ty.Key, typeName: ty.Name, projectId: p.Key, projectName: p.Name, tasks })
-      }
-    }
-    return out
+        return { type: ty.Key, typeName: ty.Name, projectId: p.Key, projectName: p.Name, tasks }
+      }))
+      return rows
+    }))
+    return perType.flat()
   }
 
   /** 当日已填记录（协议同 workhour-h5：ProjectType=-2 为删除标记行，需调用方跳过） */

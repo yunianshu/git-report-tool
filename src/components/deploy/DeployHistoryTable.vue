@@ -93,8 +93,14 @@ async function viewLog(row) {
 }
 
 async function clearHistory() {
+  // projectId 为空 = 查询/清空全部项目的历史：确认文案必须如实说明作用域，防止误删
+  const scopeAll = !props.projectId
   try {
-    await ElMessageBox.confirm('确认清空该项目的发布历史？（服务器文件不受影响）', '清空历史', { type: 'warning' })
+    await ElMessageBox.confirm(
+      scopeAll ? '当前未选择具体项目：确认清空【全部项目】的发布历史？（服务器文件不受影响）' : '确认清空该项目的发布历史？（服务器文件不受影响）',
+      scopeAll ? '清空全部发布历史' : '清空历史',
+      { type: 'warning' },
+    )
   } catch { return }
   await window.gitReport.deployHistoryClear(props.projectId || undefined)
   loadHistory()
