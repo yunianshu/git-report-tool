@@ -295,15 +295,16 @@ function buildSubmitTasks(planned, ztTasks, date) {
 /**
  * 按禅道任务聚合工时换算为汉印百分比条目。只在「软件项目(type=3)」分组中按
  * 「任务 Key === 禅道任务 ID」查找（两系统数据同源）；未匹配任务的工时占比
- * 份额并入余数补给第一条，保证 ΣPercent = 100（汉印硬约束）。
- * 返回 { items, unmatched: [taskId...] }。
+ * 份额并入余数，补给占比最大的一条，保证 ΣPercent = 100（汉印硬约束）。
+ * 占比为 0 的条目一律不产出（工时为 0，或占比四舍五入后为 0）——0% 记录没有意义，
+ * 其中被丢弃的条数由 zeroSkipped 回报。
+ * 返回 { items, unmatched: [taskId...], zeroSkipped }。
  */
 function buildHpItems(tasks, groups, date) {
   const total = round2((tasks || []).reduce((s, t) => s + (t.consumed || 0), 0))
-  if (!total) return { items: [], unmatched: [] }
+  if (!total) return { items: [], unmatched: [], zeroSkipped: 0 }
   const list = []
   const unmatched = []
-  let assigned = 0
   for (const t of tasks || []) {
     const group = (groups || []).find(
       (g) => g.type === 3 && (g.tasks || []).some((x) => String(x.Key) === String(t.taskId)),
@@ -313,14 +314,20 @@ function buildHpItems(tasks, groups, date) {
       continue // eslint-disable-line no-continue
     }
     const task = group.tasks.find((x) => String(x.Key) === String(t.taskId))
-    const pct = Math.round(((t.consumed || 0) / total) * 100)
-    assigned += pct
-    list.push({ group, task, pct })
+    const consumed = Number(t.consumed) || 0
+    const pct = Math.round((consumed / total) * 100)
+    list.push({ group, task, pct, consumed })
   }
-  if (!list.length) return { items: [], unmatched }
-  const rest = 100 - assigned
-  if (rest) list[0].pct += rest
-  const items = list.map(({ group, task, pct }) => ({
+  if (!list.length) return { items: [], unmatched, zeroSkipped: 0 }
+  // 余数补给占比最大的一条：不能补到 0% 条目上，否则会凭空写出一条没有工时的记录
+  const rest = 100 - list.reduce((s, x) => s + x.pct, 0)
+  if (rest) {
+    const target = list.reduce((a, b) => (b.consumed > a.consumed ? b : a), list[0])
+    target.pct += rest
+  }
+  // 0% 条目不写入：丢弃项本身占比为 0，不影响其余条目的 Σ=100
+  const kept = list.filter((x) => x.pct > 0)
+  const items = kept.map(({ group, task, pct }) => ({
     Id: 0,
     ProjectType: group.type,
     ProjectTypeName: group.typeName,
@@ -352,7 +359,7 @@ function buildHpItems(tasks, groups, date) {
     WorkDate: date,
     AddType: 0,
   }))
-  return { items, unmatched }
+  return { items, unmatched, zeroSkipped: list.length - kept.length }
 }
 
 // ─── 编排：生成工时计划 / 提交禅道 ───
@@ -442,6 +449,7 @@ async function plan(payload) {
   // 汉印条目（容错：未配置/接口失败不阻断禅道计划，仅提示）
   let hpItems = []
   let hpUnmatched = []
+  let hpZeroSkipped = 0
   let hpError = ''
   let hpExisting = []
   const hanprintConfigured = !!(cfg.hanprint && cfg.hanprint.baseUrl && cfg.hanprint.account && store.getHanprintPwd())
@@ -451,6 +459,7 @@ async function plan(payload) {
       const built = buildHpItems(tasks, groups, date)
       hpItems = built.items
       hpUnmatched = built.unmatched
+      hpZeroSkipped = built.zeroSkipped
       hpExisting = (await hanprint.ensureClient().then((c) => c.getByDate(date)))
         .filter((r) => r && r.ProjectType !== -2)
         .map((r) => ({ id: r.Id, taskId: String(r.TaskId), taskName: String(r.TaskName || ''), percent: Number(r.Percent || 0) }))
@@ -477,6 +486,7 @@ async function plan(payload) {
     ztError,
     hpItems,
     hpUnmatched,
+    hpZeroSkipped,
     hpExisting,
     hpError,
     identitiesMissing,
@@ -489,7 +499,7 @@ async function plan(payload) {
  * - 禅道：逐任务查询当日已有工时记录，本次行依次复用已有记录 ID（表单键=effortID →
  *   更新覆盖）；行数超过已有记录时，多出的行按行号键追加（同 KnowMore 行为）
  * - 汉印：GetByDate 取当日已填记录，TaskId 匹配的条目带原 Id 提交（更新占比）；
- *   当日已有但本次未涉及的任务不动（不删除）
+ *   当日已有但本次未涉及的任务不动（不删除）；占比 0% 的条目不提交
  * - dryRun=true 只回显将提交的表单/条目，不写入
  */
 async function submit(payload) {
@@ -522,11 +532,13 @@ async function submit(payload) {
     })
   }
   let hpResult = null
-  if (hp && Array.isArray(hp.items) && hp.items.length) {
+  // 0% 条目不写入汉印（IPC 可被直接调用，不依赖渲染层已过滤）
+  const hpItems = hp && Array.isArray(hp.items) ? hp.items.filter((it) => Number(it.Percent) > 0) : []
+  if (hpItems.length) {
     const hpClient = await hanprint.ensureClient()
     // 当日已填的记录按 TaskId 匹配：带原 Id 提交即更新占比（同 workhour-h5 语义）
     let saved = []
-    const workDate = hp.items[0] && hp.items[0].WorkDate
+    const workDate = hpItems[0] && hpItems[0].WorkDate
     if (workDate) {
       try {
         // eslint-disable-next-line no-await-in-loop
@@ -534,13 +546,13 @@ async function submit(payload) {
       } catch { /* 查询失败按全新增 */ }
     }
     let hpUpdated = 0
-    for (const item of hp.items) {
+    for (const item of hpItems) {
       const hit = saved.find((s) => String(s.TaskId) === String(item.TaskId))
       if (hit) { item.Id = hit.Id; hpUpdated += 1 }
     }
-    hpResult = await hpClient.add(hp.items, !!dryRun)
+    hpResult = await hpClient.add(hpItems, !!dryRun)
     hpResult.updated = hpUpdated
-    hpResult.appended = hp.items.length - hpUpdated
+    hpResult.appended = hpItems.length - hpUpdated
   }
   return { dryRun: !!dryRun, results, hp: hpResult }
 }

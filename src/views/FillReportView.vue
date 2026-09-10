@@ -208,6 +208,9 @@
         <div v-else-if="hanprintConfigured && plan.tasks.length && plan.hpUnmatched && plan.hpUnmatched.length" class="submit-hint">
           汉印未匹配到这些禅道任务对应的报工任务，相关工时将只写入禅道：#{{ plan.hpUnmatched.join('、#') }}
         </div>
+        <div v-if="plan.hpZeroSkipped" class="submit-hint">
+          有 {{ plan.hpZeroSkipped }} 个任务工时不足（占比 0%），不写入汉印。
+        </div>
         <div class="fill-actions">
           <el-button :disabled="!plan.planned.length" @click="copyReport">
             <el-icon style="margin-right: 4px"><CopyDocument /></el-icon>复制报告

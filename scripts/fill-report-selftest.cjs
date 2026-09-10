@@ -474,6 +474,49 @@ await test('四舍五入误差由第一条吸收（Σ 恒等 100）', () => {
   assert.strictEqual(sum, 100)
 })
 
+await test('工时为 0 的任务占比 0% → 不写入汉印（zeroSkipped 计数）', () => {
+  const { items, unmatched, zeroSkipped } = fill.buildHpItems([
+    { taskId: 66, consumed: 8 },
+    { taskId: 88, consumed: 0 }, // 工时被 0.5h 取整抹平 → 占比 0%
+  ], HP_GROUPS, '2026-09-07')
+  assert.deepStrictEqual(unmatched, [])
+  assert.strictEqual(zeroSkipped, 1)
+  assert.strictEqual(items.length, 1)
+  assert.strictEqual(items[0].TaskId, '66')
+  assert.strictEqual(items[0].Percent, 100)
+})
+
+await test('占比四舍五入为 0 的极小份额同样跳过，Σ 仍=100', () => {
+  const { items, zeroSkipped } = fill.buildHpItems([
+    { taskId: 88, consumed: 0.5 }, // 0.05% → 0%
+    { taskId: 66, consumed: 1000 }, // 99.95% → 100%
+  ], HP_GROUPS, '2026-09-07')
+  assert.strictEqual(zeroSkipped, 1)
+  assert.strictEqual(items.length, 1)
+  assert.strictEqual(items[0].TaskId, '66')
+  assert.strictEqual(items[0].Percent, 100)
+})
+
+await test('余数补给占比最大的条目：0% 条目不会被余数喂成非零', () => {
+  const groups = [
+    ...HP_GROUPS,
+    { type: 3, typeName: '软件项目', projectId: '800', projectName: 'P2', tasks: [{ Key: '77', Name: '任务C' }] },
+    { type: 3, typeName: '软件项目', projectId: '801', projectName: 'P3', tasks: [{ Key: '99', Name: '任务D' }] },
+  ]
+  const { items, zeroSkipped } = fill.buildHpItems([
+    { taskId: 88, consumed: 0 }, // 排在第一条，余数不得补到它身上
+    { taskId: 66, consumed: 1 },
+    { taskId: 77, consumed: 1 },
+    { taskId: 99, consumed: 1 },
+  ], groups, '2026-09-07')
+  assert.strictEqual(zeroSkipped, 1)
+  assert.strictEqual(items.length, 3)
+  assert.ok(!items.some((x) => x.TaskId === '88'), '0% 条目不应出现在提交条目中')
+  assert.ok(items.every((x) => x.Percent > 0))
+  // 3 任务各 1/3 → 33×3=99，余数 1 补占比最大者（不是 0% 那条）；丢弃的 0% 不破坏 Σ
+  assert.strictEqual(items.reduce((s, x) => s + x.Percent, 0), 100)
+})
+
 await test('全部未匹配时返回空', () => {
   const { items, unmatched } = fill.buildHpItems([{ taskId: 999, consumed: 1 }], HP_GROUPS, '2026-09-07')
   assert.deepStrictEqual(items, [])
@@ -584,6 +627,62 @@ await test('getByDate：携带 token 查询当日已填', async () => {
   const rows = await client.getByDate('2026-09-07')
   assert.strictEqual(rows.length, 2) // 原样返回，跳过 ProjectType=-2 由调用方处理
   assert.strictEqual(rows[0].Id, 11)
+})
+
+// ═══════════ 提交写入路径（0% 条目不落汉印） ═══════════
+console.log('提交写入路径（汉印 0% 过滤）:')
+const ztSvc = require('../electron/zentao-service')
+const hpSvc = require('../electron/hanprint-service')
+
+/** 打桩两个平台客户端，返回汉印 add 实际收到的条目 */
+async function withStubClients(fn) {
+  const origZt = ztSvc.ensureClient
+  const origHp = hpSvc.ensureClient
+  let sent = null
+  const hpAddCalls = []
+  ztSvc.ensureClient = async () => ({
+    getTaskEfforts: async () => [],
+    recordEfforts: async (taskId, rowsIn, dry) => ({ dryRun: !!dry, taskId, rows: rowsIn.length }),
+  })
+  hpSvc.ensureClient = async () => ({
+    getByDate: async () => [],
+    add: async (items, dry) => { sent = items; hpAddCalls.push(items); return { dryRun: !!dry, json: items } },
+  })
+  try {
+    const r = await fn()
+    return { r, sent, hpAddCalls }
+  } finally {
+    ztSvc.ensureClient = origZt
+    hpSvc.ensureClient = origHp
+  }
+}
+
+await test('submit：0% 条目不进汉印提交体，其余占比仍合计 100', async () => {
+  const { r, sent } = await withStubClients(() => fill.submit({
+    date: '2026-09-07',
+    tasks: [{ taskId: 66, taskName: '任务A', rows: [{ date: '2026-09-07', work: '1. x', consumed: 2, left: 1 }] }],
+    dryRun: true,
+    hp: { items: [
+      { TaskId: '66', Percent: 100, WorkDate: '2026-09-07' },
+      { TaskId: '88', Percent: 0, WorkDate: '2026-09-07' }, // 0% 条目：不得提交
+    ] },
+  }))
+  assert.ok(sent, '汉印 add 应被调用')
+  assert.strictEqual(sent.length, 1)
+  assert.ok(!sent.some((x) => Number(x.Percent) <= 0), '0% 条目不得出现在提交体中')
+  assert.strictEqual(sent.reduce((s, x) => s + x.Percent, 0), 100)
+  assert.strictEqual(r.hp.appended, 1)
+})
+
+await test('submit：全部为 0% 时不发起汉印提交', async () => {
+  const { r, hpAddCalls } = await withStubClients(() => fill.submit({
+    date: '2026-09-07',
+    tasks: [{ taskId: 66, taskName: '任务A', rows: [{ date: '2026-09-07', work: '1. x', consumed: 2, left: 1 }] }],
+    dryRun: true,
+    hp: { items: [{ TaskId: '88', Percent: 0, WorkDate: '2026-09-07' }] },
+  }))
+  assert.strictEqual(hpAddCalls.length, 0)
+  assert.strictEqual(r.hp, null)
 })
 
 // ═══════════ store 禅道配置（密码加密往返） ═══════════
@@ -760,6 +859,74 @@ if (gitOk()) {
       () => fill.plan({ date: pastDayStr, startTime: '08:30', endTime: '25:99', projects: [{ id: 'p1', name: 'ProjA', repos: [repoDir] }] }),
       /下班时间格式不正确/,
     )
+  })
+
+  await test('plan 端到端：分配 0 小时的项目占比 0% → 不进汉印条目', async () => {
+    // 真实 git：repoA 3 条提交 / repoB 1 条，总工时 1h → repoB 份额 0.25h 向下取整为 0
+    const mkRepo = (name, items) => {
+      const dir = path.join(tmpRoot, name)
+      fs.mkdirSync(dir, { recursive: true })
+      execFileSync('git', ['init', '-q'], { cwd: dir })
+      for (const [time, msg] of items) {
+        execFileSync('git', ['commit', '--allow-empty', '-m', msg], {
+          cwd: dir,
+          env: {
+            ...process.env,
+            GIT_AUTHOR_NAME: 'Me', GIT_AUTHOR_EMAIL: 'me@corp.com',
+            GIT_COMMITTER_NAME: 'Me', GIT_COMMITTER_EMAIL: 'me@corp.com',
+            GIT_AUTHOR_DATE: `${pastDayStr} ${time}:00 +0800`,
+            GIT_COMMITTER_DATE: `${pastDayStr} ${time}:00 +0800`,
+          },
+        })
+      }
+      return dir
+    }
+    const repoA = mkRepo('repo-hp-a', [['09:05', 'feat: A1'], ['09:15', 'feat: A2'], ['09:25', 'feat: A3']])
+    const repoB = mkRepo('repo-hp-b', [['09:35', 'feat: B1']])
+    // 汉印接口注入（真实平台无可用账号）：只验证编排与条目过滤，不发网络请求
+    const origGetGroups = hpSvc.getGroups
+    const origEnsure = hpSvc.ensureClient
+    hpSvc.getGroups = async () => ([{
+      type: 3,
+      typeName: '软件项目',
+      projectId: '799',
+      projectName: 'P-A',
+      tasks: [{ Key: '66', Name: '任务A' }, { Key: '88', Name: '任务B' }],
+    }])
+    hpSvc.ensureClient = async () => ({ getByDate: async () => [] })
+    try {
+      store.save({
+        roots: [],
+        identities: [{ name: 'Me', email: 'me@corp.com' }],
+        hanprint: { baseUrl: 'http://hp.example', clientId: '1', account: '21290', password: 'secret' },
+      })
+      fill.bindProject('hpA', 66, '任务A')
+      fill.bindProject('hpB', 88, '任务B')
+      const r = await fill.plan({
+        date: pastDayStr,
+        startTime: '09:00',
+        endTime: '10:00', // 60min，无午休重叠 → 总工时 1h
+        projects: [
+          { id: 'hpA', name: 'P-A', repos: [repoA] },
+          { id: 'hpB', name: 'P-B', repos: [repoB] },
+        ],
+      })
+      const a = r.planned.find((x) => x.projectId === 'hpA')
+      const b = r.planned.find((x) => x.projectId === 'hpB')
+      assert.strictEqual(b.hours, 0, 'repoB 占 1/4 提交 → 0.25h 向下取整为 0')
+      assert.strictEqual(a.hours, 1, 'repoA 0.5h + 余量 0.5h')
+      assert.deepStrictEqual(r.hpUnmatched, [])
+      assert.strictEqual(r.hpZeroSkipped, 1)
+      assert.strictEqual(r.hpItems.length, 1)
+      assert.strictEqual(r.hpItems[0].TaskId, '66')
+      assert.strictEqual(r.hpItems[0].Percent, 100)
+      assert.ok(r.hpItems.every((x) => x.Percent > 0))
+    } finally {
+      hpSvc.getGroups = origGetGroups
+      hpSvc.ensureClient = origEnsure
+      fill.unbindProject('hpA')
+      fill.unbindProject('hpB')
+    }
   })
 } else {
   console.log('  （git 不可用，跳过真实仓库集成用例）')

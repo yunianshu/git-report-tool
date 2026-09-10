@@ -168,6 +168,7 @@ node scripts/deploy-copy-config-e2e.cjs         # 从其他项目复制部署配
 node scripts/fill-default-endpoints-e2e.cjs     # 一键填报默认端点
 node scripts/fill-overnight-e2e.cjs             # 跨夜加班工时
 node scripts/fill-unbind-e2e.cjs                # 解绑任务
+node scripts/fill-zero-percent-e2e.cjs          # 汉印占比 0% 的条目不写入（本地 fake 网关）
 node scripts/harness-fullscreen-e2e.cjs         # Harness 沉浸全屏（启动真实 dsh，耗时数分钟）
 node scripts/startup-background-e2e.cjs         # 打开应用时的后台任务时机（预热推迟到首帧后、在独立进程内跑）
 ```
