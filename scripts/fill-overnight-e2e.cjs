@@ -232,7 +232,8 @@ if (!ev) {
   assert('B1 placeholder 提示自动取值', /下班（.+）/.test(String(ev.endPlaceholder)), `实际="${ev.endPlaceholder}"`)
   assert('B1 默认预览显示区间与预计工时', /预计/.test(String(ev.rangeTipDefault)), `实际="${ev.rangeTipDefault}"`)
   assert('B2 切到昨天成功', ev.datePanelOpened === 'ok' && ev.pickedYesterday === true && ev.dateApplied === true, `panel=${ev.datePanelOpened} pick=${ev.pickedYesterday} date=${ev.dateAfterPick}`)
-  const endIsNow = (ev.expectedEnds || []).some((e) => String(ev.rangeTipYesterday).includes(`–${e} ·`))
+  // 终点=点击时刻；当前时刻早于上班时间时预览合法地显示「次日」前缀（规格行为），断言须兼容
+  const endIsNow = (ev.expectedEnds || []).some((e) => new RegExp(`–(次日 )?${e} ·`).test(String(ev.rangeTipYesterday)))
   assert('B2 未填下班时间 → 终点为点击时刻（与日期无关，不再是 17:30）',
     endIsNow && /^08:30–(次日 )?\d{2}:\d{2} · 预计 \d+\.\d\s*h$/.test(String(ev.rangeTipYesterday)),
     `实际="${ev.rangeTipYesterday}" 期望终点∈${JSON.stringify(ev.expectedEnds)}`)

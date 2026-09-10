@@ -62,9 +62,31 @@ function createMatcher(extraRules) {
   }
 }
 
-/** 递归收集未被忽略的文件（POSIX 相对路径） */
+/** 指向目录的符号链接也按目录下钻（项目里链接的子目录必须进发布包，否则服务器端缺文件） */
+function isWalkableDir(ent, abs) {
+  if (ent.isDirectory()) return true
+  if (ent.isSymbolicLink()) {
+    try {
+      return fs.statSync(abs).isDirectory()
+    } catch {
+      return false // 悬空链接
+    }
+  }
+  return false
+}
+
+/** 递归收集未被忽略的文件（POSIX 相对路径）；visited 按 realpath 防符号链接环路 */
 function collectFiles(rootDir, matcher, onFile) {
+  const visited = new Set()
   const walk = (dir, rel) => {
+    let realDir
+    try {
+      realDir = fs.realpathSync(dir)
+    } catch {
+      return
+    }
+    if (visited.has(realDir)) return // 环路或同一目录被多条链接指向
+    visited.add(realDir)
     let entries
     try {
       entries = fs.readdirSync(dir, { withFileTypes: true })
@@ -75,8 +97,16 @@ function collectFiles(rootDir, matcher, onFile) {
       const relPath = rel ? `${rel}/${ent.name}` : ent.name
       if (matcher.ignored(relPath)) continue
       const abs = path.join(dir, ent.name)
-      if (ent.isDirectory()) walk(abs, relPath)
-      else if (ent.isFile()) onFile(abs, relPath)
+      if (isWalkableDir(ent, abs)) {
+        walk(abs, relPath)
+      } else if (ent.isFile()) {
+        onFile(abs, relPath)
+      } else if (ent.isSymbolicLink()) {
+        // 符号链接指向文件时按文件收录（archiver 收内容，解压后为普通文件）；悬空链接跳过
+        try {
+          if (fs.statSync(abs).isFile()) onFile(abs, relPath)
+        } catch { /* 悬空链接 */ }
+      }
     }
   }
   walk(rootDir, '')

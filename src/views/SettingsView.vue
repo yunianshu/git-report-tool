@@ -444,8 +444,8 @@ async function fetchModels(showSuccess = true) {
     }))
     if (r?.ok && r.models?.length) {
       modelOptions.value = r.models
-      // 当前模型不在列表中时自动选中第一个可用模型
-      if (!r.models.includes(state.config.ai.model)) {
+      // 仅在未选择模型时自动挑第一个：用户自定义/服务端未列出的模型名不能被静默覆盖
+      if (!state.config.ai.model) {
         state.config.ai.model = r.models[0]
       }
       if (showSuccess) ElMessage.success(`获取到 ${r.models.length} 个模型`)

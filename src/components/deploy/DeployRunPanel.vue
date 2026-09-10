@@ -438,6 +438,11 @@ async function doDbRestore(row) {
     )
   } catch { return }
   restoringDb.value = true
+  // 数据恢复占用主进程发布互斥：同步 running 态（禁用发布按钮）并复位上一轮的阶段/计时展示
+  state.deploy.running = true
+  state.deploy.stages = {}
+  state.deploy.startedAt = Date.now()
+  state.deploy.finishedAt = 0
   state.deploy.logs = []
   state.deploy.logs.push({ level: 'info', text: `开始恢复数据库备份 ${row.fileName}`, ts: new Date().toLocaleTimeString('zh-CN', { hour12: false }) })
   try {
@@ -452,6 +457,7 @@ async function doDbRestore(row) {
     ElMessage.error(e.message || String(e))
   } finally {
     restoringDb.value = false
+    state.deploy.running = false
   }
 }
 

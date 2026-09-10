@@ -331,6 +331,9 @@ async function doStart(opts = {}, token = startSeq) {
   })
 
   return await new Promise((resolve) => {
+    // 解包后的端口探测等 await 期间 stop() 可能已介入：不再拉起进程
+    if (token !== startSeq) return resolve(snapshot())
+
     let settled = false
     let timer = null
     const finish = (patch) => {
@@ -355,6 +358,12 @@ async function doStart(opts = {}, token = startSeq) {
     }
     child = proc
     setState({ pid: proc.pid })
+    // spawn 落在 stop() 之后（极窄窗口）：立即回收，避免无人管理的泄漏进程
+    if (token !== startSeq) {
+      killTree(proc.pid)
+      clearPidFile()
+      return finish({ status: 'stopped', url: '', displayUrl: '', port: 0, pid: 0, error: '' })
+    }
 
     timer = setTimeout(() => {
       // 超时不清进程：插件加载可能仍在继续，保留现场供用户重试/查看日志

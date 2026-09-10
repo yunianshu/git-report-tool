@@ -14,6 +14,18 @@ const store = require('./store')
 
 const DEFAULT_TIMEOUT_MS = 20000
 
+/** 解析响应 JSON；网关错误页/代理拦截页等非 JSON 响应转为可读错误 */
+async function parseBody(resp) {
+  let body
+  try {
+    body = await resp.json()
+  } catch {
+    throw new Error('汉印接口返回非 JSON（可能是网关错误页或地址不正确）')
+  }
+  if (!body || typeof body !== 'object') throw new Error('汉印接口响应格式异常')
+  return body
+}
+
 class HanprintClient {
   constructor({ baseUrl, clientId, account, password, fetchImpl }) {
     this.base = String(baseUrl || '').replace(/\/+$/, '')
@@ -33,7 +45,7 @@ class HanprintClient {
       headers,
       signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     })
-    const body = await resp.json()
+    const body = await parseBody(resp)
     if (body && body.code === -2) {
       if (retried) throw new Error('汉印 token 过期且重登失败')
       await this.login()
@@ -59,7 +71,7 @@ class HanprintClient {
     const resp = await this.fetchImpl(`${this.base}/login/getToken?${qs}`, {
       signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     })
-    const body = await resp.json()
+    const body = await parseBody(resp)
     if (!body || body.code !== 0) {
       throw new Error(`汉印登录失败: ${(body && body.msg) || '未知错误'}`)
     }
@@ -116,7 +128,7 @@ class HanprintClient {
       body: JSON.stringify(items || []),
       signal: AbortSignal.timeout(DEFAULT_TIMEOUT_MS),
     })
-    const body = await resp.json()
+    const body = await parseBody(resp)
     if (!body || body.code !== 0) {
       throw new Error(`汉印提交失败: ${(body && body.msg) || '未知错误'}`)
     }
