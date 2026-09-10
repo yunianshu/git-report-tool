@@ -112,20 +112,31 @@ console.log(`全新主目录=${HOME_SANDBOX}`)
  * 只统计本次被测形态（开发态 electron.exe / 打包产物 exe），避免把同时运行的另一形态计入。
  */
 function dshProcessCount() {
-  // wmic 偶发返回 WMI 错误（"节点 - ... 错误: ..."），重试几次避免误判
-  for (let attempt = 0; attempt < 3; attempt++) {
+  const marker = (EXE ? path.basename(EXE) : 'electron.exe').toLowerCase()
+  if (process.platform === 'win32') {
+    // 新系统（Win11 22H2+ / 新 Server）已默认移除 wmic（ENOENT）：
+    // 优先 PowerShell CIM 查询，wmic 仅作老系统兜底，均失败才返回 -1
     try {
-      if (process.platform === 'win32') {
-        const marker = (EXE ? path.basename(EXE) : 'electron.exe').toLowerCase()
+      const ps = '[Console]::OutputEncoding=[Text.Encoding]::UTF8; '
+        + 'Get-CimInstance Win32_Process | Where-Object CommandLine '
+        + '| ForEach-Object { "$($_.ProcessId)`t$($_.CommandLine)" }'
+      const out = execFileSync('powershell', ['-NoProfile', '-Command', ps], { encoding: 'utf8' })
+      return out.split(/\r?\n/).filter((l) => /bin\.js/i.test(l) && /dsh/i.test(l) && /\bweb\b/.test(l)
+        && l.toLowerCase().includes(marker)).length
+    } catch { /* 回退 wmic */ }
+    for (let attempt = 0; attempt < 3; attempt++) {
+      try {
         const out = execFileSync('wmic', ['process', 'get', 'ProcessId,CommandLine', '/format:csv'], { encoding: 'utf8' })
         return out.split(/\r?\n/).filter((l) => /bin\.js/i.test(l) && /dsh/i.test(l) && /\bweb\b/.test(l)
           && l.toLowerCase().includes(marker)).length
-      }
-      const out = execFileSync('bash', ['-lc', "ps -eo args | grep -c '[b]in.js.*dsh.*web'"], { encoding: 'utf8' })
-      return Number(out.trim()) || 0
-    } catch { /* 重试 */ }
+      } catch { /* 重试 */ }
+    }
+    return -1
   }
-  return -1
+  try {
+    const out = execFileSync('bash', ['-lc', "ps -eo args | grep -c '[b]in.js.*dsh.*web'"], { encoding: 'utf8' })
+    return Number(out.trim()) || 0
+  } catch { return -1 }
 }
 
 /** 查询进程可执行文件路径（用于确认 dsh 跑在 Electron 自身而非额外 Node 上） */
