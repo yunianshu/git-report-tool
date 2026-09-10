@@ -94,8 +94,10 @@ const env = {
   USERPROFILE: HOME_SANDBOX,
   HOME: HOME_SANDBOX,
   SMOKE_HARNESS: '1',
-  // 打包产物首跑要先把内置运行时归档解包（约 30 秒），再启动 dsh
-  SMOKE_EXIT_MS: process.env.SMOKE_EXIT_MS || (EXE ? '180000' : '100000'),
+  // 打包产物首跑要先把内置运行时归档解包（实测约 30 秒），再启动 dsh；而 EVAL 内部
+  // 等待 webview 挂载上限就有 150 秒，180 秒预算会在 EVAL 出结果前就触发退出
+  // （stdout 只有 eval-start、既无 eval 也无 eval-err）。故打包产物取 300 秒。
+  SMOKE_EXIT_MS: process.env.SMOKE_EXIT_MS || (EXE ? '300000' : '100000'),
   SMOKE_EVAL: EVAL,
   SMOKE_EVAL_MS: '1000',
   SMOKE_CLICK_MS: '600000', // 禁用冒烟默认切页，交由 EVAL 自己点击
