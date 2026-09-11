@@ -6,6 +6,7 @@
         v-if="!state.ui.fullscreen"
         :projects="state.projects.items"
         :current-id="state.projects.currentId"
+        :hide-project-switcher="view === 'fillreport'"
         @select-project="selectProject"
       />
       <main class="content-area" :class="{ 'content-area--flush': view === 'harness' }">

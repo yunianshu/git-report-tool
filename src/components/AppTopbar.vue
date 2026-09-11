@@ -1,6 +1,6 @@
 <template>
   <header class="app-topbar">
-    <div class="project-switcher">
+    <div v-if="!hideProjectSwitcher" class="project-switcher">
       <span class="topbar-label">当前项目</span>
       <el-select
         :model-value="currentId"
@@ -43,6 +43,8 @@ import { projectStatusLabel } from '../utils/project-context'
 const props = defineProps({
   projects: { type: Array, default: () => [] },
   currentId: { type: String, default: '' },
+  // 一键填报等与「当前项目」无关的页面隐藏全局项目切换器（窗口控制与拖拽区保留）
+  hideProjectSwitcher: { type: Boolean, default: false },
 })
 defineEmits(['select-project'])
 const currentProject = computed(() => props.projects.find((project) => project.id === props.currentId) || null)
