@@ -521,7 +521,7 @@ async function run(projectId, targetId) {
     const ver = resolveVersion(project)
     record.version = ver.version
     // 更新内容：采集本次发布包含的 Git 提交（非仓库/无提交时静默跳过，绝不因此中断发布）
-    const anchor = releaseNotes.anchorFromRecords(history.list(project.id), project.id)
+    const anchor = releaseNotes.anchorFromRecords(history.list(project.id), project.id, target.id)
     const gitInfo = await releaseNotes.captureFor(project, { anchor, version: ver.version })
     if (gitInfo.ok) {
       Object.assign(record, gitInfo.fields)
@@ -750,6 +750,20 @@ async function run(projectId, targetId) {
         }
       } else {
         tracker.end('datasync', 'skipped')
+      }
+      // 全部发布步骤成功后才打标，固定到开始时采集的提交，避免部署期间 HEAD 变化。
+      if (isCanceled()) return finish('canceled', '用户取消')
+      if (!resultBox.rolledBack && !isCanceled() && record.gitHead) {
+        const tagName = releaseNotes.defaultTagName(record.version)
+        const tagged = await releaseNotes.createTag(project.localPath, tagName, record.gitHead)
+        if (tagged.ok) {
+          record.gitTag = tagged.tag
+          log('success', `发布标签已${tagged.existed ? '确认' : '创建'}：${tagged.tag}`)
+        } else {
+          record.gitTag = ''
+          record.gitTagError = tagged.error
+          log('warn', `部署已成功，但自动打标签失败：${tagged.error}`)
+        }
       }
       return finish(resultBox.rolledBack ? 'rolled_back' : 'success', resultBox.message)
     }

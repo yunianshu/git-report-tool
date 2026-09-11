@@ -155,6 +155,16 @@ assert.strictEqual(head, shaC)
   assert.ok(git(['tag', '--list']).includes('v1.0.1'), '标签应真实写入仓库')
   const again = await notes.createTag(repo, 'v1.0.1', shaC)
   assert.strictEqual(again.existed, true, '同名标签不应重复创建')
+  const conflict = await notes.createTag(repo, 'v1.0.1', shaB)
+  assert.strictEqual(conflict.ok, false, '同名标签指向其他提交必须报冲突')
+  assert.strictEqual(git(['rev-parse', 'v1.0.1']).trim(), shaC, '冲突不得移动原标签')
+  git(['-c', 'tag.gpgsign=false', 'tag', '-a', 'v-annotated', '-m', '测试附注标签', shaC])
+  assert.strictEqual((await notes.createTag(repo, 'v-annotated', shaC)).existed, true)
+  git(['tag', '-d', 'v-annotated'])
+  assert.strictEqual(notes.anchorFromRecords([
+    { projectId: 'p1', targetId: 'prod', type: 'deploy', status: 'success', finishedAt: 1, gitHead: shaA },
+    { projectId: 'p1', targetId: 'test', type: 'deploy', status: 'success', finishedAt: 2, gitHead: shaC },
+  ], 'p1', 'prod').value, shaA, '不同环境的发布起点必须隔离')
   const badName = await notes.createTag(repo, 'v1.0.1; rm -rf /', shaC)
   assert.strictEqual(badName.ok, false, '非法标签名应被拒绝')
 
@@ -258,6 +268,69 @@ assert.strictEqual(head, shaC)
   assert.ok(String(rec.gitAnchor).includes('v1.0.1') && String(rec.gitAnchor).includes('之后'), `应说明采集范围：${rec.gitAnchor}`)
   const persisted = history.get(rec.id)
   assert.ok(persisted && persisted.gitCommits.length >= 1, '采集结果应真实落盘到发布历史')
+  assert.strictEqual(git(['tag', '--list', 'v1.0.2']).trim(), '', '失败发布不得生成标签')
+
+  // 真实编排与 Git；仅替换打包和远程传输，避免连接真实服务器。
+  const ssh = require(path.join(root, 'electron/deploy/ssh-service'))
+  const packager = require(path.join(root, 'electron/deploy/packager'))
+  const { EventEmitter } = require('events')
+  ssh.connect = async () => ({ sftp: (cb) => cb(null, {
+    end() {}, createWriteStream() {
+      const stream = new EventEmitter()
+      stream.end = () => setImmediate(() => stream.emit('close'))
+      return stream
+    },
+  }) })
+  ssh.close = () => {}
+  ssh.mkdirp = async () => {}
+  ssh.upload = async () => {}
+  let outcome = 'success'
+  ssh.exec = async (_conn, cmd, onData) => {
+    if (cmd.startsWith('bash ')) {
+      if (outcome === 'rollback') onData('__STAGE__:rollback\n')
+      if (outcome === 'canceled') deployService.cancel()
+      onData('__DEPLOY_OK__:测试发布完成\n')
+      return { code: 0, stdout: '' }
+    }
+    return { code: 0, stdout: cmd.startsWith('sha256sum ') ? 'test-sha' : '' }
+  }
+  packager.buildPackage = async () => ({ fileName: 'test.zip', zipPath: path.join(tmpRoot, 'test.zip'), sizeBytes: 1, fileCount: 1, sha256: 'test-sha', keepLocal: true })
+  fs.writeFileSync(path.join(repo, 'docker-compose.yml'), 'services: {}\n')
+  const project = projectsSvc.list().find(p => p.id === runId)
+  project.targets[0].remotePath = '/test/app'
+  projectsSvc.save(project)
+  const success = await deployService.run(runId, 'p-run_t1')
+  assert.strictEqual(success.status, 'success', success.message)
+  assert.strictEqual(success.gitTag, 'v1.0.2')
+  assert.strictEqual(git(['rev-parse', 'v1.0.2']).trim(), shaD)
+  assert.strictEqual(history.get(success.id).gitTag, 'v1.0.2', '自动标签应落历史')
+
+  const shaE = commit('fix: 修复第二版问题', 'e.txt', 'e')
+  project.version.manual = '1.0.3'
+  projectsSvc.save(project)
+  const next = await deployService.run(runId, 'p-run_t1')
+  assert.strictEqual(next.gitTag, 'v1.0.3')
+  assert.deepStrictEqual(next.gitCommits.map(c => c.hash), [shaE], '第二次仅包含两版本间提交')
+  assert.ok(next.gitAnchor.includes('v1.0.2'))
+
+  project.version.manual = '1.0.4'
+  projectsSvc.save(project)
+  for (const state of ['rollback', 'canceled']) {
+    outcome = state
+    await deployService.run(runId, 'p-run_t1')
+    assert.strictEqual(git(['tag', '--list', 'v1.0.4']).trim(), '', `${state} 不得打标签`)
+  }
+  outcome = 'success'
+  project.version.manual = '1.0.2'
+  projectsSvc.save(project)
+  const collision = await deployService.run(runId, 'p-run_t1')
+  assert.strictEqual(collision.status, 'success', '标签冲突不应把已完成部署标为失败')
+  assert.ok(collision.gitTagError.includes('其他提交'), '标签冲突应记录具体原因')
+  assert.strictEqual(git(['rev-parse', 'v1.0.2']).trim(), shaD)
+
+  for (let i = 0; i < 61; i++) git(['commit', '--allow-empty', '-q', '-m', `fix: 批次修改${i}`])
+  const fullRange = await notes.collect(repo, { anchor: { value: shaE, kind: 'commit', label: '上版之后' } })
+  assert.strictEqual(fullRange.commits.length, 61, '版本间提交不能截断为60条')
 
   console.log('发布更新内容自测全部通过')
 })().then(() => {

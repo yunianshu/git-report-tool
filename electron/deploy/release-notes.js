@@ -13,7 +13,7 @@ const fs = require('fs')
 const path = require('path')
 const { execFile } = require('child_process')
 
-/** 单次最多采集的提交条数（防止首次发布时把整个仓库历史拖进来） */
+/** 无版本起点时最多采集的提交条数（已知版本范围不截断） */
 const MAX_COMMITS = 60
 /** 单条提交标题的最大长度 */
 const MAX_SUBJECT = 160
@@ -70,17 +70,18 @@ function clampSubject(s) {
 /**
  * 采集提交列表（新→旧）。
  * @param {string} dir 项目目录
- * @param {{from?: string, limit?: number}} opts from 为起点（提交号/标签），留空则取最近 limit 条
+ * @param {{from?: string, to?: string, limit?: number}} opts from 为起点，to 为固定终点；无起点时取最近 limit 条
  * @returns {Promise<{ok: boolean, commits: Array<{hash,date,subject}>, error: string}>}
  */
 async function listCommits(dir, opts = {}) {
   const limit = Number(opts.limit) > 0 ? Math.min(Number(opts.limit), MAX_COMMITS) : MAX_COMMITS
   const from = String(opts.from || '').trim()
-  const range = from ? `${from}..HEAD` : 'HEAD'
+  const to = String(opts.to || 'HEAD')
+  const range = from ? `${from}..${to}` : to
   const r = await runGit(dir, [
     'log', '--no-merges', '--date=short',
     '--pretty=format:%H%x1f%ad%x1f%s',
-    `--max-count=${limit}`,
+    ...(from ? [] : [`--max-count=${limit}`]),
     range,
   ])
   if (!r.ok) return { ok: false, commits: [], error: r.error }
@@ -95,10 +96,11 @@ async function listCommits(dir, opts = {}) {
  * 从上一次成功发布的记录里取采集起点：优先提交号，其次标签。
  * @param {Array} records 该项目的历史记录（任意顺序，内部取最新成功的有效记录）
  */
-function anchorFromRecords(records, projectId) {
+function anchorFromRecords(records, projectId, targetId) {
   const rows = (Array.isArray(records) ? records : [])
     .filter((r) => r && r.type === 'deploy' && r.status === 'success')
     .filter((r) => !projectId || r.projectId === projectId)
+    .filter((r) => !targetId || r.targetId === targetId)
     .sort((a, b) => (b.finishedAt || b.startedAt || 0) - (a.finishedAt || a.startedAt || 0))
   for (const r of rows) {
     const version = String(r.version || '').trim()
@@ -106,7 +108,7 @@ function anchorFromRecords(records, projectId) {
       return {
         value: String(r.gitHead),
         kind: 'commit',
-        label: `上次发布${version ? ` ${version}` : ''}之后`,
+        label: `上次发布${version ? ` ${version}` : ''}${r.gitTag ? `（标签 ${r.gitTag}）` : ''}之后`,
       }
     }
     if (r.gitTag) {
@@ -139,17 +141,18 @@ async function collect(dir, opts = {}) {
     }
 
     const from = anchor ? anchor.value : ''
-    let res = await listCommits(dir, { from })
+    let res = await listCommits(dir, { from, to: head })
     let anchorKind = anchor ? anchor.kind : 'none'
     let anchorLabel = anchor ? anchor.label : '首次发布（本次收录最近若干条提交）'
     let note = ''
     if (from && !res.ok) {
       // 起点已不存在（改过历史/标签被删）：退回最近若干条，并在标签里说明
       note = '上次发布的起点已找不到，已改为列出最近的提交'
-      res = await listCommits(dir, {})
+      res = await listCommits(dir, { to: head })
       anchorKind = 'none'
       anchorLabel = '首次发布（本次收录最近若干条提交）'
     }
+    if (!res.ok) return { ...empty, error: res.error }
     return {
       ok: true,
       head,
@@ -265,16 +268,21 @@ function defaultTagName(version) {
   return `v${v}`
 }
 
-/** 在项目目录为某次发布打标签（已存在同名标签时直接返回 existed，不覆盖） */
+/** 为指定发布提交打标签；同名只有指向相同提交才可复用，禁止覆盖。 */
 async function createTag(projectDir, tagName, commit) {
   const name = String(tagName || '').trim()
   if (!name || !/^[\w.+-]+$/.test(name)) return { ok: false, error: '标签名不合法' }
   if (!(await isGitRepo(projectDir))) return { ok: false, error: '项目目录不是 Git 仓库，无法打标签' }
-  const exists = await runGit(projectDir, ['rev-parse', '--verify', '--quiet', `refs/tags/${name}`])
-  if (exists.ok && exists.stdout.trim()) return { ok: true, tag: name, existed: true }
   const sha = String(commit || '').trim() || (await headCommit(projectDir))
   if (!sha) return { ok: false, error: '找不到可打标签的提交' }
-  const r = await runGit(projectDir, ['tag', name, sha])
+  const resolved = await runGit(projectDir, ['rev-parse', '--verify', '--end-of-options', `${sha}^{commit}`])
+  if (!resolved.ok) return { ok: false, error: '找不到可打标签的提交' }
+  const exists = await runGit(projectDir, ['rev-parse', '--verify', '--quiet', `refs/tags/${name}^{commit}`])
+  if (exists.ok) {
+    if (exists.stdout.trim() !== resolved.stdout.trim()) return { ok: false, error: `标签 ${name} 已指向其他提交，请使用新版本号；原标签未改动` }
+    return { ok: true, tag: name, existed: true }
+  }
+  const r = await runGit(projectDir, ['tag', name, resolved.stdout.trim()])
   if (!r.ok) return { ok: false, error: `打标签失败：${r.error}` }
   return { ok: true, tag: name, existed: false }
 }
