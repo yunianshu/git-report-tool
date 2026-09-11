@@ -269,9 +269,9 @@ function suggestTask(projectName, tasks) {
   return null
 }
 
-// ─── 提交汇总（移植 KnowMore buildZt：left = 原剩余 − 本次总消耗，最低为 0） ───
+// ─── 提交汇总（剩余 + 被覆盖记录的旧消耗 − 本次消耗，最低为 0） ───
 
-function buildSubmitTasks(planned, ztTasks, date) {
+function buildSubmitTasks(planned, ztTasks, date, efforts = {}) {
   const byId = new Map((ztTasks || []).map((t) => [String(t.id), t]))
   const byTask = new Map()
   for (const p of planned || []) {
@@ -284,7 +284,9 @@ function buildSubmitTasks(planned, ztTasks, date) {
   for (const [key, rows] of byTask) {
     const t = byId.get(key)
     const consumed = round2(rows.reduce((s, r) => s + r.consumed, 0))
-    const left = Math.max(0, round2((t ? t.left : 0) - consumed))
+    const existing = (efforts[key] && efforts[key].records) || []
+    const replaced = existing.slice(0, rows.length).reduce((s, r) => s + r.consumed, 0)
+    const left = Math.max(0, round2((t ? t.left : 0) + replaced - consumed))
     for (const r of rows) r.left = left
     tasks.push({
       taskId: Number(key),
@@ -415,8 +417,8 @@ async function collectRaw({ date, projects, cfg, identities, win, signature }) {
       try {
         const efforts = await zentao.ensureClient().then((c) => c.getTaskEfforts(taskId))
         const today = efforts.filter((e) => e.date === date)
-        ztEfforts[String(taskId)] = { count: today.length, consumed: round2(today.reduce((s, e) => s + e.consumed, 0)) }
-      } catch { /* 查询失败按无已有处理 */ }
+        ztEfforts[String(taskId)] = { count: today.length, consumed: round2(today.reduce((s, e) => s + e.consumed, 0)), records: today }
+      } catch (e) { ztError = `已有工时查询失败：${e.message || e}` }
     }))
   } else {
     ztError = '禅道未配置：请到「设置 → 一键填报」填写地址、账号与密码'
@@ -499,7 +501,7 @@ function buildPlanResult({ raw, projects, selectedInput }) {
     }
   })
 
-  const tasks = buildSubmitTasks(planned, raw.ztTasks, raw.date)
+  const tasks = buildSubmitTasks(planned, raw.ztTasks, raw.date, raw.ztEfforts)
   for (const t of tasks) {
     const existing = raw.ztEfforts[String(t.taskId)]
     if (existing) t.existingToday = existing
@@ -606,55 +608,71 @@ async function plan(payload) {
  * - 汉印：GetByDate 取当日已填记录，TaskId 匹配的条目带原 Id 提交（更新占比）；
  *   当日已有但本次未涉及的任务不动（不删除）；占比 0% 的条目不提交
  * - dryRun=true 只回显将提交的表单/条目，不写入
+ * - 日期必须与所有工时行一致；写入前刷新剩余工时与已有记录，任一查询失败即停止
  */
 async function submit(payload) {
   const { date, tasks, dryRun, hp } = payload || {}
+  if (!/^\d{4}-\d{2}-\d{2}$/.test(String(date || '')) || Number.isNaN(Date.parse(`${date}T00:00:00Z`)) || new Date(`${date}T00:00:00Z`).toISOString().slice(0, 10) !== date) {
+    throw new Error('请选择有效的填报日期')
+  }
   if (!Array.isArray(tasks) || !tasks.length) throw new Error('没有可提交的工时数据')
+  const taskIds = new Set()
   for (const t of tasks) {
     if (!t.taskId || !Array.isArray(t.rows) || !t.rows.length) throw new Error('任务数据不完整（缺少 taskId 或工时行）')
+    if (taskIds.has(String(t.taskId))) throw new Error('同一任务请合并后提交')
+    taskIds.add(String(t.taskId))
+    for (const row of t.rows) {
+      if (row.date !== date) throw new Error('工时行日期与填报日期不一致')
+      if (!Number.isFinite(row.consumed) || row.consumed <= 0) throw new Error('工时必须为大于零的数值')
+    }
   }
+  const hpItems = hp && Array.isArray(hp.items) ? hp.items.filter((it) => Number(it.Percent) > 0).map((it) => ({ ...it, Id: 0 })) : []
+  if (hpItems.some((it) => it.WorkDate !== date)) throw new Error('汉印工时日期与填报日期不一致')
   const client = await zentao.ensureClient()
-  const results = []
+  const latestTasks = await client.myTasks()
+  const prepared = []
+  // 所有查询在写入前完成；不能把查询失败当成「没有记录」。
   for (const t of tasks) {
-    let updated = 0
-    let appended = 0
-    try {
-      // eslint-disable-next-line no-await-in-loop
-      const today = (await client.getTaskEfforts(t.taskId)).filter((e) => !date || e.date === date)
-      t.rows.forEach((row, i) => {
-        if (today[i]) { row.effortId = today[i].id; updated += 1 } else { appended += 1 }
-      })
-    } catch { /* 查询失败按纯追加（同 KnowMore 键格式） */ appended = t.rows.length }
+    const latest = latestTasks.find((item) => String(item.id) === String(t.taskId))
+    if (!latest || !Number.isFinite(latest.left)) throw new Error(`无法获取任务 #${t.taskId} 最新剩余工时，已停止提交`)
+    // eslint-disable-next-line no-await-in-loop
+    const today = (await client.getTaskEfforts(t.taskId)).filter((e) => e.date === date)
+    const consumed = round2(t.rows.reduce((s, row) => s + row.consumed, 0))
+    const replaced = today.slice(0, t.rows.length).reduce((s, row) => s + row.consumed, 0)
+    const left = Math.max(0, round2(latest.left + replaced - consumed))
+    const rows = t.rows.map((row, i) => {
+      const copy = { ...row, left }
+      delete copy.effortId
+      if (today[i]) copy.effortId = today[i].id
+      return copy
+    })
+    prepared.push({ ...t, rows, consumed, updated: Math.min(today.length, rows.length), appended: Math.max(0, rows.length - today.length) })
+  }
+  let hpClient = null
+  let hpUpdated = 0
+  if (hpItems.length) {
+    hpClient = await hanprint.ensureClient()
+    const saved = (await hpClient.getByDate(date)).filter((r) => r && r.ProjectType !== -2)
+    for (const item of hpItems) {
+      const hit = saved.find((s) => String(s.TaskId) === String(item.TaskId))
+      if (hit) { item.Id = hit.Id; hpUpdated += 1 }
+    }
+  }
+  const results = []
+  for (const t of prepared) {
     // eslint-disable-next-line no-await-in-loop
     const r = await client.recordEfforts(t.taskId, t.rows, !!dryRun)
     results.push({
       taskId: t.taskId,
       taskName: t.taskName || '',
-      consumed: round2(t.rows.reduce((s, x) => s + x.consumed, 0)),
-      updated,
-      appended,
+      consumed: t.consumed,
+      updated: t.updated,
+      appended: t.appended,
       ...r,
     })
   }
   let hpResult = null
-  // 0% 条目不写入汉印（IPC 可被直接调用，不依赖渲染层已过滤）
-  const hpItems = hp && Array.isArray(hp.items) ? hp.items.filter((it) => Number(it.Percent) > 0) : []
   if (hpItems.length) {
-    const hpClient = await hanprint.ensureClient()
-    // 当日已填的记录按 TaskId 匹配：带原 Id 提交即更新占比（同 workhour-h5 语义）
-    let saved = []
-    const workDate = hpItems[0] && hpItems[0].WorkDate
-    if (workDate) {
-      try {
-        // eslint-disable-next-line no-await-in-loop
-        saved = (await hpClient.getByDate(workDate)).filter((r) => r && r.ProjectType !== -2)
-      } catch { /* 查询失败按全新增 */ }
-    }
-    let hpUpdated = 0
-    for (const item of hpItems) {
-      const hit = saved.find((s) => String(s.TaskId) === String(item.TaskId))
-      if (hit) { item.Id = hit.Id; hpUpdated += 1 }
-    }
     hpResult = await hpClient.add(hpItems, !!dryRun)
     hpResult.updated = hpUpdated
     hpResult.appended = hpItems.length - hpUpdated

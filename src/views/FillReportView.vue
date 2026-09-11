@@ -611,7 +611,7 @@ async function submitFill(preview) {
   }
   state.fillReport.submitting = true
   try {
-    const payload = { tasks, dryRun: preview }
+    const payload = { date: p.date, tasks, dryRun: preview }
     if (hpItems.length) payload.hp = { items: hpItems }
     const r = await window.gitReport.fillSubmit(toPlain(payload))
     if (!r.ok) {

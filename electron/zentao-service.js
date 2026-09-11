@@ -141,6 +141,7 @@ class ZentaoClient {
       }
       throw new Error('禅道会话失效且重登失败')
     }
+    if (resp.status < 200 || resp.status >= 300) throw new Error(`禅道查询失败：HTTP ${resp.status}`)
     return parseJsonPrefix(text)
   }
 
@@ -164,25 +165,23 @@ class ZentaoClient {
 
   /**
    * 查询任务已有工时记录（recordEstimate 页面数据，魔改版返回结构不定，容错解析）。
-   * 返回 [{ id, date:'YYYY-MM-DD', work, consumed, left }]；解析失败返回 []。
+   * 返回 [{ id, date:'YYYY-MM-DD', work, consumed, left }]；查询或解析失败抛错，避免误追加。
    */
   async getTaskEfforts(taskId) {
-    let d
-    try {
-      d = await this.getJson(`/index.php?m=task&f=recordEstimate&taskID=${taskId}&t=json`)
-    } catch {
-      return []
-    }
+    const d = await this.getJson(`/index.php?m=task&f=recordEstimate&taskID=${taskId}&t=json`)
     let inner = d && d.data
     if (typeof inner === 'string') {
-      try { inner = parseJsonPrefix(inner) } catch { return [] }
+      inner = parseJsonPrefix(inner)
     }
     const candidates = [inner && inner.efforts, inner && inner.records, inner && inner.list, d && d.efforts]
     let list = null
     for (const c of candidates) {
-      if (c) { list = Array.isArray(c) ? c : Object.values(c); break }
+      if (c && typeof c === 'object') { list = Array.isArray(c) ? c : Object.values(c); break }
     }
-    if (!list) return []
+    if (!list) throw new Error('禅道已有工时响应结构无法识别，已停止提交')
+    if (list.some((x) => !x || !Number.isInteger(Number(x.id)) || Number(x.id) <= 0 || !/^\d{4}-\d{2}-\d{2}/.test(String(x.date || '')) || !Number.isFinite(Number(x.consumed)) || Number(x.consumed) < 0)) {
+      throw new Error('禅道已有工时记录不完整，已停止提交')
+    }
     return list
       .filter((x) => x && x.id !== undefined)
       .map((x) => ({
@@ -225,6 +224,14 @@ class ZentaoClient {
     const body = await resp.text()
     if (body.includes('登录已超时') || /user-login/.test(resp.finalUrl || '')) {
       throw new Error('禅道会话已失效，请重新提交')
+    }
+    if (resp.status < 200 || resp.status >= 300) throw new Error(`禅道提交失败：HTTP ${resp.status}，请核对平台记录后重试`)
+    let result
+    try { result = parseJsonPrefix(body) } catch {
+      throw new Error('无法确认禅道提交结果，请先核对平台记录，避免重复提交')
+    }
+    if (!result || result.result !== 'success') {
+      throw new Error('禅道未确认提交成功，请核对平台记录及工时内容')
     }
     return { status: resp.status, body: body.slice(0, 200) }
   }

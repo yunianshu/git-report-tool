@@ -365,7 +365,7 @@ await test('getTaskEfforts：容错解析（data 字符串 + efforts dict + 尾�
   assert.strictEqual(list[0].consumed, 2)
 })
 
-await test('getTaskEfforts：结构不可识别时返回空数组', async () => {
+await test('getTaskEfforts：会话失效不再当成空记录', async () => {
   const { client } = makeClient((url, opts) => {
     if (url.includes('refreshRandom')) return { body: 'r1' }
     if (opts.method === 'POST') return { body: '{"result":"success"}' }
@@ -373,7 +373,35 @@ await test('getTaskEfforts：结构不可识别时返回空数组', async () => 
     return { body: '' }
   })
   await client.login()
+  await assert.rejects(() => client.getTaskEfforts(66), /会话失效/)
+})
+
+await test('getTaskEfforts：明确空列表可用，未知结构、错误页及网络异常必须抛错', async () => {
+  for (const body of ['{"data":{}}', '{"data":"invalid"}', '{"data":{"efforts":42}}', '{"data":{"efforts":[{}]}}', 'bad gateway']) {
+    const { client } = makeClient(() => ({ body }))
+    await assert.rejects(() => client.getTaskEfforts(66))
+  }
+  const { client } = makeClient(() => ({ body: '{"data":{"efforts":[]}}' }))
   assert.deepStrictEqual(await client.getTaskEfforts(66), [])
+  const { client: broken } = makeClient(() => { throw new Error('查询超时') })
+  await assert.rejects(() => broken.getTaskEfforts(66), /查询超时/)
+  const { client: httpError } = makeClient(() => ({ status: 500, body: '{"data":{"efforts":[]}}' }))
+  await assert.rejects(() => httpError.getTaskEfforts(66), /HTTP 500/)
+})
+
+await test('recordEfforts：仅明确成功响应通过，HTTP/业务失败与未知结果均抛错', async () => {
+  const rows = [{ date: '2026-09-07', consumed: 2, left: 8, work: '工作' }]
+  for (const response of [
+    { status: 500, body: '{"result":"success"}' },
+    { body: '{"result":"fail","message":"invalid"}' },
+    { body: '<html>登录页面</html>' },
+    { body: '{}' },
+  ]) {
+    const { client } = makeClient(() => response)
+    await assert.rejects(() => client.recordEfforts(66, rows))
+  }
+  const { client } = makeClient(() => ({ body: '{"result":"success"}<!--dirty-->' }))
+  assert.strictEqual((await client.recordEfforts(66, rows)).status, 200)
 })
 
 await test('POST 重定向（302）按浏览器语义降级为 GET 且不再提交表单', async () => {
@@ -661,18 +689,21 @@ const ztSvc = require('../electron/zentao-service')
 const hpSvc = require('../electron/hanprint-service')
 
 /** 打桩两个平台客户端，返回汉印 add 实际收到的条目 */
-async function withStubClients(fn) {
+async function withStubClients(fn, overrides = {}) {
   const origZt = ztSvc.ensureClient
   const origHp = hpSvc.ensureClient
   let sent = null
   const hpAddCalls = []
   ztSvc.ensureClient = async () => ({
+    myTasks: async () => [{ id: 66, left: 10 }, { id: 88, left: 10 }],
     getTaskEfforts: async () => [],
     recordEfforts: async (taskId, rowsIn, dry) => ({ dryRun: !!dry, taskId, rows: rowsIn.length }),
+    ...overrides.zt,
   })
   hpSvc.ensureClient = async () => ({
     getByDate: async () => [],
     add: async (items, dry) => { sent = items; hpAddCalls.push(items); return { dryRun: !!dry, json: items } },
+    ...overrides.hp,
   })
   try {
     const r = await fn()
@@ -712,6 +743,106 @@ await test('submit：全部为 0% 时不发起汉印提交', async () => {
 })
 
 // ═══════════ store 禅道配置（密码加密往返） ═══════════
+console.log('填报审查回归:')
+function submitFixture() {
+  return { date: '2026-09-07', tasks: [{ taskId: 66, rows: [{ date: '2026-09-07', consumed: 2, left: 0, work: '工作' }] }], hp: { items: [{ TaskId: '66', WorkDate: '2026-09-07', Percent: 100 }] } }
+}
+
+await test('页面提交携带计划日期（执行真实 submitFill，截取 IPC 参数）', async () => {
+  const source = fs.readFileSync(path.join(__dirname, '../src/views/FillReportView.vue'), 'utf8')
+  const fn = source.slice(source.indexOf('async function submitFill(preview)'), source.indexOf('function buildReportText()'))
+  let sent
+  const fixture = submitFixture()
+  const run = new Function('plan', 'unmatchedCount', 'state', 'window', 'toPlain', 'previewDialog', 'ElMessage', `${fn}; return submitFill(true)`)
+  await run({ value: { ...fixture, hpItems: fixture.hp.items } }, { value: 0 }, { fillReport: {} }, {
+    gitReport: { fillSubmit: async (payload) => { sent = payload; return { ok: true, results: [] } } },
+  }, (v) => v, { value: null }, { error: (message) => { throw new Error(message) } })
+  assert.strictEqual(sent.date, fixture.date)
+})
+
+await test('submit：缺失、无效或不一致的日期在任何平台查询前拒绝', async () => {
+  for (const mutate of [p => delete p.date, p => { p.date = '2026-02-30' }, p => { p.tasks[0].rows[0].date = '2026-09-06' }, p => { p.hp.items[0].WorkDate = '2026-09-06' }]) {
+    const p = submitFixture(); mutate(p)
+    let queried = false
+    await withStubClients(async () => {
+      await assert.rejects(() => fill.submit(p), /日期/)
+      assert.strictEqual(queried, false)
+    }, { zt: { myTasks: async () => { queried = true; return [] } } })
+  }
+})
+
+await test('submit：只复用目标日期记录，重新生成与重复提交不再重复扣减', async () => {
+  let left = 10
+  let records = [{ id: 100, date: '2026-09-06', consumed: 4, left: 10 }]
+  const writes = []
+  await withStubClients(async () => {
+    for (const hours of [2, 2, 3, 1]) {
+      const p = submitFixture()
+      p.tasks = fill.buildSubmitTasks([{ taskId: 66, hours, work: '工作' }], [{ id: 66, left }], p.date, { '66': { records: records.filter(r => r.date === p.date) } })
+      assert.strictEqual(p.tasks[0].left, 10 - hours, '计划预览使用覆盖差额')
+      const original = JSON.stringify(p)
+      await fill.submit(p)
+      assert.strictEqual(JSON.stringify(p), original, '不得修改传入计划')
+      assert.strictEqual(left, 10 - hours)
+    }
+  }, { zt: {
+    myTasks: async () => [{ id: 66, left }],
+    getTaskEfforts: async () => records,
+    recordEfforts: async (_id, rows) => {
+      writes.push(structuredClone(rows))
+      assert.notStrictEqual(rows[0].effortId, 100, '不能覆盖前一天')
+      left = rows[0].left
+      records = [records[0], { ...rows[0], id: 101 }]
+      return { status: 200 }
+    },
+  } })
+  assert.strictEqual(writes[0][0].effortId, undefined)
+  assert.strictEqual(writes[1][0].effortId, 101)
+})
+
+await test('submit：多行仅补回实际覆盖行，忽略客户端旧 ID 与旧剩余', async () => {
+  const p = submitFixture()
+  p.tasks[0].rows[0].effortId = 999
+  await withStubClients(() => fill.submit(p), { zt: {
+    myTasks: async () => [{ id: 66, left: 5 }],
+    getTaskEfforts: async () => [{ id: 101, date: p.date, consumed: 3 }, { id: 102, date: p.date, consumed: 4 }],
+    recordEfforts: async (_id, rows) => {
+      assert.strictEqual(rows[0].effortId, 101)
+      assert.strictEqual(rows[0].left, 6)
+      return { status: 200 }
+    },
+  } })
+})
+
+await test('submit：任一平台已有记录查询失败时，两个平台都不得写入', async () => {
+  for (const platform of ['zt', 'hp', 'latest', 'secondTask']) {
+    let writes = 0
+    const overrides = { zt: { recordEfforts: async () => { writes++; return {} } }, hp: { add: async () => { writes++; return {} } } }
+    if (platform === 'zt') overrides.zt.getTaskEfforts = async () => { throw new Error('查询失败') }
+    if (platform === 'hp') overrides.hp.getByDate = async () => { throw new Error('查询失败') }
+    if (platform === 'latest') overrides.zt.myTasks = async () => []
+    const p = submitFixture()
+    if (platform === 'secondTask') {
+      p.tasks.push({ taskId: 88, rows: p.tasks[0].rows })
+      overrides.zt.getTaskEfforts = async (id) => { if (id === 88) throw new Error('查询失败'); return [] }
+    }
+    await withStubClients(async () => { await assert.rejects(() => fill.submit(p)); assert.strictEqual(writes, 0) }, overrides)
+  }
+})
+
+await test('submit：禅道业务失败向上传递，停止后续任务与汉印写入', async () => {
+  const { client } = makeClient(() => ({ body: '{"result":"fail"}' }))
+  const p = submitFixture()
+  p.tasks.push({ taskId: 88, rows: p.tasks[0].rows })
+  let ztCalls = 0
+  let hpCalls = 0
+  await withStubClients(async () => {
+    await assert.rejects(() => fill.submit(p), /未确认提交成功/)
+    assert.strictEqual(ztCalls, 1)
+    assert.strictEqual(hpCalls, 0)
+  }, { zt: { recordEfforts: async (...args) => { ztCalls++; return client.recordEfforts(...args) } }, hp: { add: async () => { hpCalls++ } } })
+})
+
 console.log('禅道配置持久化:')
 await test('保存密码 → 落盘为密文字段 → load 只下发脱敏标志', () => {
   const ok = store.save({ zentao: { baseUrl: 'http://10.11.34.2', account: 'wgl', password: 'p@ss' } })
