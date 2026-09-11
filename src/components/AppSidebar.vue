@@ -29,14 +29,14 @@
     <div class="sidebar-footer">
       <span class="status-dot" />
       <span>本地数据</span>
-      <span class="sidebar-version">v{{ appVersion }}</span>
+      <button class="sidebar-version" type="button" title="查看版本更新日志" @click="$emit('show-changelog')">v{{ appVersion }} · 更新日志</button>
     </div>
   </aside>
 </template>
 
 <script setup>
 defineProps({ modelValue: { type: String, required: true } })
-defineEmits(['update:modelValue'])
+defineEmits(['update:modelValue', 'show-changelog'])
 
 /** 由 vite define 从 package.json 注入（见 vite.config.js） */
 const appVersion = typeof __APP_VERSION__ !== 'undefined' ? __APP_VERSION__ : ''

@@ -1,6 +1,6 @@
 <template>
   <div class="app-shell" :class="{ 'is-immersive': state.ui.fullscreen }">
-    <AppSidebar v-if="!state.ui.fullscreen" v-model="view" />
+    <AppSidebar v-if="!state.ui.fullscreen" v-model="view" @show-changelog="changelogVisible = true" />
     <section class="shell-main">
       <AppTopbar
         v-if="!state.ui.fullscreen"
@@ -18,11 +18,12 @@
           <FillReportView v-else-if="view === 'fillreport'" key="fillreport" @navigate="navigate" />
           <DeployView v-else-if="view === 'deploy'" key="deploy" @navigate="navigate" />
           <ExtensionsView v-else-if="view === 'extensions'" key="extensions" />
-          <SettingsView v-else key="settings" :initial-section="settingsSection" />
+          <SettingsView v-else key="settings" :initial-section="settingsSection" @show-changelog="changelogVisible = true" />
         </transition>
       </main>
     </section>
 
+    <ChangelogDialog v-model="changelogVisible" />
     <ProjectEditor v-model:visible="editorVisible" :project="editingProject" :saving="editorSaving" @saved="saveEditorProject" />
   </div>
 </template>
@@ -31,6 +32,7 @@
 import { ref, h, onMounted, watch } from 'vue'
 import { ElMessage, ElMessageBox, ElCheckbox } from 'element-plus'
 import AppSidebar from './components/AppSidebar.vue'
+import ChangelogDialog from './components/ChangelogDialog.vue'
 import AppTopbar from './components/AppTopbar.vue'
 import ProjectEditor from './components/ProjectEditor.vue'
 import DashboardView from './views/DashboardView.vue'
@@ -48,6 +50,7 @@ import { toPlain } from './utils/ipc'
 import { shortPath } from './utils/path'
 
 const view = ref('dashboard')
+const changelogVisible = ref(false)
 const settingsSection = ref('ai')
 const editorVisible = ref(false)
 const editorSaving = ref(false)
