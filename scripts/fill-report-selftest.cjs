@@ -311,6 +311,34 @@ await test('myTasks 会话失效自动重登一次', async () => {
   assert.strictEqual(logins, 2)
 })
 
+await test('getTaskById：已完成任务从详情取最新剩余（data 可为 JSON 字符串，left 为字符串数字）', async () => {
+  const { client } = makeClient((url, opts) => {
+    if (url.includes('refreshRandom')) return { body: '"rand1"' }
+    if (opts.method === 'POST' && url.includes('user&f=login')) return { body: '{"result":"success"}' }
+    if (url.includes('m=task&f=view&taskID=6813')) {
+      return { body: JSON.stringify({ data: JSON.stringify({ task: { id: '6813', name: '打印机产品信息管理系统-支持多语言产品', status: 'done', left: '0', consumed: '52' } }) }) }
+    }
+    return { body: '' }
+  })
+  await client.login()
+  const t = await client.getTaskById('6813')
+  assert.deepStrictEqual(t, { id: 6813, name: '打印机产品信息管理系统-支持多语言产品', status: 'done', consumed: 52, left: 0 })
+})
+
+await test('getTaskById：任务不存在/响应异常/无 task 结构时返回 null', async () => {
+  const { client } = makeClient((url, opts) => {
+    if (url.includes('refreshRandom')) return { body: '"rand1"' }
+    if (opts.method === 'POST' && url.includes('user&f=login')) return { body: '{"result":"success"}' }
+    if (url.includes('taskID=404')) return { status: 404, body: 'not found' }
+    if (url.includes('taskID=555')) return { body: '<html>任务不存在</html>' } // 非 JSON
+    return { body: '{"data":{"title":"无 task 键"}}' }
+  })
+  await client.login()
+  assert.strictEqual(await client.getTaskById('404'), null)
+  assert.strictEqual(await client.getTaskById('555'), null)
+  assert.strictEqual(await client.getTaskById('666'), null)
+})
+
 await test('recordEstimates dryRun：表单数组语法构造（无 effortId 时键为行号，追加）', async () => {
   const { client } = makeClient((url, opts) => {
     if (url.includes('refreshRandom')) return { body: 'r1' }
@@ -468,6 +496,14 @@ await test('任务不在我的任务列表时 taskLeft=null 仍可构造', () =>
   const tasks = fill.buildSubmitTasks([{ taskId: 999, hours: 1, work: '1. x' }], [], '2026-09-07')
   assert.strictEqual(tasks[0].taskLeft, null)
   assert.strictEqual(tasks[0].left, 0)
+  assert.strictEqual(tasks[0].taskName, '')
+})
+await test('任务不在我的任务列表时 taskName 用绑定名兜底', () => {
+  const tasks = fill.buildSubmitTasks([
+    { taskId: 6813, hours: 2, work: '1. x', taskName: '打印机产品信息管理系统-支持多语言产品' },
+  ], [], '2026-09-11')
+  assert.strictEqual(tasks[0].taskLeft, null)
+  assert.strictEqual(tasks[0].taskName, '打印机产品信息管理系统-支持多语言产品')
 })
 
 // ═══════════ 汉印条目构造（百分比 Σ=100） ═══════════
@@ -820,7 +856,7 @@ await test('submit：任一平台已有记录查询失败时，两个平台都�
     const overrides = { zt: { recordEfforts: async () => { writes++; return {} } }, hp: { add: async () => { writes++; return {} } } }
     if (platform === 'zt') overrides.zt.getTaskEfforts = async () => { throw new Error('查询失败') }
     if (platform === 'hp') overrides.hp.getByDate = async () => { throw new Error('查询失败') }
-    if (platform === 'latest') overrides.zt.myTasks = async () => []
+    if (platform === 'latest') { overrides.zt.myTasks = async () => []; overrides.zt.getTaskById = async () => null }
     const p = submitFixture()
     if (platform === 'secondTask') {
       p.tasks.push({ taskId: 88, rows: p.tasks[0].rows })
@@ -828,6 +864,39 @@ await test('submit：任一平台已有记录查询失败时，两个平台都�
     }
     await withStubClients(async () => { await assert.rejects(() => fill.submit(p)); assert.strictEqual(writes, 0) }, overrides)
   }
+})
+
+await test('submit：任务已完成不在我的任务列表时，回退任务详情取剩余工时继续提交', async () => {
+  let ztWrites = 0
+  let sentRows = null
+  const { r } = await withStubClients(() => fill.submit({
+    date: '2026-09-11',
+    tasks: [{ taskId: 6813, taskName: '打印机产品信息管理系统-支持多语言产品', rows: [
+      { date: '2026-09-11', work: '1. x', consumed: 2, left: 0 },
+    ] }],
+    dryRun: false,
+  }), { zt: {
+    myTasks: async () => [{ id: 6770, name: '电商决策支持系统', status: 'doing', left: 18.5, consumed: 21 }], // #6813 已完成，不在列表
+    getTaskById: async (id) => ({ id: 6813, name: '打印机产品信息管理系统-支持多语言产品', status: 'done', consumed: 52, left: 0 }),
+    getTaskEfforts: async () => [],
+    recordEfforts: async (taskId, rows) => { ztWrites += 1; sentRows = rows; return { taskId } },
+  } })
+  assert.strictEqual(ztWrites, 1, '应放行提交')
+  assert.strictEqual(r.results[0].taskId, 6813)
+  assert.strictEqual(r.results[0].appended, 1)
+  assert.strictEqual(sentRows[0].left, 0, 'left = max(0, 详情0 + 覆盖0 − 本次2) = 0')
+})
+
+await test('submit：任务不在我的任务列表且详情也拿不到时，停止且不写入', async () => {
+  let writes = 0
+  await withStubClients(async () => {
+    await assert.rejects(() => fill.submit(submitFixture()), /无法获取任务 #66 最新剩余工时，已停止提交/)
+  }, { zt: {
+    myTasks: async () => [],
+    getTaskById: async () => null,
+    recordEfforts: async () => { writes += 1; return {} },
+  }, hp: { add: async () => { writes += 1; return {} } } })
+  assert.strictEqual(writes, 0)
 })
 
 await test('submit：禅道业务失败向上传递，停止后续任务与汉印写入', async () => {

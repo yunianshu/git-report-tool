@@ -164,6 +164,30 @@ class ZentaoClient {
   }
 
   /**
+   * 任务详情。myTasks 只列未完成任务，已完成/已关闭/已转交的任务从这里取最新剩余工时
+   * （完成时禅道会把 left 置 0）。查询失败或结构无法识别返回 null，由调用方决定是否阻断。
+   */
+  async getTaskById(taskId) {
+    let d
+    try {
+      d = await this.getJson(`/index.php?m=task&f=view&taskID=${taskId}&t=json`)
+    } catch {
+      return null // 任务不存在/无权限/网络异常：统一按「拿不到」处理
+    }
+    let inner = d && d.data
+    if (typeof inner === 'string') inner = parseJsonPrefix(inner)
+    const t = inner && inner.task
+    if (!t || t.id === undefined) return null
+    return {
+      id: Number(t.id),
+      name: String(t.name || ''),
+      status: t.status || '',
+      consumed: Number(t.consumed || 0),
+      left: Number(t.left || 0),
+    }
+  }
+
+  /**
    * 查询任务已有工时记录（recordEstimate 页面数据，魔改版返回结构不定，容错解析）。
    * 返回 [{ id, date:'YYYY-MM-DD', work, consumed, left }]；查询或解析失败抛错，避免误追加。
    */

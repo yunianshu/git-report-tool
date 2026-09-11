@@ -277,11 +277,13 @@ function buildSubmitTasks(planned, ztTasks, date, efforts = {}) {
   for (const p of planned || []) {
     if (!p.taskId) continue
     const key = String(p.taskId)
-    if (!byTask.has(key)) byTask.set(key, [])
-    byTask.get(key).push({ date, work: p.work, consumed: p.hours })
+    if (!byTask.has(key)) byTask.set(key, { taskName: '', rows: [] })
+    const entry = byTask.get(key)
+    if (!entry.taskName && p.taskName) entry.taskName = p.taskName
+    entry.rows.push({ date, work: p.work, consumed: p.hours })
   }
   const tasks = []
-  for (const [key, rows] of byTask) {
+  for (const [key, { taskName, rows }] of byTask) {
     const t = byId.get(key)
     const consumed = round2(rows.reduce((s, r) => s + r.consumed, 0))
     const existing = (efforts[key] && efforts[key].records) || []
@@ -290,7 +292,7 @@ function buildSubmitTasks(planned, ztTasks, date, efforts = {}) {
     for (const r of rows) r.left = left
     tasks.push({
       taskId: Number(key),
-      taskName: t ? t.name : '',
+      taskName: t ? t.name : taskName,
       taskLeft: t ? t.left : null, // 禅道当前剩余（null=任务已不在我的任务列表）
       consumed,
       left,
@@ -633,7 +635,9 @@ async function submit(payload) {
   const prepared = []
   // 所有查询在写入前完成；不能把查询失败当成「没有记录」。
   for (const t of tasks) {
-    const latest = latestTasks.find((item) => String(item.id) === String(t.taskId))
+    // myTasks 只列未完成任务：已完成/已转交的任务回退任务详情取最新剩余（完成时禅道已把 left 置 0）
+    let latest = latestTasks.find((item) => String(item.id) === String(t.taskId))
+    if (!latest) latest = await client.getTaskById(t.taskId) // eslint-disable-line no-await-in-loop
     if (!latest || !Number.isFinite(latest.left)) throw new Error(`无法获取任务 #${t.taskId} 最新剩余工时，已停止提交`)
     // eslint-disable-next-line no-await-in-loop
     const today = (await client.getTaskEfforts(t.taskId)).filter((e) => e.date === date)
