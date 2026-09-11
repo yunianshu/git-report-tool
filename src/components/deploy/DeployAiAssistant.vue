@@ -234,8 +234,8 @@
             </el-table-column>
             <el-table-column label="性质" width="110">
               <template #default="{ row }">
-                <el-tag size="small" effect="plain" :type="row.kind === 'upload?' ? 'warning' : 'info'">
-                  {{ row.kind === 'upload?' ? '待确认推送' : '跨版本共享' }}
+                <el-tag size="small" effect="plain" :type="row.kind === 'share' ? 'info' : 'warning'">
+                  {{ row.kind === 'share' ? '跨版本共享' : (['upload', 'upload?'].includes(row.kind) ? '待确认推送' : '用途待确认') }}
                 </el-tag>
               </template>
             </el-table-column>
@@ -309,7 +309,7 @@
 </template>
 
 <script setup>
-import { computed, ref, watch } from 'vue'
+import { computed, ref, watch, onUnmounted } from 'vue'
 import { ElMessage, ElMessageBox } from 'element-plus'
 import { toPlain } from '../../utils/ipc'
 
@@ -329,6 +329,10 @@ const selectedFiles = ref([])
 const previewVisible = ref(false)
 const previewFile = ref(null)
 const generatingPath = ref('')
+let revision = 0
+const captureContext = () => ({ revision, projectId: projectId.value, targetId: props.activeTargetId })
+const isCurrent = (context) => props.modelValue && context.revision === revision
+  && context.projectId === projectId.value && context.targetId === props.activeTargetId
 
 /** 已有部署判定的标签样式（managed/legacy/content/empty/none/unknown） */
 const existingTag = computed(() => {
@@ -364,9 +368,18 @@ const relatedContainers = computed(() => {
 /** 缺失的部署文件清单（方案产出） */
 const planMissingFiles = computed(() => (result.value && result.value.plan && result.value.plan.missingFiles) || [])
 
-watch(() => props.modelValue, (v) => {
-  if (!v) { stepText.value = '' }
-})
+watch(() => [props.modelValue, props.form.id, props.form.localPath, props.activeTargetId], () => {
+  revision += 1
+  result.value = null
+  written.value = []
+  selectedFiles.value = []
+  previewVisible.value = false
+  previewFile.value = null
+  running.value = false
+  generatingPath.value = ''
+  stepText.value = ''
+}, { flush: 'sync' })
+onUnmounted(() => { revision += 1 })
 
 function fmtSize(bytes) {
   const n = Number(bytes) || 0
@@ -377,29 +390,25 @@ function fmtSize(bytes) {
 
 async function run() {
   if (!projectId.value) return ElMessage.warning('请先保存项目')
+  revision += 1
+  const context = captureContext()
   running.value = true
   written.value = []
   selectedFiles.value = []
   result.value = null
   try {
-    stepText.value = '① 正在体检本地项目…'
-    const l = await window.gitReport.deployAiScanLocal(projectId.value)
-    if (!l.ok) throw new Error(l.error)
-    stepText.value = '② 正在校验服务器部署条件…'
-    const r = await window.gitReport.deployAiScanRemote(projectId.value, props.activeTargetId)
-    // 三步合一：diagnose 会重新确认两端结果并调用 AI 出方案
-    stepText.value = '③ AI 正在分析并设计部署方案…'
-    const d = await window.gitReport.deployAiDiagnose(projectId.value, props.activeTargetId)
+    stepText.value = '正在体检本地项目、校验服务器并生成部署方案…'
+    const d = await window.gitReport.deployAiDiagnose(context.projectId, context.targetId)
+    if (!isCurrent(context)) return
     if (!d.ok) throw new Error(d.error)
-    // 以 diagnose 结果为准；远程失败时保留上一步的连接错误提示
-    if (!d.remote || !d.remote.ok) d.remote = (r && r.remote) || d.remote
     result.value = d
     stepText.value = ''
   } catch (e) {
+    if (!isCurrent(context)) return
     ElMessage.error(e.message || String(e))
     stepText.value = ''
   } finally {
-    running.value = false
+    if (isCurrent(context)) running.value = false
   }
 }
 
@@ -410,11 +419,13 @@ function preview(row) {
 
 /** 单独生成某个部署文件的内容（脚本类文件走纯文本输出，避免 JSON 转义与截断） */
 async function generateOne(row) {
+  const context = captureContext()
   generatingPath.value = row.path
   try {
-    const r = await window.gitReport.deployAiGenerateFile(projectId.value, props.activeTargetId, {
+    const r = await window.gitReport.deployAiGenerateFile(context.projectId, context.targetId, {
       path: row.path, action: row.action, purpose: row.purpose,
     })
+    if (!isCurrent(context)) return
     if (!r || !r.ok) {
       ElMessage.error((r && r.error) || '生成失败')
       return
@@ -423,13 +434,15 @@ async function generateOne(row) {
     if (r.truncated) ElMessage.warning(`${row.path} 可能被长度上限截断，请预览确认后再写入`)
     preview(row)
   } catch (e) {
+    if (!isCurrent(context)) return
     ElMessage.error(e.message || String(e))
   } finally {
-    generatingPath.value = ''
+    if (isCurrent(context)) generatingPath.value = ''
   }
 }
 
 async function writeSelected() {
+  const context = captureContext()
   const files = selectedFiles.value.map((f) => ({ path: f.path, content: f.content, action: f.action }))
   if (!files.length) return
   try {
@@ -439,7 +452,15 @@ async function writeSelected() {
       { type: 'warning' },
     )
   } catch { return }
-  const res = await window.gitReport.deployAiWriteFiles(projectId.value, files)
+  if (!isCurrent(context)) return
+  let res
+  try {
+    res = await window.gitReport.deployAiWriteFiles(context.projectId, files)
+  } catch (e) {
+    if (isCurrent(context)) ElMessage.error(e.message || String(e))
+    return
+  }
+  if (!isCurrent(context)) return
   if (!res.ok) return ElMessage.error(res.error || '写入失败')
   const ok = (res.results || []).filter((x) => x.action === 'created' || x.action === 'updated')
   const bad = (res.results || []).filter((x) => x.action !== 'created' && x.action !== 'updated')
@@ -449,6 +470,7 @@ async function writeSelected() {
 }
 
 async function apply() {
+  const context = captureContext()
   const plan = result.value && result.value.plan
   if (!plan) return
   try {
@@ -461,12 +483,15 @@ async function apply() {
   // 必须转成普通对象再传：result 是 Vue 的 ref，result.plan 是响应式代理，
   // 而代理无法跨 contextBridge（preload 里的 toPlain 根本收不到），ipcRenderer.invoke
   // 会直接抛「An object could not be cloned.」——表现为点确定毫无反应
+  if (!isCurrent(context)) return
   const payload = toPlain(plan)
   if (payload === plan) return ElMessage.error('方案内容无法序列化，请重新体检后再套用')
   try {
-    const r = await window.gitReport.deployAiApply(projectId.value, props.activeTargetId, payload)
+    const r = await window.gitReport.deployAiApply(context.projectId, context.targetId, payload)
+    if (!isCurrent(context)) return
     if (!r || !r.ok) return ElMessage.error((r && r.error) || '套用失败')
   } catch (e) {
+    if (!isCurrent(context)) return
     return ElMessage.error(`套用失败：${(e && e.message) || String(e)}`)
   }
   ElMessage.success('部署方案已写入配置')

@@ -16,6 +16,7 @@
  */
 const fs = require('fs')
 const path = require('path')
+const { parse: parseYaml } = require('yaml')
 const projects = require('./deploy-projects')
 const ssh = require('./ssh-service')
 const store = require('../store')
@@ -89,6 +90,57 @@ const DATA_DIR_RE = /^(data|datasource|data_source|output|outputs|storage|upload
 /** 发布产物目录候选（脚本部署的 artifactDir） */
 const ARTIFACT_DIR_CANDIDATES = ['dist', 'release', 'releases', 'output', 'target', 'build/dist']
 const ARTIFACT_EXTS = ['.tar.gz', '.tgz', '.zip']
+
+/** 拒绝路径中的链接（含 junction 和悬空链接），避免读写跟随链接越界。 */
+function resolveProjectFile(root, rel) {
+  const base = fs.realpathSync(root)
+  const abs = path.resolve(base, rel)
+  const relative = path.relative(base, abs)
+  if (!relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative)) {
+    throw new Error('目标路径越出项目目录')
+  }
+  let current = base
+  for (const part of relative.split(path.sep)) {
+    current = path.join(current, part)
+    try {
+      const st = fs.lstatSync(current)
+      if (st.isSymbolicLink()) throw new Error('部署文件路径不得经过符号链接或 junction')
+    } catch (e) {
+      if (e.code !== 'ENOENT') throw e
+    }
+  }
+  return abs
+}
+
+/** 发给模型前隐藏常见凭据字面量；保留纯环境变量引用。 */
+function redactAiText(value) {
+  const text = String(value || '').replace(
+    /-----BEGIN [^-]*PRIVATE KEY-----[\s\S]*?(?:-----END [^-]*PRIVATE KEY-----|$)/g,
+    '[已隐藏私钥]',
+  )
+  let blockIndent = -1
+  return text.split('\n').map((line) => {
+    const indent = line.match(/^\s*/)[0].length
+    if (blockIndent >= 0 && (indent > blockIndent || !line.trim())) return ''
+    blockIndent = -1
+    // 不把敏感变量的默认值当成安全引用，例如 ${PASSWORD:-真实密码}。
+    const literal = line.replace(/\$\{[A-Za-z_][\w]*\}|\$[A-Za-z_][\w]*/g, '[变量引用]')
+    const assignment = literal.match(/(?:[\w.-]*(?:password|passwd|pwd|secret|token|api[_-]?key|access[_-]?key|private[_-]?key|authorization)[\w.-]*["']?\s*[:=]\s*)(.*)/i)
+    const credential = assignment && assignment[1].replace(/["'\s,}]/g, '') !== '[变量引用]'
+    if (credential || /:\/\/[^\s/@]+:[^\s/@]+@|\b(?:Bearer|Basic)\s+\S+|(?:^|\s)(?:--password|--token|--secret|--api-key|--user|-u|-p)\s+\S+/i.test(literal)) {
+      if (credential) blockIndent = indent
+      return `${' '.repeat(indent)}# [已隐藏凭据内容]`
+    }
+    return line
+  }).join('\n')
+}
+
+function safeAiValue(value) {
+  if (typeof value === 'string') return redactAiText(value)
+  if (Array.isArray(value)) return value.map(safeAiValue)
+  if (value && typeof value === 'object') return Object.fromEntries(Object.entries(value).map(([k, v]) => [k, safeAiValue(v)]))
+  return value
+}
 
 function readTextCapped(file, maxBytes = MAX_TEXT_BYTES) {
   try {
@@ -251,7 +303,8 @@ function scanLocal(project) {
   for (const rel of composeList) {
     if (composeSeen.has(rel)) continue
     composeSeen.add(rel)
-    const abs = path.join(root, rel)
+    let abs
+    try { abs = resolveProjectFile(root, rel) } catch { report.risks.push(`跳过不安全的部署文件路径：${rel}`); continue }
     if (!fs.existsSync(abs)) continue
     const text = readTextCapped(abs)
     report.compose.files.push({ path: rel, ...parseCompose(text), bytes: text.length })
@@ -260,7 +313,8 @@ function scanLocal(project) {
 
   // 发布相关脚本内容（供 AI 改写/生成时参考）
   for (const name of ['upgrade.sh', 'start.sh', 'stop.sh', 'package.sh', 'backup.sh', 'restore.sh', 'release-common.sh', 'Dockerfile', '.env.example']) {
-    const abs = path.join(root, name)
+    let abs
+    try { abs = resolveProjectFile(root, name) } catch { report.risks.push(`跳过不安全的部署文件路径：${name}`); continue }
     if (!fs.existsSync(abs)) continue
     const text = readTextCapped(abs)
     if (name === '.env.example') {
@@ -354,7 +408,7 @@ function pickFileContentsForAi(local) {
       continue
     }
     total += f.content.length
-    out.push(f)
+    out.push({ ...f, content: redactAiText(f.content) })
   }
   return out
 }
@@ -758,23 +812,11 @@ function buildHeuristicPlan(project, target, local, remote) {
   // 已有部署识别（「服务器是否已经部署过同一个服务」）——首次部署是否具备条件的核心一项
   const existing = detectExistingDeployment(project, target, local, remote)
 
-  // 部署条件闸门：缺文件 / 缺前置条件 / 已有旧部署未接管，任一存在即不具备直接发布条件。
-  // 已被本工具接管的部署（managed）：共享布局、运行配置、Token 早已就绪，
-  // 首次部署的前置条件清单只作参考，不能再算作阻塞项（否则每次复检都误报"不具备条件"）。
-  const blockers = []
-  for (const m of missingFiles) blockers.push(`缺少部署文件：${m.path}（${m.why}）`)
-  if (existing.kind !== 'managed') {
-    for (const p of prerequisites) blockers.push(`缺少首次部署前置条件：${p.item}`)
-  }
-  if (existing.checked && (existing.kind === 'legacy' || existing.kind === 'content')) {
-    blockers.push(`服务器上已存在旧部署（${existing.evidence[0] || '部署目录有内容'}）：需先按「接管步骤」迁移数据，才能用本工具发布`)
-  }
-  if (!local.version.version && !(project.version && project.version.manual)) blockers.push('未识别到版本号：请填写手动版本或补齐项目版本文件')
-  if (!(target && target.server && target.server.host)) blockers.push('未配置服务器地址')
-  if (!(target && target.remotePath)) blockers.push('未配置远程部署目录')
-
-  return {
+  const plan = {
     source: 'heuristic',
+    checks: { root: local.root, localExists: local.exists, detectedVersion: local.version.version,
+      serverConfigured: !!(target && target.server && target.server.host), remotePathConfigured: !!(target && target.remotePath),
+      remoteOk: !!(remote && remote.ok), tools: (remote && remote.tools) || {} },
     summary: deployMode === 'script'
       ? '按项目自带发布脚本（发布包 + upgrade.sh）部署'
       : '按 Compose 编排部署',
@@ -817,11 +859,65 @@ function buildHeuristicPlan(project, target, local, remote) {
     notes,
     existing,
     migrationPlan: existing.requiredSteps,
-    blockers,
-    readyToDeploy: blockers.length === 0,
+    blockers: [],
+    readyToDeploy: false,
     fileRequests: fileRows,
     files: fileRows.map((r) => ({ ...r })),
   }
+  refreshReadiness(plan)
+  return plan
+}
+
+/** 基于本地证据和最终形态重算；AI 只能补充缺项，不能清除确定性检查。 */
+function refreshReadiness(plan, extraMissing = []) {
+  const checks = plan.checks
+  if (!checks) return
+  const missing = []
+  const requireFile = (rel, why) => {
+    try {
+      if (fs.statSync(resolveProjectFile(checks.root, rel)).isFile()) return
+    } catch { /* 不存在或不安全均视为未就绪 */ }
+    missing.push({ path: rel, why })
+  }
+  if (plan.deployMode === 'script') {
+    requireFile(plan.scriptMode.upgradeScript || 'upgrade.sh', '脚本部署需要升级入口')
+    requireFile('start.sh', '回滚需要启动脚本')
+    if (!plan.scriptMode.packageCommand) requireFile('package.sh', '需要发布包构建脚本或打包命令')
+  } else {
+    requireFile(plan.composeFile, 'Docker 部署需要 Compose 编排')
+    // 仅 build 型服务需要 Dockerfile；镜像型编排不应被误报。
+    try {
+      const composePath = resolveProjectFile(checks.root, plan.composeFile)
+      const compose = parseYaml(readTextCapped(composePath))
+      for (const service of Object.values(compose?.services || {})) {
+        const build = service && service.build
+        if (!build || build.dockerfile_inline) continue
+        const context = (typeof build === 'string' ? build : build.context) || '.'
+        if (/^[a-z][a-z\d+.-]*:\/\//i.test(context) || context.startsWith('git@')) continue
+        const dockerfile = (typeof build === 'object' && build.dockerfile) || 'Dockerfile'
+        requireFile(path.posix.join(path.posix.dirname(plan.composeFile), context, dockerfile), 'Compose 的 build 服务需要镜像构建文件')
+      }
+    } catch { missing.push({ path: plan.composeFile, why: 'Compose 内容不可解析或路径不安全' }) }
+  }
+  plan.missingFiles = [...new Map([...missing, ...extraMissing].map((m) => [m.path, m])).values()]
+  const blockers = plan.missingFiles.map((m) => `缺少部署文件：${m.path}（${m.why}）`)
+  if (!checks.localExists) blockers.push('本地项目目录不存在或不可读')
+  const version = String(plan.version.strategy === 'manual' ? plan.version.manual : checks.detectedVersion || '').trim()
+  if (!/^[\w][\w.+~-]*$/.test(version) || version.length > 64) blockers.push('未识别到有效版本号：请填写手动版本或补齐项目版本文件')
+  if (!checks.serverConfigured) blockers.push('未配置服务器地址')
+  if (!checks.remotePathConfigured) blockers.push('未配置远程部署目录')
+  if (!checks.remoteOk) blockers.push('服务器体检未完成，尚不能确认部署条件')
+  if (plan.deployMode === 'docker' && checks.remoteOk) {
+    for (const tool of ['docker', 'compose', 'unzip', 'tar', 'sha256sum']) {
+      if (checks.tools[tool] === false) blockers.push(`服务器缺少部署工具：${tool}`)
+    }
+  }
+  if (plan.existing?.kind !== 'managed') {
+    for (const p of plan.prerequisites || []) blockers.push(`缺少首次部署前置条件：${p.item}`)
+  }
+  if (plan.existing?.checked && ['legacy', 'content'].includes(plan.existing.kind)) blockers.push('服务器上已存在旧部署：需先完成接管步骤')
+  plan.blockers = [...new Set(blockers)]
+  plan.readyToDeploy = plan.blockers.length === 0
 }
 
 /** 从项目 .env.example / Compose 文本里猜数据库名与用户（仅用于启发式默认值） */
@@ -930,7 +1026,7 @@ function buildPrompt({ project, target, local, remote, heuristic, compressed, om
   "health": {"enabled":true,"url":"http://127.0.0.1:端口/路径","timeout":180,"interval":5},
   "db": {"enabled":false,"type":"postgres 或 mysql","container":"容器名","name":"库名","user":"用户名"},
   "existingDeployment": {"alreadyDeployed":true,"kind":"managed|legacy|none","summary":"服务器上是否已经部署过同一服务的判断与依据","mustPreserve":["必须原样保留的东西（数据卷名、共享目录、配置文件）"],"adoptPlan":["接管已有部署的步骤，按顺序"]},
-  "dataSync": {"needed":true,"mode":"upload 或 share","reason":"是否需要同步数据、依据是什么；mode=share 表示只需跨版本共享（迁到 shared 并让 Compose 指向），mode=upload 表示本地有服务器不会自己产生的数据需要推送","items":[{"localDir":"相对项目根","remoteDir":"相对安装根，如 shared/data","note":"为什么"}],"importMode":"none 或 command","importCommand":"如需要，给出一条在服务器上把数据导入应用的命令，用 {dataDir}/{user}/{secret} 占位"},
+  "dataSync": {"needed":true,"mode":"upload 或 share","reason":"是否需要同步数据、依据是什么；mode=share 表示只需跨版本共享（迁到 shared 并让 Compose 指向），mode=upload 表示本地有服务器不会自己产生的数据需要推送","items":[{"kind":"share 或 upload（每项必须明确用途）","localDir":"相对项目根","remoteDir":"相对安装根，如 shared/data","note":"为什么"}],"importMode":"none 或 command","importCommand":"如需要，给出一条在服务器上把数据导入应用的命令，用 {dataDir}/{user}/{secret} 占位"},
   "missingFiles": [{"path":"相对项目根","why":"为什么缺它就不能部署"}],
   "prerequisites": [{"item":"首次部署前置条件","why":"不做会怎样","how":"如何准备"}],
   "risks": ["部署风险与注意事项"],
@@ -950,7 +1046,7 @@ ${contract}`
 
   return [
     { role: 'system', content: '你是资深 Linux/Docker 部署工程师，负责为一个项目设计首次部署方案并产出可直接使用的部署文件。回答必须是单个 JSON 对象，字段缺失即视为失败。' },
-    { role: 'user', content: `${requirement}\n\n【项目配置】\n${JSON.stringify({ name: project.name, deployMode: project.deployMode, composeFile: project.composeFile, scriptMode: project.scriptMode, version: project.version }, null, 2)}\n\n【部署目标】\n${JSON.stringify(safeTarget, null, 2)}\n\n【服务器已有部署识别（确定性证据，必须逐条回应）】\n${JSON.stringify(safeExisting, null, 2)}\n\n【本地体检】\n${JSON.stringify(localDigest, null, 2)}\n\n【确定性启发式结论（可纠正，但若推翻请在 deployModeReason/risks 说明理由）】\n${JSON.stringify(heuristic, null, 2)}` },
+    { role: 'user', content: `${requirement}\n\n【项目配置】\n${JSON.stringify(safeAiValue({ name: project.name, deployMode: project.deployMode, composeFile: project.composeFile, scriptMode: project.scriptMode, version: project.version }), null, 2)}\n\n【部署目标】\n${JSON.stringify(safeAiValue(safeTarget), null, 2)}\n\n【服务器已有部署识别（确定性证据，必须逐条回应）】\n${JSON.stringify(safeAiValue(safeExisting), null, 2)}\n\n【本地体检】\n${JSON.stringify(safeAiValue(localDigest), null, 2)}\n\n【确定性启发式结论（可纠正，但若推翻请在 deployModeReason/risks 说明理由）】\n${JSON.stringify(safeAiValue(heuristic), null, 2)}` },
   ]
 }
 
@@ -1102,6 +1198,7 @@ function mergePlan(heuristic, ai) {
           localDir: str(it && it.localDir, ''),
           remoteDir: str(it && it.remoteDir, ''),
           note: str(it && it.note, ''),
+          kind: ['share', 'upload', 'upload?'].includes(it && it.kind) ? it.kind : 'unknown',
         })).filter((it) => it.localDir)
         : out.dataSync.items,
       importMode: ai.dataSync.importMode === 'command' ? 'command' : 'none',
@@ -1114,9 +1211,10 @@ function mergePlan(heuristic, ai) {
       .filter((m) => m.path)
   }
   if (Array.isArray(ai.prerequisites)) {
-    out.prerequisites = ai.prerequisites.slice(0, 20)
+    out.prerequisites = [...out.prerequisites, ...ai.prerequisites.slice(0, 20)
       .map((p) => ({ item: str(p && p.item, ''), why: str(p && p.why, ''), how: str(p && p.how, '') }))
-      .filter((p) => p.item)
+      .filter((p) => p.item)]
+    out.prerequisites = [...new Map(out.prerequisites.map((p) => [p.item, p])).values()]
   }
   if (Array.isArray(ai.risks)) out.risks = ai.risks.map((r) => String(r)).filter(Boolean).slice(0, 20)
   // 已有部署结论：证据来自确定性体检，AI 只能补充判断、必须点名必须保留的东西与接管步骤
@@ -1132,20 +1230,6 @@ function mergePlan(heuristic, ai) {
       out.migrationPlan = ex.adoptPlan.map((x) => String(x)).filter(Boolean).slice(0, 12)
     }
   }
-  // 部署条件闸门以「确定性结论 + AI 补充的缺失文件/前置条件」重算：
-  // readyToDeploy 只由阻塞项决定，避免 AI 一句「可以部署」就绕过前置条件；
-  // 已被本工具接管的部署不再把首次部署前置条件算作阻塞项（共享布局与运行配置已就绪）。
-  const blockers = []
-  for (const m of out.missingFiles) blockers.push(`缺少部署文件：${m.path}（${m.why}）`)
-  const managed = out.existing && out.existing.checked && out.existing.kind === 'managed'
-  if (!managed) {
-    for (const p of out.prerequisites) blockers.push(`缺少首次部署前置条件：${p.item}`)
-  }
-  if (out.existing && out.existing.checked && (out.existing.kind === 'legacy' || out.existing.kind === 'content')) {
-    blockers.push(`服务器上已存在旧部署（${(out.existing.evidence || [])[0] || '部署目录有内容'}）：需先按「接管步骤」迁移数据，才能用本工具发布`)
-  }
-  out.blockers = blockers
-  out.readyToDeploy = blockers.length === 0
   // 文件行：以启发式的「待办清单」为底，AI 的 files（含内容）与 fileRequests（仅清单）覆盖同路径项
   const rows = [...(out.files || [])]
   const upsert = (row) => {
@@ -1183,6 +1267,7 @@ function mergePlan(heuristic, ai) {
     })
   }
   out.files = rows
+  refreshReadiness(out, Array.isArray(ai.missingFiles) ? out.missingFiles : [])
   return out
 }
 
@@ -1294,7 +1379,8 @@ async function generateFileContent(projectId, targetId, req) {
   if (!apiKey || !model) return { ok: false, error: '未配置 AI Key 或模型（设置 → AI 模型）' }
 
   const local = scanLocal(project)
-  const current = fs.existsSync(path.join(local.root, p.rel)) ? readTextCapped(path.join(local.root, p.rel), 12 * 1024) : ''
+  let current
+  try { current = readTextCapped(resolveProjectFile(local.root, p.rel), 12 * 1024) } catch (e) { return { ok: false, error: e.message } }
   const refs = (local.fileContents || [])
     .filter((f) => f.path !== p.rel)
     .slice(0, 5)
@@ -1327,7 +1413,7 @@ ${refs || '（无）'}
   ]
   try {
     const ask = async (effort) => aiService.complete({
-      baseUrl: cfg.ai.baseUrl, apiKey, model, temperature: 0.2, maxTokens: 16384, reasoningEffort: effort, messages,
+      baseUrl: cfg.ai.baseUrl, apiKey, model, temperature: 0.2, maxTokens: 16384, reasoningEffort: effort, messages: safeAiValue(messages),
     })
     let res
     try {
@@ -1373,9 +1459,9 @@ function writeFiles(projectId, files) {
       results.push({ path: (f && f.path) || '', action: 'rejected', error: p.error })
       continue
     }
-    const abs = path.resolve(root, p.rel)
-    if (abs !== root && !abs.startsWith(root + path.sep)) {
-      results.push({ path: p.rel, action: 'rejected', error: '目标路径越出项目目录' })
+    let abs
+    try { abs = resolveProjectFile(root, p.rel) } catch (e) {
+      results.push({ path: p.rel, action: 'rejected', error: e.message })
       continue
     }
     const content = String((f && f.content) || '')
@@ -1388,8 +1474,8 @@ function writeFiles(projectId, files) {
       let existed = false
       if (fs.existsSync(abs)) {
         existed = true
-        backup = `${abs}.bak-${stamp}`
-        fs.copyFileSync(abs, backup)
+        backup = `${abs}.bak-${stamp}-${require('crypto').randomUUID()}`
+        fs.copyFileSync(abs, backup, fs.constants.COPYFILE_EXCL)
       }
       fs.mkdirSync(path.dirname(abs), { recursive: true })
       fs.writeFileSync(abs, content.replace(/\r\n/g, '\n'), { encoding: 'utf8', mode: 0o755 })
@@ -1427,16 +1513,21 @@ function applyPlan(projectId, targetId, plan) {
       ? { strategy: 'manual', manual: String(plan.version.manual || '').trim() }
       : { strategy: 'auto', manual: '' }
   }
-  const target = (payload.targets || []).find((t) => t.id === targetId) || payload.targets[0]
+  const target = targetId ? (payload.targets || []).find((t) => t.id === targetId) : payload.targets[0]
+  if (!target) return { ok: false, error: '部署环境已不存在，请重新体检' }
   if (target) {
     if (plan.health && typeof plan.health === 'object') target.health = { ...target.health, ...plan.health }
     if (plan.db && typeof plan.db === 'object') target.db = { ...target.db, ...plan.db }
     if (plan.dataSync && typeof plan.dataSync === 'object') {
       const items = Array.isArray(plan.dataSync.items) ? plan.dataSync.items : []
-      const first = items[0] || {}
+      const uploads = items.filter((it) => it.kind === 'upload' || it.kind === 'upload?')
+      if (plan.dataSync.needed && (uploads.length !== 1 || items.some((it) => !['share', 'upload', 'upload?'].includes(it.kind)))) {
+        return { ok: false, error: '数据同步仅支持一个明确的上传目录；请重新生成带目录用途的方案，或在部署设置中手动选择，尚未套用任何配置' }
+      }
+      const first = uploads[0] || {}
       target.dataSync = {
         ...target.dataSync,
-        enabled: plan.dataSync.needed === true && items.length > 0,
+        enabled: plan.dataSync.needed === true && uploads.length === 1,
         localDir: first.localDir || target.dataSync.localDir,
         remoteDir: first.remoteDir || target.dataSync.remoteDir,
         importMode: plan.dataSync.importMode === 'command' ? 'command' : 'none',

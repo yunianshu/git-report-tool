@@ -295,7 +295,7 @@ async function main() {
     version: { strategy: 'manual', manual: '1.0.1' },
     health: { enabled: true, url: 'not-a-url', timeout: 9999, interval: 0 },
     db: { enabled: true, type: 'postgres', container: 'shopmetrics-postgres-1', name: 'shopmetrics', user: 'shopmetrics' },
-    dataSync: { needed: true, reason: '服务端数据由后台上传，本地只同步初始 Excel', items: [{ localDir: 'dataSource', remoteDir: 'shared/dataSource', note: '首次导入用' }], importMode: 'command', importCommand: 'bash import.sh {dataDir}' },
+    dataSync: { needed: true, reason: '服务端数据由后台上传，本地只同步初始 Excel', items: [{ kind: 'upload', localDir: 'dataSource', remoteDir: 'shared/dataSource', note: '首次导入用' }], importMode: 'command', importCommand: 'bash import.sh {dataDir}' },
     missingFiles: [{ path: 'upgrade.sh', why: '需支持 INSTALL_ROOT' }],
     prerequisites: [{ item: '共享 .env', why: '缺了起不来', how: '复制样例并改密码' }],
     risks: ['数据库卷名必须保持 shopmetrics 前缀'],
@@ -509,7 +509,88 @@ async function main() {
   assert.strictEqual(after.targets[0].server.secretConfigured, true, '凭据必须保留')
   assert.strictEqual(after.targets[0].dataSync.importSecretConfigured, true, '数据同步凭据必须保留')
 
-  console.log('全部通过：AI 部署助手（体检 / 方案合并 / 文件生成防护 / 配置套用）')
+  // ── 审核回归：链接越界、凭据外发、部署闸门、混合同步目录 ──
+  const auditDir = path.join(tmpRoot, 'audit-project')
+  const outside = path.join(tmpRoot, 'outside')
+  writeFixture(auditDir, {
+    'compose.yaml': 'services:\n  app:\n    image: demo/app\n    environment:\n      API_TOKEN: audit-fake-token\n      POSTGRES_PASSWORD: ${PASSWORD:-audit-fake-default}\n      PRIVATE_KEY: |\n        audit-fake-multiline\n    volumes:\n      - ./runtime/output:/app/output\n',
+    'start.sh': '#!/bin/bash\nPASSWORD="audit-fake-password"\ncurl -u audit:fake-basic https://example.invalid\necho safe-reference\n',
+    'data/seed.txt': 'seed',
+    'runtime/output/result.txt': 'local-output',
+  })
+  fs.mkdirSync(outside)
+  fs.writeFileSync(path.join(outside, 'start.sh'), '原文件')
+  fs.symlinkSync(outside, path.join(auditDir, 'deploy'), 'junction')
+  const auditSaved = projects.save({ name: 'audit', localPath: auditDir, composeFile: 'compose.yaml', targets: [TARGET] })
+  // 新项目会自动继承其他项目配置；再次按 id 保存以建立无版本、无打包命令的准确前提。
+  projects.save({ id: auditSaved.id, name: 'audit', localPath: auditDir, composeFile: 'compose.yaml', version: { strategy: 'auto', manual: '' }, scriptMode: { packageCommand: '' }, targets: [TARGET] })
+  for (const rel of ['deploy/start.sh', 'deploy/new.sh']) {
+    const rejected = aiDeploy.writeFiles(auditSaved.id, [{ path: rel, content: 'echo overwritten' }])
+    assert.strictEqual(rejected.results[0].action, 'rejected', `链接路径必须拒绝：${rel}`)
+  }
+  assert.strictEqual(fs.readFileSync(path.join(outside, 'start.sh'), 'utf8'), '原文件')
+  assert.strictEqual(fs.existsSync(path.join(outside, 'new.sh')), false)
+  const backup1 = aiDeploy.writeFiles(auditSaved.id, [{ path: 'start.sh', content: 'echo first' }]).results[0].backup
+  const backup2 = aiDeploy.writeFiles(auditSaved.id, [{ path: 'start.sh', content: 'echo second' }]).results[0].backup
+  assert.notStrictEqual(backup1, backup2, '连续写入不得覆盖同一备份')
+  // 把含凭据的原文件还原到隔离夹具，仅供提示词验证。
+  fs.copyFileSync(path.join(auditDir, backup1), path.join(auditDir, 'start.sh'))
+  const auditProject = projects.list().find((p) => p.id === auditSaved.id)
+  const auditLocal = aiDeploy.scanLocal(auditProject)
+  const auditPlan = aiDeploy.buildHeuristicPlan(auditProject, {}, auditLocal, { ok: false, error: 'offline' })
+  const emptyAi = aiDeploy.mergePlan(auditPlan, { missingFiles: [], prerequisites: [], readyToDeploy: true })
+  assert.strictEqual(emptyAi.readyToDeploy, false)
+  for (const hint of ['版本号', '服务器地址', '远程部署目录', '体检未完成', '首次部署前置条件']) {
+    assert.ok(emptyAi.blockers.some((b) => b.includes(hint)), `AI 空清单不得清除 ${hint}`)
+  }
+  const manualAi = aiDeploy.mergePlan(auditPlan, { version: { strategy: 'manual', manual: '1.2.3' } })
+  assert.ok(!manualAi.blockers.some((b) => b.includes('版本号')), '有效手动版本应解除版本阻塞')
+  const invalidVersion = aiDeploy.mergePlan(auditPlan, { version: { strategy: 'manual', manual: 'bad version' } })
+  assert.ok(invalidVersion.blockers.some((b) => b.includes('版本号')), '保存配置时会被清空的非法手动版本不得通过检查')
+  const scriptAi = aiDeploy.mergePlan(auditPlan, { deployMode: 'script', missingFiles: [] })
+  assert.ok(scriptAi.missingFiles.some((f) => f.path === 'upgrade.sh'), '切换部署形态后应重新检查入口脚本')
+  const prompts = aiDeploy.buildPrompt({ project: auditProject, target: {}, local: auditLocal, remote: {}, heuristic: auditPlan })
+  const assertNoSecrets = (prompt) => {
+    for (const secret of ['audit-fake-token', 'audit-fake-default', 'audit-fake-multiline', 'audit-fake-password', 'audit:fake-basic']) {
+      assert.ok(!prompt.includes(secret), `提示词不得包含虚构凭据 ${secret}`)
+    }
+  }
+  assertNoSecrets(JSON.stringify(prompts))
+  aiReply = '#!/bin/bash\necho generated'
+  const generated = await aiDeploy.generateFileContent(auditSaved.id, TARGET.id, { path: 'start.sh', action: 'update' })
+  assert.strictEqual(generated.ok, true)
+  assertNoSecrets(lastPrompt)
+  assert.ok(lastPrompt.includes('safe-reference'), '脱敏后仍应保留安全的脚本参考')
+  assert.strictEqual((await aiDeploy.generateFileContent(auditSaved.id, TARGET.id, { path: 'deploy/start.sh' })).ok, false)
+  const mixedApply = aiDeploy.applyPlan(auditSaved.id, TARGET.id, auditPlan)
+  assert.strictEqual(mixedApply.ok, true)
+  const sync = projects.list().find((p) => p.id === auditSaved.id).targets[0].dataSync
+  assert.strictEqual(sync.localDir, 'data', '应选择 upload 项，不得把 share 项作为上传源')
+  assert.strictEqual(sync.remoteDir, 'shared/data')
+  const beforeReject = JSON.stringify(projects.list())
+  for (const items of [
+    [{ kind: 'upload', localDir: 'a' }, { kind: 'upload', localDir: 'b' }],
+    [{ localDir: 'unknown' }],
+  ]) {
+    const rejected = aiDeploy.applyPlan(auditSaved.id, TARGET.id, { ...auditPlan, dataSync: { needed: true, items } })
+    assert.strictEqual(rejected.ok, false, '多个上传目录或用途不明时不得静默套用')
+    assert.strictEqual(JSON.stringify(projects.list()), beforeReject, '拒绝套用时配置必须保持不变')
+  }
+  assert.strictEqual(aiDeploy.applyPlan(auditSaved.id, 'deleted-target', auditPlan).ok, false, '失效环境不得回退写入第一个环境')
+  // 最终形态检查也必须放行合法镜像编排及自定义构建路径。
+  writeFixture(auditDir, { 'VERSION': '1.0.0', 'compose.yaml': 'services:\n  app:\n    image: demo/app\n' })
+  const imagePlan = aiDeploy.buildHeuristicPlan(auditProject, TARGET, aiDeploy.scanLocal(auditProject), remoteNone)
+  assert.strictEqual(imagePlan.readyToDeploy, true, '纯镜像编排不应要求 Dockerfile')
+  writeFixture(auditDir, {
+    'compose.yaml': 'services:\n  app:\n    build:\n      context: ./server\n      dockerfile: Dockerfile.prod\n',
+    'server/Dockerfile.prod': 'FROM demo/app\n',
+  })
+  const buildPlan = aiDeploy.buildHeuristicPlan(auditProject, TARGET, aiDeploy.scanLocal(auditProject), remoteNone)
+  assert.strictEqual(buildPlan.readyToDeploy, true, '应按 build.context/dockerfile 检查真实构建文件')
+  const changedCompose = aiDeploy.mergePlan(buildPlan, { composeFile: 'deploy/missing.yaml', missingFiles: [] })
+  assert.strictEqual(changedCompose.readyToDeploy, false, '最终方案引用不存在的编排时必须阻塞')
+
+  console.log('全部通过：AI 部署助手（体检 / 方案合并 / 文件生成防护 / 配置套用 / 审核安全回归）')
 }
 
 main().catch((e) => {
