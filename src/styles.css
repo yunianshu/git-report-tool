@@ -631,7 +631,8 @@ body {
   -webkit-app-region: drag; /* 无边框窗口：顶栏空白处可拖拽移动/双击最大化 */
 }
 .project-switcher { display: flex; align-items: center; gap: 10px; min-width: 0; -webkit-app-region: no-drag; }
-.win-controls { display: flex; align-items: center; gap: 2px; margin-right: -14px; -webkit-app-region: no-drag; }
+/* margin-left:auto：隐藏左侧项目切换器后（space-between 对唯一子元素失效）仍固定右侧 */
+.win-controls { display: flex; align-items: center; gap: 2px; margin-left: auto; margin-right: -14px; -webkit-app-region: no-drag; }
 .win-btn {
   width: 44px;
   height: 36px;
