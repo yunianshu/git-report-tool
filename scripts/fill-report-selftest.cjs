@@ -912,6 +912,19 @@ await test('submit：禅道业务失败向上传递，停止后续任务与汉�
   }, { zt: { recordEfforts: async (...args) => { ztCalls++; return client.recordEfforts(...args) } }, hp: { add: async () => { hpCalls++ } } })
 })
 
+await test('submit：禅道已写入后汉印 add 失败，不抛整体错误，hp.error 回报且禅道结果保留', async () => {
+  const p = submitFixture()
+  let ztWrites = 0
+  const { r } = await withStubClients(() => fill.submit(p), { zt: {
+    recordEfforts: async (taskId, rows) => { ztWrites += 1; return { taskId, rows } },
+  }, hp: {
+    add: async () => { throw new Error('汉印提交失败: 网络超时') },
+  } })
+  assert.strictEqual(ztWrites, 1, '禅道写入已完成')
+  assert.strictEqual(r.results.length, 1)
+  assert.ok(r.hp && /汉印提交失败/.test(r.hp.error), 'hp.error 回报失败原因')
+})
+
 console.log('禅道配置持久化:')
 await test('保存密码 → 落盘为密文字段 → load 只下发脱敏标志', () => {
   const ok = store.save({ zentao: { baseUrl: 'http://10.11.34.2', account: 'wgl', password: 'p@ss' } })

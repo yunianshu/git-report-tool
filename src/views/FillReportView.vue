@@ -595,7 +595,9 @@ async function submitFill(preview) {
   const tasks = p.tasks.map((t) => ({ taskId: t.taskId, taskName: t.taskName, rows: t.rows }))
   const hpItems = Array.isArray(p.hpItems) ? p.hpItems : []
   if (!preview) {
-    const hpText = hpItems.length ? `，同时向汉印提交 ${hpItems.length} 条占比记录` : ''
+    const hpText = hpItems.length
+      ? `，同时向汉印提交 ${hpItems.length} 条占比记录`
+      : (hanprintConfigured.value && p.hpError ? '；注意：汉印任务获取失败，本次将只写禅道' : '')
     const existText = ztExistingCount.value || hpExistingCount.value
       ? `；当日已有记录将更新覆盖（禅道 ${ztExistingCount.value} 个任务、汉印 ${hpExistingCount.value} 条）`
       : ''
@@ -629,8 +631,13 @@ async function submitFill(preview) {
       const updated = r.results.reduce((s, x) => s + (x.updated || 0), 0)
       const appended = r.results.reduce((s, x) => s + (x.appended || 0), 0)
       const ztText = `禅道 ${r.results.length} 个任务（更新 ${updated} 行 / 新增 ${appended} 行）`
-      const hpText = r.hp ? `，汉印 ${hpItems.length} 条（更新 ${r.hp.updated || 0} / 新增 ${r.hp.appended || 0}）` : ''
-      ElMessage.success(`已提交：${ztText}${hpText}`)
+      if (r.hp && r.hp.error) {
+        // 禅道已写入成功，汉印在写入阶段失败：如实分平台报告，重试只会更新覆盖不会重复
+        ElMessage.warning({ message: `禅道已提交（${ztText}）；汉印提交失败：${r.hp.error}。可重新提交，已写入部分只会更新覆盖`, duration: 8000 })
+      } else {
+        const hpText = r.hp ? `，汉印 ${hpItems.length} 条（更新 ${r.hp.updated || 0} / 新增 ${r.hp.appended || 0}，工时由考勤系统次日凌晨回填）` : ''
+        ElMessage.success(`已提交：${ztText}${hpText}`)
+      }
     }
   } catch (e) {
     ElMessage.error(`提交失败：${e?.message || e}`)

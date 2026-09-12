@@ -677,9 +677,14 @@ async function submit(payload) {
   }
   let hpResult = null
   if (hpItems.length) {
-    hpResult = await hpClient.add(hpItems, !!dryRun)
-    hpResult.updated = hpUpdated
-    hpResult.appended = hpItems.length - hpUpdated
+    // 禅道已写入后才走汉印：汉印失败不能抛整体异常掩盖禅道成功，以 hpError 回报
+    try {
+      hpResult = await hpClient.add(hpItems, !!dryRun)
+      hpResult.updated = hpUpdated
+      hpResult.appended = hpItems.length - hpUpdated
+    } catch (e) {
+      hpResult = { error: (e && e.message) || String(e), updated: hpUpdated, appended: hpItems.length - hpUpdated }
+    }
   }
   return { dryRun: !!dryRun, results, hp: hpResult }
 }
