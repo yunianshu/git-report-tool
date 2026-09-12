@@ -20,7 +20,7 @@
         />
         <el-time-select
           v-model="startTime"
-          start="06:00" end="13:00" step="00:15"
+          start="06:00" end="21:00" step="00:15"
           :clearable="false"
           placeholder="上班时间"
           style="width: 108px"
